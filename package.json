@@ -1,0 +1,10 @@
+{
+  "name": "pi-desktop",
+  "private": true,
+  "packageManager": "pnpm@10.17.0",
+  "scripts": {
+    "dev": "pnpm --filter @pi-desktop/renderer dev",
+    "build": "pnpm --filter @pi-desktop/renderer build",
+    "typecheck": "pnpm --filter @pi-desktop/renderer typecheck"
+  }
+}
