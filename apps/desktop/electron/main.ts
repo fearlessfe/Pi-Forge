@@ -285,6 +285,12 @@ function registerIpc(
   });
   ipcMain.handle("agent:list-conversations", () => agent.listConversations());
   ipcMain.handle("agent:load-conversation", (_event, conversationId: unknown) => agent.loadConversation(requireString(conversationId, "会话 ID 无效。")));
+  ipcMain.handle("agent:rename-conversation", (_event, conversationId: unknown, title: unknown) => (
+    agent.renameConversation(requireString(conversationId, "会话 ID 无效。"), requireString(title, "会话名称无效。"))
+  ));
+  ipcMain.handle("agent:delete-conversation", (_event, conversationId: unknown) => (
+    agent.deleteConversation(requireString(conversationId, "会话 ID 无效。"))
+  ));
   ipcMain.handle("agent:abort", () => agent.abort());
   ipcMain.handle("agent:answer-question", (_event, callId: unknown, answer: unknown) => {
     if (typeof callId !== "string" || typeof answer !== "string") throw new Error("回答格式无效。");

@@ -328,6 +328,8 @@ export type PiDesktopApi = {
     send(input: SendPromptInput): Promise<{ runId: string }>;
     listConversations(): Promise<ConversationHistoryItem[]>;
     loadConversation(conversationId: string): Promise<ConversationHistoryDetail>;
+    renameConversation(conversationId: string, title: string): Promise<void>;
+    deleteConversation(conversationId: string): Promise<void>;
     abort(): Promise<void>;
     reset(): Promise<void>;
     answerQuestion(callId: string, answer: string): Promise<void>;

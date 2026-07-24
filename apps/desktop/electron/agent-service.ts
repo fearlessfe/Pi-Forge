@@ -497,6 +497,30 @@ export class AgentService {
     return { ...this.historyItem(info), turns, contextUsage };
   }
 
+  async renameConversation(conversationId: string, title: string): Promise<void> {
+    if (this.running) throw new Error("Agent 正在执行，请等待任务完成后再重命名会话。");
+    const normalizedTitle = title.trim().replace(/\s+/g, " ");
+    if (!normalizedTitle) throw new Error("会话名称不能为空。");
+    if (normalizedTitle.length > 60) throw new Error("会话名称不能超过 60 个字符。");
+    const sessions = await SessionManager.listAll(this.sessionDir);
+    const info = sessions.find((session) => session.id === conversationId);
+    if (!info) throw new Error("找不到该会话，文件可能已被移动或删除。");
+    if (this.session?.sessionManager.getSessionId() === conversationId) {
+      this.session.setSessionName(normalizedTitle);
+      return;
+    }
+    SessionManager.open(info.path, this.sessionDir, info.cwd || this.fallbackCwd).appendSessionInfo(normalizedTitle);
+  }
+
+  async deleteConversation(conversationId: string): Promise<void> {
+    if (this.running) throw new Error("Agent 正在执行，请等待任务完成后再删除会话。");
+    const sessions = await SessionManager.listAll(this.sessionDir);
+    const info = sessions.find((session) => session.id === conversationId);
+    if (!info) throw new Error("找不到该会话，文件可能已被移动或删除。");
+    if (this.session?.sessionManager.getSessionId() === conversationId) this.disposeSession();
+    fs.unlinkSync(info.path);
+  }
+
   async abort(): Promise<void> {
     const runId = this.activeRunId;
     for (const pending of this.pendingQuestions.values()) pending.resolve("用户取消了请求");

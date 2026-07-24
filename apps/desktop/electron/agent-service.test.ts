@@ -336,6 +336,53 @@ describe("AgentService with a real Pi session", () => {
     }
   });
 
+  it("renames and deletes a persisted conversation by id", async () => {
+    const cwd = createDirectory("conversation-mutation-workspace");
+    const agentDir = createDirectory("conversation-mutation-agent");
+    const sessionDir = createDirectory("conversation-mutation-sessions");
+    const manager = SessionManager.create(cwd, sessionDir, { id: "conversation-to-mutate" });
+    manager.appendMessage({ role: "user", content: "original title", timestamp: 1 } satisfies UserMessage);
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "saved" }],
+      api: "openai-completions",
+      provider: "openai-compatible",
+      model: "mock-model",
+      usage: usage(1, 1, 0),
+      stopReason: "stop",
+      timestamp: 2,
+    } satisfies AssistantMessage);
+    const configuration: SaveModelSettings = {
+      provider: "openai-compatible",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      modelId: "mock-model",
+      thinkingLevel: "off",
+    };
+    const service = new AgentService(
+      { resolve: () => ({ ...configuration }) },
+      agentDir,
+      cwd,
+      () => {},
+      undefined,
+      undefined,
+      sessionDir,
+    );
+
+    try {
+      await expect(service.listConversations()).resolves.toEqual([
+        expect.objectContaining({ id: "conversation-to-mutate", title: "original title" }),
+      ]);
+      await service.renameConversation("conversation-to-mutate", "Renamed conversation");
+      await expect(service.listConversations()).resolves.toEqual([
+        expect.objectContaining({ id: "conversation-to-mutate", title: "Renamed conversation" }),
+      ]);
+      await service.deleteConversation("conversation-to-mutate");
+      await expect(service.listConversations()).resolves.toEqual([]);
+    } finally {
+      service.dispose();
+    }
+  });
+
   it("activates a third-party extension tool as the subagent provider", async () => {
     const server = http.createServer((req, res) => {
       req.resume();

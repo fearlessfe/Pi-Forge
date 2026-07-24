@@ -313,6 +313,78 @@ export function App() {
     void resetConversation();
   }
 
+  function startProjectChat(nextProject: Project) {
+    if (selectedConversationId) {
+      setConversationContexts((current) => ({ ...current, [selectedConversationId]: contextUsage }));
+    }
+    setView("chat");
+    setProject(projects.find((entry) => entry.id === nextProject.id) ?? nextProject);
+    setSelectedConversationId(null);
+    setContextUsage(undefined);
+    void resetConversation();
+  }
+
+  async function renameConversation(conversationId: string, title: string, scopeProject?: Project) {
+    if (!window.piDesktop?.agent.renameConversation) {
+      setNotice({ title: "无法重命名会话", message: "请完全退出并重新启动新版 Pi Desktop。", type: "info" });
+      throw new Error("会话重命名接口不可用。");
+    }
+    try {
+      await window.piDesktop.agent.renameConversation(conversationId, title);
+      const rename = (conversation: Conversation) => conversation.id === conversationId ? { ...conversation, title } : conversation;
+      if (scopeProject) {
+        setProjects((current) => current.map((entry) => entry.id === scopeProject.id
+          ? { ...entry, conversations: entry.conversations.map(rename) }
+          : entry));
+        setProject((current) => current?.id === scopeProject.id
+          ? { ...current, conversations: current.conversations.map(rename) }
+          : current);
+      } else {
+        setConversations((current) => current.map(rename));
+      }
+      setNotice({ title: "会话已重命名", message: title, type: "success" });
+    } catch (error) {
+      setNotice({ title: "无法重命名会话", message: eventError(error), type: "info" });
+      throw error;
+    }
+  }
+
+  async function deleteConversation(conversationId: string, scopeProject?: Project) {
+    if (!window.piDesktop?.agent.deleteConversation) {
+      setNotice({ title: "无法删除会话", message: "请完全退出并重新启动新版 Pi Desktop。", type: "info" });
+      return;
+    }
+    try {
+      await window.piDesktop.agent.deleteConversation(conversationId);
+      const remove = (conversation: Conversation) => conversation.id !== conversationId;
+      setConversations((current) => current.filter(remove));
+      setProjects((current) => current.map((entry) => ({ ...entry, conversations: entry.conversations.filter(remove) })));
+      setProject((current) => current && scopeProject?.id === current.id
+        ? { ...current, conversations: current.conversations.filter(remove) }
+        : current);
+      setConversationTurns((current) => {
+        const next = { ...current };
+        delete next[conversationId];
+        return next;
+      });
+      setConversationContexts((current) => {
+        const next = { ...current };
+        delete next[conversationId];
+        return next;
+      });
+      if (selectedConversationId === conversationId) {
+        setSelectedConversationId(null);
+        setTurns([]);
+        setPrompt("");
+        setContextUsage(undefined);
+        if (!scopeProject) setProject(null);
+      }
+      setNotice({ title: "会话已删除", message: "本地会话历史已删除。", type: "success" });
+    } catch (error) {
+      setNotice({ title: "无法删除会话", message: eventError(error), type: "info" });
+    }
+  }
+
   function selectConversation(conversationId: string, nextProject?: Project) {
     void openConversation(conversationId, nextProject);
   }
@@ -602,6 +674,10 @@ export function App() {
               onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
               onSelectConversation={selectConversation}
               onNewChat={startNewChat}
+              onNewProjectChat={startProjectChat}
+              onRenameConversation={renameConversation}
+              onDeleteConversation={deleteConversation}
+              conversationActionsDisabled={isRunning}
               onAddProject={() => void chooseWorkspace()}
               onOpenSettings={() => { setSettingsSection("models"); setView("settings"); }}
               onOpenPlugins={() => { setSettingsSection("plugins"); setView("settings"); }}

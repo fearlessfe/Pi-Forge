@@ -1,6 +1,7 @@
 import * as Collapsible from "@radix-ui/react-collapsible";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
+  Check,
   ChevronDown,
   ChevronRight,
   ChevronsLeft,
@@ -9,10 +10,12 @@ import {
   MessageSquare,
   MoreHorizontal,
   Package,
+  Pencil,
   Plus,
   Search,
   Settings,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -29,6 +32,10 @@ type ConversationSidebarProps = {
   onToggleCollapsed: () => void;
   onSelectConversation: (conversationId: string, project?: Project) => void;
   onNewChat: () => void;
+  onNewProjectChat: (project: Project) => void;
+  onRenameConversation: (conversationId: string, title: string, project?: Project) => Promise<void>;
+  onDeleteConversation: (conversationId: string, project?: Project) => Promise<void>;
+  conversationActionsDisabled: boolean;
   onAddProject: () => void;
   onOpenSettings: () => void;
   onOpenPlugins: () => void;
@@ -39,16 +46,120 @@ function matchesConversation(conversation: Conversation, query: string) {
   return [conversation.title, conversation.subtitle].some((value) => value.toLocaleLowerCase().includes(query));
 }
 
+function ConversationRow({
+  conversation,
+  project,
+  selected,
+  actionsDisabled,
+  onSelect,
+  onRename,
+  onDelete,
+}: {
+  conversation: Conversation;
+  project?: Project;
+  selected: boolean;
+  actionsDisabled: boolean;
+  onSelect: () => void;
+  onRename: (title: string) => Promise<void>;
+  onDelete: () => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(conversation.title);
+  const [saving, setSaving] = useState(false);
+  const rowClassName = `conversation-row ${project ? "conversation-row--project" : ""} ${selected ? "is-active" : ""}`;
+
+  useEffect(() => {
+    if (!editing) setTitle(conversation.title);
+  }, [conversation.title, editing]);
+
+  if (editing) {
+    return (
+      <form className={`${rowClassName} conversation-row--editing`} onSubmit={(event) => {
+        event.preventDefault();
+        const nextTitle = title.trim().replace(/\s+/g, " ");
+        if (!nextTitle || saving) return;
+        setSaving(true);
+        void onRename(nextTitle).then(() => setEditing(false)).catch(() => {}).finally(() => setSaving(false));
+      }}>
+        <MessageSquare size={14} />
+        <input
+          autoFocus
+          value={title}
+          maxLength={60}
+          aria-label={`重命名“${conversation.title}”`}
+          onChange={(event) => setTitle(event.target.value)}
+          onFocus={(event) => event.currentTarget.select()}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setTitle(conversation.title);
+              setEditing(false);
+            }
+          }}
+        />
+        <button type="submit" aria-label="保存名称" disabled={!title.trim() || saving}><Check size={13} /></button>
+        <button type="button" aria-label="取消重命名" disabled={saving} onClick={() => { setTitle(conversation.title); setEditing(false); }}><X size={13} /></button>
+      </form>
+    );
+  }
+
+  return (
+    <div className={rowClassName}>
+      <button className="conversation-select" type="button" onClick={onSelect}>
+        <MessageSquare size={14} />
+        <span>
+          <strong>{conversation.title}</strong>
+          <small>{conversation.subtitle}</small>
+        </span>
+        <time>{conversation.updatedAt}</time>
+      </button>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger asChild>
+          <button
+            className="conversation-actions"
+            type="button"
+            aria-label={`管理“${conversation.title}”`}
+            title={actionsDisabled ? "Agent 运行中暂不可管理会话" : "管理会话"}
+            disabled={actionsDisabled}
+          >
+            <MoreHorizontal size={14} />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content className="dropdown-content conversation-menu" side="right" align="start" sideOffset={6}>
+            <DropdownMenu.Item className="dropdown-item conversation-menu-item" onSelect={() => setEditing(true)}>
+              <Pencil size={13} /><span>重命名</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item className="dropdown-item conversation-menu-item is-danger" onSelect={() => {
+              if (window.confirm(`确定删除“${conversation.title}”吗？此操作不可恢复。`)) void onDelete();
+            }}>
+              <Trash2 size={13} /><span>删除对话</span>
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </div>
+  );
+}
+
 function ProjectGroup({
   project,
   forceOpen,
   selectedConversationId,
   onSelectConversation,
+  onNewProjectChat,
+  onRenameConversation,
+  onDeleteConversation,
+  conversationActionsDisabled,
 }: {
   project: Project;
   forceOpen: boolean;
   selectedConversationId: string | null;
   onSelectConversation: (conversationId: string, project: Project) => void;
+  onNewProjectChat: (project: Project) => void;
+  onRenameConversation: (conversationId: string, title: string, project: Project) => Promise<void>;
+  onDeleteConversation: (conversationId: string, project: Project) => Promise<void>;
+  conversationActionsDisabled: boolean;
 }) {
   const [open, setOpen] = useState(project.conversations.some(({ id }) => id === selectedConversationId));
 
@@ -60,33 +171,41 @@ function ProjectGroup({
         if (!forceOpen) setOpen(nextOpen);
       }}
     >
-      <Collapsible.Trigger className="project-trigger" type="button">
-        <Folder size={15} className="project-folder" />
-        <span className="project-copy">
-          <strong>{project.name}</strong>
-          <code>{project.path}</code>
-        </span>
-        {forceOpen || open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-      </Collapsible.Trigger>
+      <div className="project-header-row">
+        <Collapsible.Trigger className="project-trigger" type="button">
+          <Folder size={15} className="project-folder" />
+          <span className="project-copy">
+            <strong>{project.name}</strong>
+            <code>{project.path}</code>
+          </span>
+        </Collapsible.Trigger>
+        <button
+          className="project-new-chat"
+          type="button"
+          aria-label={`在“${project.name}”中新建会话`}
+          title="新建项目会话"
+          onClick={() => onNewProjectChat(project)}
+        >
+          <Plus size={14} />
+        </button>
+        <Collapsible.Trigger className="project-toggle" type="button" aria-label={`${forceOpen || open ? "收起" : "展开"}“${project.name}”`}>
+          {forceOpen || open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+        </Collapsible.Trigger>
+      </div>
       <Collapsible.Content className="project-thread-list">
         {project.conversations.length === 0 ? (
           <p className="sidebar-empty sidebar-empty--project">暂无对话</p>
         ) : project.conversations.map((conversation) => (
-          <button
-            className={`conversation-row conversation-row--project ${
-              selectedConversationId === conversation.id ? "is-active" : ""
-            }`}
+          <ConversationRow
             key={conversation.id}
-            type="button"
-            onClick={() => onSelectConversation(conversation.id, project)}
-          >
-            <MessageSquare size={14} />
-            <span>
-              <strong>{conversation.title}</strong>
-              <small>{conversation.subtitle}</small>
-            </span>
-            <time>{conversation.updatedAt}</time>
-          </button>
+            conversation={conversation}
+            project={project}
+            selected={selectedConversationId === conversation.id}
+            actionsDisabled={conversationActionsDisabled}
+            onSelect={() => onSelectConversation(conversation.id, project)}
+            onRename={(title) => onRenameConversation(conversation.id, title, project)}
+            onDelete={() => onDeleteConversation(conversation.id, project)}
+          />
         ))}
       </Collapsible.Content>
     </Collapsible.Root>
@@ -102,6 +221,10 @@ export function ConversationSidebar({
   onToggleCollapsed,
   onSelectConversation,
   onNewChat,
+  onNewProjectChat,
+  onRenameConversation,
+  onDeleteConversation,
+  conversationActionsDisabled,
   onAddProject,
   onOpenSettings,
   onOpenPlugins,
@@ -197,19 +320,15 @@ export function ConversationSidebar({
         )}
 
         {filteredConversations.map((conversation) => (
-          <button
-            className={`conversation-row ${selectedConversationId === conversation.id ? "is-active" : ""}`}
+          <ConversationRow
             key={conversation.id}
-            type="button"
-            onClick={() => onSelectConversation(conversation.id)}
-          >
-            <MessageSquare size={14} />
-            <span>
-              <strong>{conversation.title}</strong>
-              <small>{conversation.subtitle}</small>
-            </span>
-            <time>{conversation.updatedAt}</time>
-          </button>
+            conversation={conversation}
+            selected={selectedConversationId === conversation.id}
+            actionsDisabled={conversationActionsDisabled}
+            onSelect={() => onSelectConversation(conversation.id)}
+            onRename={(title) => onRenameConversation(conversation.id, title)}
+            onDelete={() => onDeleteConversation(conversation.id)}
+          />
         ))}
         {!normalizedQuery && conversations.length === 0 && <p className="sidebar-empty">暂无普通对话</p>}
 
@@ -226,6 +345,10 @@ export function ConversationSidebar({
             forceOpen={Boolean(normalizedQuery)}
             selectedConversationId={selectedConversationId}
             onSelectConversation={onSelectConversation}
+            onNewProjectChat={onNewProjectChat}
+            onRenameConversation={onRenameConversation}
+            onDeleteConversation={onDeleteConversation}
+            conversationActionsDisabled={conversationActionsDisabled}
           />
         ))}
         {!normalizedQuery && projects.length === 0 && <p className="sidebar-empty">暂无项目</p>}
