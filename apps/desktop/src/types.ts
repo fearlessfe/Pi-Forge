@@ -20,12 +20,6 @@ export type Project = {
   conversations: Conversation[];
 };
 
-export type ModelOption = {
-  id: string;
-  name: string;
-  description: string;
-};
-
 export type AuthFlowState = {
   loginId: string;
   providerId: ProviderId;

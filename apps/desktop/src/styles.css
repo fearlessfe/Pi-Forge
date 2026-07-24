@@ -159,6 +159,10 @@ textarea:focus-visible,
   grid-template-columns: 304px minmax(0, 1fr);
 }
 
+.chat-shell.is-sidebar-collapsed {
+  grid-template-columns: 60px minmax(0, 1fr);
+}
+
 .conversation-sidebar {
   min-width: 0;
   min-height: 0;
@@ -230,6 +234,49 @@ textarea:focus-visible,
 
 .sidebar-collapse {
   margin-left: auto;
+}
+
+.conversation-sidebar.is-collapsed .sidebar-brand-row {
+  justify-content: center;
+  padding: 0;
+}
+
+.conversation-sidebar.is-collapsed .sidebar-brand-row > .brand-mark,
+.conversation-sidebar.is-collapsed .sidebar-brand-row > strong,
+.conversation-sidebar.is-collapsed .primary-nav-item > span,
+.conversation-sidebar.is-collapsed .primary-nav-item > kbd,
+.conversation-sidebar.is-collapsed .primary-nav-item > small,
+.conversation-sidebar.is-collapsed .user-trigger > span:not(.user-avatar),
+.conversation-sidebar.is-collapsed .user-trigger > svg {
+  display: none;
+}
+
+.conversation-sidebar.is-collapsed .sidebar-collapse {
+  margin: 0;
+}
+
+.conversation-sidebar.is-collapsed .sidebar-primary-nav {
+  padding-inline: 8px;
+}
+
+.conversation-sidebar.is-collapsed .primary-nav-item {
+  justify-content: center;
+  padding: 0;
+}
+
+.conversation-sidebar.is-collapsed .sidebar-list {
+  display: none;
+}
+
+.conversation-sidebar.is-collapsed .sidebar-user-zone {
+  padding: 8px;
+}
+
+.conversation-sidebar.is-collapsed .user-trigger {
+  display: grid;
+  grid-template-columns: 1fr;
+  justify-items: center;
+  padding: 0;
 }
 
 .sidebar-primary-nav {
@@ -317,6 +364,73 @@ textarea:focus-visible,
 
 .sidebar-section-title--projects {
   margin-top: 18px;
+}
+
+.sidebar-search {
+  height: 34px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 5px;
+  margin: 0 4px 10px;
+  padding: 0 5px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.sidebar-search:focus-within {
+  border-color: rgb(123 241 168 / 38%);
+  box-shadow: 0 0 0 2px rgb(123 241 168 / 7%);
+}
+
+.sidebar-search input {
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  font: 11px var(--sans);
+}
+
+.sidebar-search input::placeholder {
+  color: var(--faint);
+}
+
+.sidebar-search button {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sidebar-search button:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.sidebar-empty,
+.sidebar-search-empty {
+  margin: 5px 9px 0;
+  color: var(--faint);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.sidebar-empty--project {
+  margin: 4px 0 8px;
+}
+
+.sidebar-search-empty {
+  margin-top: 18px;
+  text-align: center;
 }
 
 .conversation-row {
@@ -3082,6 +3196,9 @@ textarea:focus-visible,
   .chat-shell,
   .settings-view {
     grid-template-columns: 280px minmax(0, 1fr);
+  }
+  .chat-shell.is-sidebar-collapsed {
+    grid-template-columns: 60px minmax(0, 1fr);
   }
   .composer-stage {
     width: min(680px, calc(100% - 44px));

@@ -139,6 +139,7 @@ export function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("models");
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const [project, setProject] = useState<Project | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [modelSettings, setModelSettings] = useState<ModelSettings>(initialModelSettings);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
@@ -323,11 +324,16 @@ export function App() {
         </header>
 
         {view === "chat" ? (
-          <div className="chat-shell">
+          <div className={`chat-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
             <ConversationSidebar
+              collapsed={sidebarCollapsed}
+              conversations={[]}
+              projects={project ? [project] : []}
               selectedConversationId={selectedConversationId}
+              onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
               onSelectConversation={selectConversation}
               onNewChat={startNewChat}
+              onAddProject={() => void chooseWorkspace()}
               onOpenSettings={() => { setSettingsSection("models"); setView("settings"); }}
               onOpenPlugins={() => { setSettingsSection("plugins"); setView("settings"); }}
               onOpenPet={() => setNotice({ title: "Pi 宠物", message: "陪伴模式将在后续版本接入。", type: "info" })}
