@@ -18,6 +18,7 @@ import type {
   AgentEvent,
   CapabilitySettings,
   PluginRuntimeStatus,
+  ModelCatalogEntry,
   ProviderCatalogEntry,
   QuestionOption,
   RuntimeTool,
@@ -35,6 +36,11 @@ type PendingQuestion = {
 type RuntimeConfig = ReturnType<SettingsStore["resolve"]>;
 
 type CapabilitySettingsReader = Pick<{ get(): CapabilitySettings }, "get">;
+
+type DiscoveredModelsFile = {
+  version: 1;
+  providers: Record<string, { baseUrl: string; updatedAt: string; models: ModelCatalogEntry[] }>;
+};
 
 const builtinSubagentToolName = "pi_desktop_subagent";
 
@@ -92,6 +98,47 @@ const subagentParameters = Type.Object({
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function modelEndpoint(provider: string, baseUrl: string): URL {
+  const endpoint = new URL(baseUrl);
+  const pathName = endpoint.pathname.replace(/\/$/, "");
+  if (provider === "anthropic-compatible" && !pathName.endsWith("/v1")) {
+    endpoint.pathname = `${pathName}/v1/models`;
+  } else {
+    endpoint.pathname = `${pathName}/models`;
+  }
+  endpoint.search = "";
+  endpoint.hash = "";
+  return endpoint;
+}
+
+function parseDiscoveredModels(payload: unknown): ModelCatalogEntry[] {
+  if (!payload || typeof payload !== "object") return [];
+  const record = payload as Record<string, unknown>;
+  const candidates = Array.isArray(record.data)
+    ? record.data
+    : Array.isArray(record.models)
+      ? record.models
+      : Array.isArray(payload)
+        ? payload
+        : [];
+  const models = candidates.flatMap((candidate): ModelCatalogEntry[] => {
+    if (typeof candidate === "string") return [{ id: candidate.replace(/^models\//, ""), name: candidate.replace(/^models\//, ""), reasoning: true }];
+    if (!candidate || typeof candidate !== "object") return [];
+    const entry = candidate as Record<string, unknown>;
+    const rawId = typeof entry.id === "string" ? entry.id : typeof entry.name === "string" ? entry.name : "";
+    const id = rawId.replace(/^models\//, "").trim();
+    if (!id) return [];
+    const name = typeof entry.display_name === "string"
+      ? entry.display_name
+      : typeof entry.displayName === "string"
+        ? entry.displayName
+        : id;
+    return [{ id, name, reasoning: true }];
+  });
+  return [...new Map(models.map((model) => [model.id, model])).values()]
+    .sort((left, right) => left.id.localeCompare(right.id));
 }
 
 function resultText(result: unknown): string {
@@ -152,12 +199,13 @@ export class AgentService {
     },
   ) {}
 
-  async getModelCatalog(): Promise<ProviderCatalogEntry[]> {
+  async getModelCatalog(allowNetwork = true): Promise<ProviderCatalogEntry[]> {
     const runtime = await ModelRuntime.create({
       credentials: this.credentials,
       modelsPath: path.join(this.agentDir, "models.json"),
       modelsStorePath: path.join(this.agentDir, "models-store.json"),
-      allowModelNetwork: false,
+      allowModelNetwork: allowNetwork,
+      modelRefreshTimeoutMs: 8_000,
     });
     const builtins = runtime.getProviders().map((provider): ProviderCatalogEntry => ({
       id: provider.id,
@@ -173,6 +221,7 @@ export class AgentService {
         reasoning: model.reasoning,
       })),
     }));
+    const discoveredModels = this.readDiscoveredModels();
     const compatible = Object.entries(compatibleProviderDefinitions).map(([id, definition]): ProviderCatalogEntry => ({
       id,
       name: definition.name,
@@ -180,9 +229,63 @@ export class AgentService {
       kind: "compatible",
       supportsApiKey: true,
       supportsOAuth: false,
-      models: [{ id: definition.defaultModel, name: definition.defaultModel, reasoning: true }],
+      models: discoveredModels[id]?.models ?? [{ id: definition.defaultModel, name: definition.defaultModel, reasoning: true }],
     }));
     return [...builtins, ...compatible];
+  }
+
+  async discoverModels(input: SaveModelSettings): Promise<ModelCatalogEntry[]> {
+    const compatible = compatibleProviderDefinitions[input.provider];
+    if (!compatible) {
+      const provider = (await this.getModelCatalog(false)).find((entry) => entry.id === input.provider);
+      if (!provider) throw new Error(`Pi SDK 中不存在 provider：${input.provider}。`);
+      return provider.models;
+    }
+
+    let endpoint: URL;
+    try {
+      endpoint = modelEndpoint(input.provider, input.baseUrl);
+    } catch {
+      throw new Error("请先填写有效的 API 地址。");
+    }
+    const storedCredential = await this.credentials.read(input.provider);
+    const apiKey = input.apiKey?.trim() || (storedCredential?.type === "api_key" ? storedCredential.key : undefined);
+    const headers: Record<string, string> = { accept: "application/json" };
+    if (apiKey) {
+      if (input.provider === "anthropic-compatible") {
+        headers["x-api-key"] = apiKey;
+        headers["anthropic-version"] = "2023-06-01";
+      } else if (input.provider === "google-compatible") {
+        headers["x-goog-api-key"] = apiKey;
+      } else {
+        headers.authorization = `Bearer ${apiKey}`;
+      }
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12_000);
+    let response: Response;
+    try {
+      response = await fetch(endpoint, { method: "GET", headers, signal: controller.signal });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw new Error("获取模型超时，请检查 API 地址和网络连接。");
+      throw new Error(`无法连接模型端点：${errorMessage(error)}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!response.ok) throw new Error(`获取模型失败：服务返回 HTTP ${response.status}。请检查 URL 和 API Key。`);
+    const body = await response.text();
+    if (body.length > 10_000_000) throw new Error("模型列表响应过大，已拒绝处理。");
+    let payload: unknown;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      throw new Error("模型端点没有返回有效的 JSON。");
+    }
+    const models = parseDiscoveredModels(payload);
+    if (models.length === 0) throw new Error("模型端点返回成功，但没有找到任何模型。");
+    this.writeDiscoveredModels(input.provider, input.baseUrl, models);
+    return models;
   }
 
   async send(prompt: string, cwd?: string): Promise<string> {
@@ -349,6 +452,44 @@ export class AgentService {
 
   dispose(): void {
     this.disposeSession();
+  }
+
+  private readDiscoveredModels(): DiscoveredModelsFile["providers"] {
+    try {
+      const filePath = path.join(this.agentDir, "discovered-models.json");
+      if (!fs.existsSync(filePath)) return {};
+      const stored = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<DiscoveredModelsFile>;
+      if (stored.version !== 1 || !stored.providers || typeof stored.providers !== "object") return {};
+      const providers: DiscoveredModelsFile["providers"] = {};
+      for (const [providerId, entry] of Object.entries(stored.providers)) {
+        if (!entry || typeof entry !== "object" || !Array.isArray(entry.models)) continue;
+        const models = entry.models.filter((model): model is ModelCatalogEntry => (
+          Boolean(model)
+          && typeof model.id === "string"
+          && typeof model.name === "string"
+          && typeof model.reasoning === "boolean"
+        ));
+        if (models.length === 0) continue;
+        providers[providerId] = {
+          baseUrl: typeof entry.baseUrl === "string" ? entry.baseUrl : "",
+          updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
+          models,
+        };
+      }
+      return providers;
+    } catch {
+      return {};
+    }
+  }
+
+  private writeDiscoveredModels(providerId: string, baseUrl: string, models: ModelCatalogEntry[]): void {
+    const filePath = path.join(this.agentDir, "discovered-models.json");
+    const temporaryPath = `${filePath}.tmp`;
+    const providers = this.readDiscoveredModels();
+    providers[providerId] = { baseUrl: baseUrl.replace(/\/$/, ""), updatedAt: new Date().toISOString(), models };
+    fs.mkdirSync(this.agentDir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(temporaryPath, JSON.stringify({ version: 1, providers } satisfies DiscoveredModelsFile, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(temporaryPath, filePath);
   }
 
   private async ensureSession(cwd: string, config: RuntimeConfig): Promise<AgentSession> {

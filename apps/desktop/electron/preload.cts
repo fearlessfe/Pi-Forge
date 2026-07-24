@@ -5,6 +5,7 @@ const api: PiDesktopApi = {
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
     catalog: () => ipcRenderer.invoke("settings:catalog"),
+    discoverModels: (settings: SaveModelSettings) => ipcRenderer.invoke("settings:discover-models", settings),
     save: (settings: SaveModelSettings) => ipcRenderer.invoke("settings:save", settings),
     test: (settings: SaveModelSettings) => ipcRenderer.invoke("settings:test", settings),
   },

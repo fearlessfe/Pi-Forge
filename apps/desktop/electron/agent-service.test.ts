@@ -77,7 +77,7 @@ describe("AgentService with a real Pi session", () => {
     const service = new AgentService({ resolve: () => ({ ...configuration }) }, createDirectory("catalog-agent"), createDirectory("catalog-workspace"), () => {});
 
     try {
-      const catalog = await service.getModelCatalog();
+      const catalog = await service.getModelCatalog(false);
       expect(catalog.length).toBeGreaterThan(35);
       expect(catalog).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: "anthropic", kind: "builtin", supportsApiKey: true }),
@@ -92,6 +92,42 @@ describe("AgentService with a real Pi session", () => {
       expect(catalog.find((provider) => provider.id === "openrouter")?.models.length).toBeGreaterThan(100);
     } finally {
       service.dispose();
+    }
+  });
+
+  it("discovers and persists models from an OpenAI-compatible endpoint", async () => {
+    let requestUrl = "";
+    let authorization = "";
+    const server = http.createServer((req, res) => {
+      requestUrl = req.url ?? "";
+      authorization = req.headers.authorization ?? "";
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "gpt-zeta" }, { id: "gpt-alpha" }] }));
+    });
+    const port = await listen(server);
+    const agentDir = createDirectory("model-discovery-agent");
+    const configuration: SaveModelSettings = {
+      provider: "openai-responses-compatible",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      modelId: "gpt-5",
+      thinkingLevel: "off",
+      apiKey: "discovery-key",
+    };
+    const service = new AgentService({ resolve: () => ({ ...configuration }) }, agentDir, createDirectory("model-discovery-workspace"), () => {});
+
+    try {
+      await expect(service.discoverModels(configuration)).resolves.toEqual([
+        { id: "gpt-alpha", name: "gpt-alpha", reasoning: true },
+        { id: "gpt-zeta", name: "gpt-zeta", reasoning: true },
+      ]);
+      expect(requestUrl).toBe("/v1/models");
+      expect(authorization).toBe("Bearer discovery-key");
+      const catalog = await service.getModelCatalog(false);
+      expect(catalog.find((provider) => provider.id === "openai-responses-compatible")?.models.map((model) => model.id)).toEqual(["gpt-alpha", "gpt-zeta"]);
+      expect(fs.existsSync(path.join(agentDir, "discovered-models.json"))).toBe(true);
+    } finally {
+      service.dispose();
+      await close(server);
     }
   });
 

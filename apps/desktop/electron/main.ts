@@ -104,6 +104,7 @@ function registerIpc(
 ): void {
   ipcMain.handle("settings:get", () => settingsWithCredentials(settings, credentials));
   ipcMain.handle("settings:catalog", () => agent.getModelCatalog());
+  ipcMain.handle("settings:discover-models", (_event, value: unknown) => agent.discoverModels(requireSettings(value)));
   ipcMain.handle("settings:save", async (_event, value: unknown) => {
     agent.reset();
     const input = requireSettings(value);

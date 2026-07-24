@@ -162,17 +162,13 @@ export function App() {
 
   useEffect(() => {
     void refreshModelSettings();
-    void window.piDesktop?.settings.catalog().then(setProviderCatalog).catch((error: unknown) => {
-      setNotice({ title: "无法读取模型目录", message: eventError(error), type: "info" });
-    });
+    void refreshProviderCatalog("无法读取模型目录");
     const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => setTurns((current) => applyAgentEvent(current, event)));
     const unsubscribeAuth = window.piDesktop?.auth?.onEvent((event) => {
       setAuthFlow((current) => applyAuthEvent(current, event));
       if (event.type === "auth.completed") {
         void refreshModelSettings();
-        void window.piDesktop?.settings.catalog().then(setProviderCatalog).catch((error: unknown) => {
-          setNotice({ title: "模型目录刷新失败", message: eventError(error), type: "info" });
-        });
+        void refreshProviderCatalog("模型目录刷新失败");
         setNotice({ title: "登录成功", message: `${event.providerId} 的 OAuth 凭据已安全保存。`, type: "success" });
       } else if (event.type === "auth.error") {
         setNotice({ title: "登录失败", message: event.message, type: "info" });
@@ -190,8 +186,23 @@ export function App() {
     });
   }
 
+  async function refreshProviderCatalog(errorTitle: string) {
+    if (!window.piDesktop) return;
+    try {
+      setProviderCatalog(await window.piDesktop.settings.catalog());
+    } catch (error) {
+      setNotice({ title: errorTitle, message: eventError(error), type: "info" });
+    }
+  }
+
   const title = useMemo(() => (view === "settings" ? "设置" : project?.name ?? "新建对话"), [project, view]);
   const isRunning = turns.some((turn) => turn.status === "running");
+  const configuredModelProviders = useMemo(() => {
+    const configured = new Set(modelSettings.configuredProviders);
+    const currentProvider = providerCatalog.find((provider) => provider.id === modelSettings.provider);
+    if (currentProvider?.kind === "compatible") configured.add(currentProvider.id);
+    return providerCatalog.filter((provider) => configured.has(provider.id) && provider.models.length > 0);
+  }, [modelSettings.configuredProviders, modelSettings.provider, providerCatalog]);
 
   async function resetConversation() {
     if (isRunning) await window.piDesktop?.agent.abort();
@@ -281,7 +292,46 @@ export function App() {
     if (!window.piDesktop) throw new Error("模型设置只能在 Electron 应用中保存。");
     const saved = await window.piDesktop.settings.save(input);
     setModelSettings(saved);
+    void refreshProviderCatalog("模型目录刷新失败");
     setNotice({ title: "设置已保存", message: "模型配置已保存；API Key（如有）已加密存储。", type: "success" });
+  }
+
+  async function discoverModels(input: SaveModelSettings) {
+    if (!window.piDesktop) throw new Error("模型列表只能在 Electron 应用中获取。");
+    if (typeof window.piDesktop.settings.discoverModels !== "function") {
+      throw new Error("应用后台仍是旧版本。请完全退出 Pi Desktop 后重新启动，再点击“获取模型”。");
+    }
+    const models = await window.piDesktop.settings.discoverModels(input);
+    setProviderCatalog((current) => current.map((provider) => provider.id === input.provider ? { ...provider, models } : provider));
+    return models;
+  }
+
+  async function selectChatModel(providerId: string, modelId: string) {
+    if (!window.piDesktop || isRunning) return;
+    const provider = providerCatalog.find((entry) => entry.id === providerId);
+    if (!provider) return;
+    try {
+      const startsNewConversation = turns.length > 0;
+      const saved = await window.piDesktop.settings.save({
+        provider: providerId,
+        baseUrl: providerId === modelSettings.provider ? modelSettings.baseUrl : provider.baseUrl,
+        modelId,
+        thinkingLevel: modelSettings.thinkingLevel,
+      });
+      setModelSettings(saved);
+      if (startsNewConversation) {
+        setTurns([]);
+        setPrompt("");
+        setSelectedConversationId(null);
+      }
+      setNotice({
+        title: "模型已切换",
+        message: `${provider.name} · ${modelId}${startsNewConversation ? "；已开始新对话" : ""}`,
+        type: "success",
+      });
+    } catch (error) {
+      setNotice({ title: "模型切换失败", message: eventError(error), type: "info" });
+    }
   }
 
   async function testModelSettings(input: SaveModelSettings) {
@@ -342,12 +392,15 @@ export function App() {
               <NewChatView
                 project={project}
                 turns={turns}
-                modelName={modelSettings.modelId}
+                modelId={modelSettings.modelId}
+                modelProvider={modelSettings.provider}
+                modelProviders={configuredModelProviders}
                 prompt={prompt}
                 isRunning={isRunning}
                 onPromptChange={setPrompt}
                 onProjectChange={setProject}
                 onChooseWorkspace={() => void chooseWorkspace()}
+                onModelChange={(providerId, modelId) => void selectChatModel(providerId, modelId)}
                 onSubmit={submitPrompt}
                 onStop={() => void stopAgent()}
                 onRetry={retryTurn}
@@ -367,6 +420,7 @@ export function App() {
             onSectionChange={setSettingsSection}
             onThemeChange={setTheme}
             onSave={saveModelSettings}
+            onDiscoverModels={discoverModels}
             onTest={testModelSettings}
             onLogin={loginProvider}
             onAnswerAuthPrompt={answerAuthPrompt}

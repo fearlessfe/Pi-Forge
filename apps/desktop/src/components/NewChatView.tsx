@@ -1,5 +1,6 @@
 import * as Collapsible from "@radix-ui/react-collapsible";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import * as Select from "@radix-ui/react-select";
 import {
   ArrowUp,
   BrainCircuit,
@@ -18,18 +19,22 @@ import {
   XCircle,
 } from "lucide-react";
 import { useState } from "react";
+import type { ProviderCatalogEntry, ProviderId } from "../contracts";
 import type { ChatActivity, ChatTurn, Project } from "../types";
 import { BrandMark } from "./BrandMark";
 
 type NewChatViewProps = {
   project: Project | null;
   turns: ChatTurn[];
-  modelName: string;
+  modelId: string;
+  modelProvider: ProviderId;
+  modelProviders: ProviderCatalogEntry[];
   prompt: string;
   isRunning: boolean;
   onPromptChange: (value: string) => void;
   onProjectChange: (project: Project | null) => void;
   onChooseWorkspace: () => void;
+  onModelChange: (provider: ProviderId, modelId: string) => void;
   onSubmit: () => void;
   onStop: () => void;
   onRetry: (turnId: string) => void;
@@ -45,11 +50,59 @@ function formatData(value: unknown): string {
   }
 }
 
-function ModelBadge({ name }: { name: string }) {
+function modelValue(provider: ProviderId, modelId: string) {
+  return JSON.stringify([provider, modelId]);
+}
+
+function ModelSelector({
+  provider,
+  modelId,
+  providers,
+  disabled,
+  onChange,
+}: {
+  provider: ProviderId;
+  modelId: string;
+  providers: ProviderCatalogEntry[];
+  disabled: boolean;
+  onChange: (provider: ProviderId, modelId: string) => void;
+}) {
+  const currentProvider = providers.find((entry) => entry.id === provider);
+  const currentModel = currentProvider?.models.find((model) => model.id === modelId);
+  const label = currentModel?.name ?? modelId;
+
   return (
-    <span className="composer-tool-button model-trigger" title={name}>
-      <span>{name}</span>
-    </span>
+    <Select.Root
+      value={modelValue(provider, modelId)}
+      disabled={disabled || providers.length === 0}
+      onValueChange={(value) => {
+        const [nextProvider, nextModelId] = JSON.parse(value) as [ProviderId, string];
+        onChange(nextProvider, nextModelId);
+      }}
+    >
+      <Select.Trigger className="composer-tool-button model-trigger" aria-label="选择对话模型" title={disabled ? "Agent 运行中不可切换模型" : label}>
+        <Select.Value><span>{label}</span></Select.Value>
+        <Select.Icon><ChevronDown size={12} /></Select.Icon>
+      </Select.Trigger>
+      <Select.Portal>
+        <Select.Content className="select-content chat-model-select" position="popper" sideOffset={6}>
+          <Select.Viewport className="select-viewport">
+            {providers.map((entry, index) => (
+              <Select.Group key={entry.id}>
+                {index > 0 && <Select.Separator className="select-separator" />}
+                <Select.Label className="select-label">{entry.name}</Select.Label>
+                {entry.models.map((model) => (
+                  <Select.Item className="select-item model-select-item" value={modelValue(entry.id, model.id)} key={`${entry.id}:${model.id}`} title={`${model.name} · ${model.id}`}>
+                    <Select.ItemText><span><strong>{model.name}</strong><small>{model.id}</small></span></Select.ItemText>
+                    <Select.ItemIndicator><Check size={13} /></Select.ItemIndicator>
+                  </Select.Item>
+                ))}
+              </Select.Group>
+            ))}
+          </Select.Viewport>
+        </Select.Content>
+      </Select.Portal>
+    </Select.Root>
   );
 }
 
@@ -115,7 +168,7 @@ function InitialComposer(props: NewChatViewProps) {
           />
           <div className="composer-toolbar">
             <button className="composer-tool-button" type="button" aria-label="添加附件"><Paperclip size={15} /></button>
-            <ModelBadge name={props.modelName} />
+            <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={props.isRunning} onChange={props.onModelChange} />
             <SendControl isRunning={props.isRunning} canSend={Boolean(props.prompt.trim())} onStop={props.onStop} />
           </div>
         </form>
@@ -314,7 +367,7 @@ function ActiveConversation(props: NewChatViewProps) {
           />
           <div className="compact-composer-toolbar">
             <button className="composer-tool-button" type="button" aria-label="添加附件"><Paperclip size={15} /></button>
-            <ModelBadge name={props.modelName} />
+            <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={props.isRunning} onChange={props.onModelChange} />
             <DirectoryMenu compact project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} />
             <SendControl isRunning={props.isRunning} canSend={Boolean(props.prompt.trim())} onStop={props.onStop} />
           </div>

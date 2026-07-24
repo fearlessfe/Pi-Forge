@@ -203,6 +203,7 @@ export type PiDesktopApi = {
   settings: {
     get(): Promise<ModelSettings>;
     catalog(): Promise<ProviderCatalogEntry[]>;
+    discoverModels(settings: SaveModelSettings): Promise<ModelCatalogEntry[]>;
     save(settings: SaveModelSettings): Promise<ModelSettings>;
     test(settings: SaveModelSettings): Promise<{ ok: true; response: string }>;
   };

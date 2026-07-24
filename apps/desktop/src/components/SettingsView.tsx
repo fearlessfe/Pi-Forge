@@ -10,12 +10,14 @@ import {
   LockKeyhole,
   Palette,
   Package,
+  RefreshCw,
   Settings2,
   Sparkles,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type {
   ModelSettings,
+  ModelCatalogEntry,
   ProviderCatalogEntry,
   ProviderId,
   SaveModelSettings,
@@ -36,6 +38,7 @@ type SettingsViewProps = {
   onSectionChange: (section: SettingsSection) => void;
   onThemeChange: (theme: Theme) => void;
   onSave: (settings: SaveModelSettings) => Promise<void>;
+  onDiscoverModels: (settings: SaveModelSettings) => Promise<ModelCatalogEntry[]>;
   onTest: (settings: SaveModelSettings) => Promise<void>;
   onLogin: (providerId: ProviderId) => Promise<void>;
   onAnswerAuthPrompt: (requestId: string, value: string) => Promise<void>;
@@ -128,20 +131,61 @@ function ProviderSelect({
   );
 }
 
+function ModelSelect({
+  value,
+  models,
+  onChange,
+}: {
+  value: string;
+  models: ModelCatalogEntry[];
+  onChange: (modelId: string) => void;
+}) {
+  const options = models.some((model) => model.id === value) || !value
+    ? models
+    : [{ id: value, name: value, reasoning: false }, ...models];
+  const selectedModel = options.find((model) => model.id === value);
+
+  return (
+    <Select.Root value={value} onValueChange={onChange} disabled={options.length === 0}>
+      <Select.Trigger className="select-trigger" aria-label="模型">
+        <Select.Value placeholder="暂无可用模型"><span className="settings-model-value">{selectedModel?.name ?? value}</span></Select.Value>
+        <Select.Icon><ChevronDown size={14} /></Select.Icon>
+      </Select.Trigger>
+      <Select.Portal>
+        <Select.Content className="select-content model-catalog-select" position="popper" sideOffset={6}>
+          <Select.Viewport className="select-viewport">
+            <Select.Group>
+              <Select.Label className="select-label">自动获取的模型</Select.Label>
+              {options.map((model) => (
+                <Select.Item className="select-item model-select-item" value={model.id} key={model.id}>
+                  <Select.ItemText><span><strong>{model.name}</strong><small>{model.id}</small></span></Select.ItemText>
+                  <Select.ItemIndicator><Check size={13} /></Select.ItemIndicator>
+                </Select.Item>
+              ))}
+            </Select.Group>
+          </Select.Viewport>
+        </Select.Content>
+      </Select.Portal>
+    </Select.Root>
+  );
+}
+
 function ModelsPanel({
   settings,
   providerCatalog,
   authFlow,
   onSave,
+  onDiscoverModels,
   onTest,
   onLogin,
   onAnswerAuthPrompt,
   onCancelAuth,
   onLogout,
   onDismissAuth,
-}: Pick<SettingsViewProps, "settings" | "providerCatalog" | "authFlow" | "onSave" | "onTest" | "onLogin" | "onAnswerAuthPrompt" | "onCancelAuth" | "onLogout" | "onDismissAuth">) {
+}: Pick<SettingsViewProps, "settings" | "providerCatalog" | "authFlow" | "onSave" | "onDiscoverModels" | "onTest" | "onLogin" | "onAnswerAuthPrompt" | "onCancelAuth" | "onLogout" | "onDismissAuth">) {
   const [form, setForm] = useState<SaveModelSettings>(() => editableSettings(settings));
-  const [busy, setBusy] = useState<"save" | "test" | null>(null);
+  const [busy, setBusy] = useState<"save" | "test" | "models" | null>(null);
+  const [modelFetchMessage, setModelFetchMessage] = useState<string | null>(null);
   const [authBusy, setAuthBusy] = useState(false);
   const [authAnswer, setAuthAnswer] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -151,12 +195,13 @@ function ModelsPanel({
     () => providerCatalog.find((entry) => entry.id === form.provider),
     [form.provider, providerCatalog],
   );
-  const presets = useMemo(() => {
-    if (!provider) return [];
-    const selected = provider.models.find((model) => model.id === form.modelId);
-    const leading = provider.models.slice(0, 6);
-    return selected && !leading.some((model) => model.id === selected.id) ? [selected, ...leading.slice(0, 5)] : leading;
-  }, [form.modelId, provider]);
+  const configuredProviders = useMemo(() => {
+    const configuredIds = new Set(settings.configuredProviders);
+    const currentProvider = providerCatalog.find((entry) => entry.id === settings.provider);
+    if (currentProvider?.kind === "compatible") configuredIds.add(currentProvider.id);
+    return providerCatalog.filter((entry) => configuredIds.has(entry.id));
+  }, [providerCatalog, settings.configuredProviders, settings.provider]);
+  const configuredModelCount = configuredProviders.reduce((count, entry) => count + entry.models.length, 0);
   const providerName = provider?.name ?? form.provider;
   const credential = settings.credentials.find((entry) => entry.providerId === form.provider);
   const providerHasApiKey = credential?.type === "api_key";
@@ -179,6 +224,17 @@ function ModelsPanel({
       modelId: next?.models[0]?.id ?? "",
       apiKey: "",
     }));
+    setModelFetchMessage(null);
+  }
+
+  function selectConfiguredModel(entry: ProviderCatalogEntry, modelId: string) {
+    setForm((current) => ({
+      ...current,
+      provider: entry.id,
+      baseUrl: current.provider === entry.id ? current.baseUrl : entry.baseUrl,
+      modelId,
+      apiKey: "",
+    }));
   }
 
   async function run(action: "save" | "test") {
@@ -187,6 +243,25 @@ function ModelsPanel({
     try {
       if (action === "save") await onSave(form);
       else await onTest(form);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setError(message.replace(/^Error invoking remote method '[^']+': Error: /, ""));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function discoverModels() {
+    setBusy("models");
+    setError(null);
+    setModelFetchMessage(null);
+    try {
+      const models = await onDiscoverModels(form);
+      setForm((current) => ({
+        ...current,
+        modelId: models.some((model) => model.id === current.modelId) ? current.modelId : models[0]?.id ?? "",
+      }));
+      setModelFetchMessage(`已获取 ${models.length} 个模型`);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : String(caught);
       setError(message.replace(/^Error invoking remote method '[^']+': Error: /, ""));
@@ -225,7 +300,17 @@ function ModelsPanel({
         <div className="settings-form-grid">
           <label className="settings-field"><span>提供商</span><ProviderSelect value={form.provider} providers={providerCatalog} onChange={changeProvider} /></label>
           <label className="settings-field"><span>API 地址{provider?.kind === "builtin" ? "（可选覆盖）" : ""}</span><input value={form.baseUrl} onChange={(event) => update("baseUrl", event.target.value)} spellCheck={false} placeholder={provider?.baseUrl || "使用 Provider 的环境配置"} /></label>
-          <label className="settings-field"><span>模型 ID</span><input list="pi-model-catalog" value={form.modelId} onChange={(event) => update("modelId", event.target.value)} spellCheck={false} placeholder="输入或选择模型 ID" /><datalist id="pi-model-catalog">{provider?.models.map((model) => <option value={model.id} key={model.id}>{model.name}</option>)}</datalist></label>
+          <div className="settings-field">
+            <span>模型</span>
+            <div className="settings-model-picker">
+              <ModelSelect value={form.modelId} models={provider?.models ?? []} onChange={(modelId) => update("modelId", modelId)} />
+              <button className="secondary-button fetch-models-button" type="button" disabled={Boolean(busy) || !form.baseUrl.trim()} onClick={() => void discoverModels()}>
+                <RefreshCw size={13} className={busy === "models" ? "is-spinning" : ""} />
+                {busy === "models" ? "获取中…" : "获取模型"}
+              </button>
+            </div>
+            <em className={`model-fetch-status ${modelFetchMessage ? "is-success" : ""}`}>{modelFetchMessage ?? "根据当前 API 地址和 Key 拉取模型列表"}</em>
+          </div>
           <label className="settings-field">
             <span>Thinking 级别</span>
             <select className="native-select" value={form.thinkingLevel} onChange={(event) => update("thinkingLevel", event.target.value as ThinkingLevel)}>
@@ -238,6 +323,55 @@ function ModelsPanel({
             <em>API Key 与 OAuth Token 均由操作系统安全存储加密；Renderer 只能看到认证类型，无法读取凭据明文。</em>
           </label>
         </div>
+      </section>
+
+      <section className="configured-providers-section">
+        <header>
+          <span><strong>已配置 Provider</strong><small>这些 Provider 及其模型会同步出现在对话框的模型菜单中。</small></span>
+          <span className="configured-provider-summary">{configuredProviders.length} 个 Provider · {configuredModelCount} 个模型</span>
+        </header>
+        {configuredProviders.length === 0 ? (
+          <div className="configured-providers-empty">
+            <Sparkles size={16} />
+            <span><strong>暂未配置 Provider</strong><small>在上方填写凭据并保存后，会自动获取并显示支持的模型。</small></span>
+          </div>
+        ) : (
+          <div className="configured-provider-list">
+            {configuredProviders.map((entry) => {
+              const entryCredential = settings.credentials.find((item) => item.providerId === entry.id);
+              const selected = form.provider === entry.id;
+              return (
+                <article className={`configured-provider ${selected ? "is-selected" : ""}`} key={entry.id}>
+                  <button className="configured-provider-trigger" type="button" onClick={() => {
+                    if (!selected) changeProvider(entry.id);
+                  }}>
+                    <span className="provider-logo">{entry.name[0]}</span>
+                    <span><strong>{entry.name}</strong><small>{entryCredential?.type === "oauth" ? "OAuth 已登录" : entryCredential?.type === "api_key" ? "API Key 已配置" : "兼容端点已配置"}</small></span>
+                    <span className="configured-provider-count">{entry.models.length} 个模型</span>
+                    {selected ? <ChevronDown size={14} /> : <span className="configured-provider-chevron">›</span>}
+                  </button>
+                  {selected && (
+                    <div className="configured-model-list">
+                      <header><strong>支持的模型</strong><small>选择模型后点击页面右上角“保存设置”生效</small></header>
+                      {entry.models.length === 0 ? (
+                        <p>暂未获取到模型，请检查网络或 Provider 配置。</p>
+                      ) : (
+                        <div>
+                          {entry.models.map((model) => (
+                            <button className={model.id === form.modelId ? "is-selected" : ""} type="button" key={model.id} onClick={() => selectConfiguredModel(entry, model.id)}>
+                              <span><strong>{model.name}</strong><small>{model.id}</small></span>
+                              {model.id === form.modelId && <Check size={13} />}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       {provider?.supportsOAuth && (
@@ -282,20 +416,6 @@ function ModelsPanel({
               </footer>
             </div>
           )}
-        </section>
-      )}
-
-      {presets.length > 0 && (
-        <section className="default-model-section">
-          <header><strong>模型预设</strong><small>也可以直接输入其他模型 ID</small></header>
-          <div className="model-card-grid">
-            {presets.map((model) => (
-              <button className={`model-card ${model.id === form.modelId ? "is-selected" : ""}`} key={model.id} type="button" onClick={() => update("modelId", model.id)}>
-                {model.id === form.modelId && <span className="model-check"><Check size={11} /></span>}
-                <strong>{model.id}</strong><p>{model.name === model.id ? (model.reasoning ? "支持推理的 Pi SDK 模型。" : "Pi SDK 内置模型。") : model.name}</p>
-              </button>
-            ))}
-          </div>
         </section>
       )}
 
@@ -354,7 +474,7 @@ export function SettingsView(props: SettingsViewProps) {
     <section className="settings-view" aria-label="设置">
       <SettingsNavigation activeSection={props.activeSection} onBack={props.onBack} onSectionChange={props.onSectionChange} />
       <main className="settings-content">
-        {props.activeSection === "models" && <ModelsPanel settings={props.settings} providerCatalog={props.providerCatalog} authFlow={props.authFlow} onSave={props.onSave} onTest={props.onTest} onLogin={props.onLogin} onAnswerAuthPrompt={props.onAnswerAuthPrompt} onCancelAuth={props.onCancelAuth} onLogout={props.onLogout} onDismissAuth={props.onDismissAuth} />}
+        {props.activeSection === "models" && <ModelsPanel settings={props.settings} providerCatalog={props.providerCatalog} authFlow={props.authFlow} onSave={props.onSave} onDiscoverModels={props.onDiscoverModels} onTest={props.onTest} onLogin={props.onLogin} onAnswerAuthPrompt={props.onAnswerAuthPrompt} onCancelAuth={props.onCancelAuth} onLogout={props.onLogout} onDismissAuth={props.onDismissAuth} />}
         {props.activeSection === "plugins" && <PluginsPanel agentRunning={props.agentRunning} />}
         {props.activeSection === "permissions" && <PermissionsPanel />}
         {props.activeSection === "general" && <GeneralPanel />}
