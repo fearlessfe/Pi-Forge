@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { shortcutLabel } from "../keyboard";
 import type { Conversation, Project } from "../types";
 import { BrandMark } from "./BrandMark";
 
@@ -24,6 +25,7 @@ type ConversationSidebarProps = {
   conversations: Conversation[];
   projects: Project[];
   selectedConversationId: string | null;
+  searchRequest: number;
   onToggleCollapsed: () => void;
   onSelectConversation: (conversationId: string, project?: Project) => void;
   onNewChat: () => void;
@@ -96,6 +98,7 @@ export function ConversationSidebar({
   conversations,
   projects,
   selectedConversationId,
+  searchRequest,
   onToggleCollapsed,
   onSelectConversation,
   onNewChat,
@@ -112,6 +115,13 @@ export function ConversationSidebar({
   useEffect(() => {
     if (searchOpen && !collapsed) searchInputRef.current?.focus();
   }, [collapsed, searchOpen]);
+
+  useEffect(() => {
+    if (searchRequest <= 0 || collapsed) return;
+    setSearchOpen(true);
+    const frame = window.requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [collapsed, searchRequest]);
 
   const filteredConversations = useMemo(
     () => normalizedQuery ? conversations.filter((conversation) => matchesConversation(conversation, normalizedQuery)) : conversations,
@@ -153,7 +163,7 @@ export function ConversationSidebar({
         <button className="primary-nav-item is-active" type="button" onClick={onNewChat} title="新建对话">
           <Plus size={18} />
           <span>新建对话</span>
-          <kbd>⌘N</kbd>
+          <kbd>{shortcutLabel("N")}</kbd>
         </button>
         <button className="primary-nav-item" type="button" onClick={onOpenPlugins} title="插件">
           <Package size={17} />

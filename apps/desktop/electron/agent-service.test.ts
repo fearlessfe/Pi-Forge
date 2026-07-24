@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { AssistantMessage, ToolResultMessage, Usage, UserMessage } from "@earendil-works/pi-ai";
 import type { AgentEvent, SaveModelSettings } from "../src/contracts.js";
 
 vi.mock("electron", () => ({
@@ -47,6 +49,17 @@ function chunk(delta: Record<string, unknown>, finishReason: string | null = nul
     created: 1,
     model: "mock-model",
     choices: [{ index: 0, delta, finish_reason: finishReason }],
+  };
+}
+
+function usage(input: number, output: number, cost: number): Usage {
+  return {
+    input,
+    output,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: input + output,
+    cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
   };
 }
 
@@ -102,7 +115,11 @@ describe("AgentService with a real Pi session", () => {
       requestUrl = req.url ?? "";
       authorization = req.headers.authorization ?? "";
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ data: [{ id: "gpt-zeta" }, { id: "gpt-alpha" }] }));
+      res.end(JSON.stringify({ data: [
+        { id: "gpt-zeta" },
+        { id: "gpt-alpha", context_window: 64_000 },
+        { id: "gpt-5.6-sol" },
+      ] }));
     });
     const port = await listen(server);
     const agentDir = createDirectory("model-discovery-agent");
@@ -117,13 +134,22 @@ describe("AgentService with a real Pi session", () => {
 
     try {
       await expect(service.discoverModels(configuration)).resolves.toEqual([
-        { id: "gpt-alpha", name: "gpt-alpha", reasoning: true },
-        { id: "gpt-zeta", name: "gpt-zeta", reasoning: true },
+        { id: "gpt-5.6-sol", name: "gpt-5.6-sol", reasoning: true, protocol: "openai-responses", contextWindow: 1_050_000 },
+        { id: "gpt-alpha", name: "gpt-alpha", reasoning: true, protocol: "openai-responses", contextWindow: 64_000 },
+        { id: "gpt-zeta", name: "gpt-zeta", reasoning: true, protocol: "openai-responses", contextWindow: 0 },
       ]);
       expect(requestUrl).toBe("/v1/models");
       expect(authorization).toBe("Bearer discovery-key");
       const catalog = await service.getModelCatalog(false);
-      expect(catalog.find((provider) => provider.id === "openai-responses-compatible")?.models.map((model) => model.id)).toEqual(["gpt-alpha", "gpt-zeta"]);
+      const compatibleModels = catalog.find((provider) => provider.id === "openai-responses-compatible")?.models;
+      expect(compatibleModels?.map((model) => model.id)).toEqual(["gpt-5.6-sol", "gpt-alpha", "gpt-zeta"]);
+      expect(compatibleModels?.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
+        protocol: "openai-responses",
+        contextWindow: 1_050_000,
+        maxOutputTokens: 128_000,
+        pricing: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+        metadataSource: "official",
+      });
       expect(fs.existsSync(path.join(agentDir, "discovered-models.json"))).toBe(true);
     } finally {
       service.dispose();
@@ -162,6 +188,150 @@ describe("AgentService with a real Pi session", () => {
     } finally {
       service.dispose();
       await close(server);
+    }
+  });
+
+  it("persists, lists, reloads, and continues conversations from the local session directory", async () => {
+    const requests: ChatRequest[] = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (part) => { body += part; });
+      req.on("end", () => {
+        requests.push(JSON.parse(body) as ChatRequest);
+        writeSse(res, [
+          chunk({ role: "assistant" }),
+          chunk({ content: requests.length === 1 ? "persisted-answer" : "continued-answer" }),
+          chunk({}, "stop"),
+        ]);
+      });
+    });
+    const port = await listen(server);
+    const cwd = createDirectory("persistent-conversation-workspace");
+    const agentDir = createDirectory("persistent-conversation-agent");
+    const configuration: SaveModelSettings = {
+      provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      modelId: "mock-model",
+      thinkingLevel: "off",
+      apiKey: "persistent-key",
+    };
+    const settings = { resolve: () => ({ ...configuration }) };
+    const firstEvents: AgentEvent[] = [];
+    const firstService = new AgentService(settings, agentDir, cwd, (event) => firstEvents.push(event));
+    const conversationId = "persistent-conversation";
+
+    try {
+      const firstRun = await firstService.send("remember this", cwd, conversationId);
+      await vi.waitFor(() => expect(firstEvents.some((event) => event.type === "run.completed" && event.runId === firstRun)).toBe(true), { timeout: 8_000 });
+      firstService.dispose();
+
+      const secondEvents: AgentEvent[] = [];
+      const secondService = new AgentService(settings, agentDir, cwd, (event) => secondEvents.push(event));
+      try {
+        const conversations = await secondService.listConversations();
+        expect(conversations).toEqual(expect.arrayContaining([expect.objectContaining({ id: conversationId, title: "remember this" })]));
+        await expect(secondService.loadConversation(conversationId)).resolves.toEqual(expect.objectContaining({
+          id: conversationId,
+          turns: [expect.objectContaining({ question: "remember this", answer: "persisted-answer" })],
+        }));
+
+        const secondRun = await secondService.send("what did I say?", cwd, conversationId);
+        await vi.waitFor(() => expect(secondEvents.some((event) => event.type === "run.completed" && event.runId === secondRun)).toBe(true), { timeout: 8_000 });
+        expect(requests[1].messages).toEqual(expect.arrayContaining([
+          expect.objectContaining({ role: "assistant", content: "persisted-answer" }),
+          expect.objectContaining({ role: "user", content: expect.arrayContaining([expect.objectContaining({ type: "text", text: "what did I say?" })]) }),
+        ]));
+      } finally {
+        secondService.dispose();
+      }
+    } finally {
+      firstService.dispose();
+      await close(server);
+    }
+  });
+
+  it("restores historical thinking, tool calls, per-answer model usage, and context", async () => {
+    const cwd = createDirectory("usage-history-workspace");
+    const agentDir = createDirectory("usage-history-agent");
+    const sessionDir = createDirectory("usage-history-sessions");
+    const conversationId = "usage-history";
+    const manager = SessionManager.create(cwd, sessionDir, { id: conversationId });
+    manager.appendMessage({ role: "user", content: "inspect the project", timestamp: 1 } satisfies UserMessage);
+    manager.appendMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "I should inspect the files" },
+        { type: "toolCall", id: "call-read", name: "read", arguments: { path: "README.md" } },
+      ],
+      api: "openai-completions",
+      provider: "openai-compatible",
+      model: "gpt-5.6-sol",
+      usage: usage(100, 10, 0.01),
+      stopReason: "toolUse",
+      timestamp: 2,
+    } satisfies AssistantMessage);
+    manager.appendMessage({
+      role: "toolResult",
+      toolCallId: "call-read",
+      toolName: "read",
+      content: [{ type: "text", text: "project readme" }],
+      isError: false,
+      timestamp: 3,
+    } satisfies ToolResultMessage);
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "historical answer" }],
+      api: "openai-completions",
+      provider: "openai-compatible",
+      model: "gpt-5.6-sol",
+      responseModel: "mock-model-2026-07",
+      usage: usage(160, 20, 0.02),
+      stopReason: "stop",
+      timestamp: 4,
+    } satisfies AssistantMessage);
+
+    const configuration: SaveModelSettings = {
+      provider: "openai-compatible",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      modelId: "gpt-5.6-sol",
+      thinkingLevel: "off",
+    };
+    const service = new AgentService(
+      { resolve: () => ({ ...configuration }) },
+      agentDir,
+      cwd,
+      () => {},
+      undefined,
+      undefined,
+      sessionDir,
+    );
+
+    try {
+      await expect(service.loadConversation(conversationId)).resolves.toMatchObject({
+        id: conversationId,
+        contextUsage: { tokens: 180, contextWindow: 1_050_000 },
+        turns: [{
+          question: "inspect the project",
+          answer: "historical answer",
+          usage: {
+            provider: "openai-compatible",
+            model: "gpt-5.6-sol",
+            responseModel: "mock-model-2026-07",
+            inputTokens: 160,
+            outputTokens: 20,
+            totalTokens: 180,
+            requestCount: 2,
+            cost: 0.03,
+          },
+          activities: [
+            expect.objectContaining({ type: "thinking", text: "I should inspect the files" }),
+            expect.objectContaining({ type: "tool", name: "read", output: "project readme", status: "success" }),
+          ],
+        }],
+      });
+    } finally {
+      service.dispose();
     }
   });
 
@@ -266,7 +436,7 @@ describe("AgentService with a real Pi session", () => {
     const configuration: SaveModelSettings = {
       provider: "openai-compatible",
       baseUrl: `http://127.0.0.1:${port}/v1`,
-      modelId: "mock-model",
+      modelId: "gpt-5.6-sol",
       thinkingLevel: "off",
       apiKey: "local-test-key",
     };
@@ -286,6 +456,12 @@ describe("AgentService with a real Pi session", () => {
       expect(events.some((event) => event.type === "question.requested" && event.question === "Choose a path")).toBe(true);
       expect(events.some((event) => event.type === "tool.started" && event.name === "ask_user")).toBe(true);
       expect(events.some((event) => event.type === "tool.completed" && event.name === "ask_user" && !event.isError)).toBe(true);
+      expect(eventsOfType(events, "response.usage").filter((event) => event.runId === first)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ usage: expect.objectContaining({ provider: "openai-compatible", model: "gpt-5.6-sol", requestCount: 1 }) }),
+      ]));
+      expect(eventsOfType(events, "context.updated").filter((event) => event.runId === first)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ usage: expect.objectContaining({ contextWindow: 1_050_000 }) }),
+      ]));
 
       const trace = eventsOfType(events, "agent.event").filter((event) => event.runId === first).map((event) => event.event);
       const eventTypes = new Set(trace.map((event) => event.eventType));

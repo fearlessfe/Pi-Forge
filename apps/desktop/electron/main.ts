@@ -1,13 +1,16 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { AgentEvent, PackageCapabilityProvider, SaveModelSettings, SendPromptInput, SubagentProvider } from "../src/contracts.js";
+import type { AgentEvent, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, SaveModelSettings, SendPromptInput, SubagentProvider } from "../src/contracts.js";
 import { AgentService } from "./agent-service.js";
 import { AuthService } from "./auth-service.js";
 import { CapabilityStore } from "./capability-store.js";
 import { EncryptedCredentialStore } from "./credential-store.js";
 import { PluginService } from "./plugin-service.js";
+import { PermissionStore } from "./permission-store.js";
 import { SettingsStore } from "./settings-store.js";
+import { ModelMetadataStore } from "./model-metadata-store.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
@@ -94,6 +97,13 @@ function requireString(value: unknown, message: string): string {
   return value;
 }
 
+function requirePermissionSettings(value: unknown): PermissionSettings {
+  if (!value || typeof value !== "object" || typeof (value as Record<string, unknown>).mode !== "string") {
+    throw new Error("权限设置格式无效。");
+  }
+  return value as PermissionSettings;
+}
+
 function registerIpc(
   settings: SettingsStore,
   credentials: EncryptedCredentialStore,
@@ -101,9 +111,26 @@ function registerIpc(
   auth: AuthService,
   plugins: PluginService,
   capabilities: CapabilityStore,
+  permissions: PermissionStore,
+  modelMetadata: ModelMetadataStore,
 ): void {
   ipcMain.handle("settings:get", () => settingsWithCredentials(settings, credentials));
   ipcMain.handle("settings:catalog", () => agent.getModelCatalog());
+  ipcMain.handle("settings:refresh-metadata", () => agent.getModelCatalog(true));
+  ipcMain.handle("settings:save-metadata", async (_event, providerId: unknown, modelId: unknown, value: unknown) => {
+    modelMetadata.save(
+      requireString(providerId, "模型提供商无效。"),
+      requireString(modelId, "模型 ID 无效。"),
+      value as ModelMetadataOverride,
+    );
+    agent.reset();
+    return agent.getModelCatalog(false);
+  });
+  ipcMain.handle("settings:reset-metadata", async (_event, providerId: unknown, modelId: unknown) => {
+    modelMetadata.reset(requireString(providerId, "模型提供商无效。"), requireString(modelId, "模型 ID 无效。"));
+    agent.reset();
+    return agent.getModelCatalog(false);
+  });
   ipcMain.handle("settings:discover-models", (_event, value: unknown) => agent.discoverModels(requireSettings(value)));
   ipcMain.handle("settings:save", async (_event, value: unknown) => {
     agent.reset();
@@ -117,6 +144,12 @@ function registerIpc(
   ipcMain.handle("settings:test", async (_event, value: unknown) => {
     const response = await agent.testConfiguration(requireSettings(value));
     return { ok: true as const, response };
+  });
+  ipcMain.handle("permissions:get", () => agent.getPermissionRuntime());
+  ipcMain.handle("permissions:save", (_event, value: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改权限模式。");
+    permissions.save(requirePermissionSettings(value));
+    return agent.getPermissionRuntime();
   });
   ipcMain.handle("auth:login", async (_event, providerId: unknown) => {
     agent.reset();
@@ -240,12 +273,18 @@ function registerIpc(
   ipcMain.handle("agent:send", async (_event, value: unknown) => {
     if (!value || typeof value !== "object") throw new Error("消息格式无效。");
     const input = value as SendPromptInput;
-    if (typeof input.prompt !== "string" || (input.cwd !== undefined && typeof input.cwd !== "string")) {
+    if (
+      typeof input.prompt !== "string"
+      || (input.cwd !== undefined && typeof input.cwd !== "string")
+      || (input.conversationId !== undefined && typeof input.conversationId !== "string")
+    ) {
       throw new Error("消息字段无效。");
     }
-    const runId = await agent.send(input.prompt, input.cwd);
+    const runId = await agent.send(input.prompt, input.cwd, input.conversationId);
     return { runId };
   });
+  ipcMain.handle("agent:list-conversations", () => agent.listConversations());
+  ipcMain.handle("agent:load-conversation", (_event, conversationId: unknown) => agent.loadConversation(requireString(conversationId, "会话 ID 无效。")));
   ipcMain.handle("agent:abort", () => agent.abort());
   ipcMain.handle("agent:answer-question", (_event, callId: unknown, answer: unknown) => {
     if (typeof callId !== "string" || typeof answer !== "string") throw new Error("回答格式无效。");
@@ -256,9 +295,13 @@ function registerIpc(
 
 if (isPrimaryInstance) void app.whenReady().then(async () => {
   const userData = app.getPath("userData");
+  const piDesktopHome = path.join(os.homedir(), ".pi-desktop");
+  const chatSandbox = path.join(piDesktopHome, "workspace");
   const settings = new SettingsStore(userData);
   const capabilities = new CapabilityStore(userData);
+  const permissions = new PermissionStore(userData);
   const credentials = new EncryptedCredentialStore(userData);
+  const modelMetadata = new ModelMetadataStore(userData);
   try {
     await migrateLegacyApiKeys(settings, credentials);
   } catch (error) {
@@ -267,10 +310,14 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   agentService = new AgentService(
     settings,
     path.join(userData, "pi-agent"),
-    path.join(userData, "chat-sandbox"),
+    chatSandbox,
     sendAgentEvent,
     credentials,
     capabilities,
+    path.join(piDesktopHome, "sessions"),
+    permissions,
+    undefined,
+    modelMetadata,
   );
   authService = new AuthService(
     credentials,
@@ -280,10 +327,10 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   );
   pluginService = new PluginService(
     path.join(userData, "pi-agent"),
-    path.join(userData, "chat-sandbox"),
+    chatSandbox,
     (event) => mainWindow?.webContents.send("plugins:event", event),
   );
-  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities);
+  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, modelMetadata);
   mainWindow = createWindow();
 
   app.on("second-instance", () => {

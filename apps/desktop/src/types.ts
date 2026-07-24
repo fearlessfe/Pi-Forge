@@ -1,10 +1,10 @@
-import type { AgentTraceEvent, AuthPrompt, ProviderId } from "./contracts";
+import type { AuthPrompt, ConversationActivity, ProviderId, ResponseUsage } from "./contracts.js";
 
 export type Theme = "dark" | "light";
 
 export type AppView = "chat" | "settings";
 
-export type SettingsSection = "models" | "plugins" | "permissions" | "general" | "appearance";
+export type SettingsSection = "models" | "model-metadata" | "plugins" | "permissions" | "general" | "appearance";
 
 export type Conversation = {
   id: string;
@@ -40,30 +40,9 @@ export type ChatTurn = {
   question: string;
   answer: string;
   activities: ChatActivity[];
-  trace: AgentTraceEvent[];
+  usage?: ResponseUsage;
   status: "running" | "completed" | "error" | "stopped";
   error?: string;
 };
 
-export type ChatActivity =
-  | {
-      id: string;
-      type: "thinking";
-      text: string;
-    }
-  | {
-      id: string;
-      type: "tool";
-      name: string;
-      args: unknown;
-      output: string;
-      status: "running" | "success" | "error";
-    }
-  | {
-      id: string;
-      type: "question";
-      question: string;
-      options: Array<{ label: string; description?: string }>;
-      answer?: string;
-      status: "pending" | "answered";
-    };
+export type ChatActivity = ConversationActivity;

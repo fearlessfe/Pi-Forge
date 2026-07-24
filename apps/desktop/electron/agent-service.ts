@@ -1,5 +1,6 @@
 import {
   createAgentSession,
+  createBashTool,
   DefaultResourceLoader,
   defineTool,
   ModelRuntime,
@@ -7,9 +8,10 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   type LoadExtensionsResult,
+  type SessionInfo,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { InMemoryCredentialStore, type Api, type CredentialStore, type Model } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, type Api, type AssistantMessage, type CredentialStore, type Model, type ToolResultMessage } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
@@ -17,15 +19,32 @@ import { randomUUID } from "node:crypto";
 import type {
   AgentEvent,
   CapabilitySettings,
+  ConversationHistoryDetail,
+  ConversationHistoryItem,
+  ContextUsageInfo,
   PluginRuntimeStatus,
+  PermissionRuntime,
+  PermissionSettings,
   ModelCatalogEntry,
   ProviderCatalogEntry,
   QuestionOption,
+  ResponseUsage,
   RuntimeTool,
   SaveModelSettings,
 } from "../src/contracts.js";
 import { captureAgentSessionEvent } from "./agent-event-adapter.js";
+import { decideToolPermission, type PermissionGrant } from "./permission-policy.js";
+import { defaultPermissionSettings } from "./permission-store.js";
 import { SettingsStore } from "./settings-store.js";
+import { WorkspaceCommandSandbox } from "./workspace-command-sandbox.js";
+import { mergeAnswerUsage } from "../src/response-usage.js";
+import {
+  buildProtocolModelMetadataIndex,
+  fixedProtocolModelMetadata,
+  matchProtocolModelMetadata,
+  type ProtocolModelMetadata,
+} from "./model-metadata-catalog.js";
+import { ModelMetadataStore } from "./model-metadata-store.js";
 
 type EventSink = (event: AgentEvent) => void;
 
@@ -36,10 +55,26 @@ type PendingQuestion = {
 type RuntimeConfig = ReturnType<SettingsStore["resolve"]>;
 
 type CapabilitySettingsReader = Pick<{ get(): CapabilitySettings }, "get">;
+type PermissionSettingsReader = Pick<{ get(): PermissionSettings }, "get">;
 
 type DiscoveredModelsFile = {
-  version: 1;
+  version: 1 | 2;
   providers: Record<string, { baseUrl: string; updatedAt: string; models: ModelCatalogEntry[] }>;
+};
+
+const officialMetadataSources: Record<string, string> = {
+  anthropic: "https://docs.anthropic.com/en/docs/about-claude/pricing",
+  openai: "https://developers.openai.com/api/docs/pricing",
+  "openai-codex": "https://developers.openai.com/api/docs/pricing",
+  google: "https://ai.google.dev/gemini-api/docs/pricing",
+  xai: "https://docs.x.ai/developers/models",
+  groq: "https://groq.com/pricing",
+  mistral: "https://mistral.ai/pricing",
+  openrouter: "https://openrouter.ai/models",
+  deepseek: "https://api-docs.deepseek.com/quick_start/pricing",
+  "amazon-bedrock": "https://aws.amazon.com/bedrock/pricing/",
+  "azure-openai-responses": "https://azure.microsoft.com/pricing/details/cognitive-services/openai-service/",
+  "google-vertex": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
 };
 
 const builtinSubagentToolName = "pi_desktop_subagent";
@@ -113,7 +148,7 @@ function modelEndpoint(provider: string, baseUrl: string): URL {
   return endpoint;
 }
 
-function parseDiscoveredModels(payload: unknown): ModelCatalogEntry[] {
+function parseDiscoveredModels(payload: unknown, protocol: string): ModelCatalogEntry[] {
   if (!payload || typeof payload !== "object") return [];
   const record = payload as Record<string, unknown>;
   const candidates = Array.isArray(record.data)
@@ -124,7 +159,11 @@ function parseDiscoveredModels(payload: unknown): ModelCatalogEntry[] {
         ? payload
         : [];
   const models = candidates.flatMap((candidate): ModelCatalogEntry[] => {
-    if (typeof candidate === "string") return [{ id: candidate.replace(/^models\//, ""), name: candidate.replace(/^models\//, ""), reasoning: true }];
+    if (typeof candidate === "string") {
+      const id = candidate.replace(/^models\//, "");
+      const matched = fixedProtocolModelMetadata(protocol, id);
+      return [{ id, name: id, reasoning: true, protocol, contextWindow: matched?.contextWindow ?? 0 }];
+    }
     if (!candidate || typeof candidate !== "object") return [];
     const entry = candidate as Record<string, unknown>;
     const rawId = typeof entry.id === "string" ? entry.id : typeof entry.name === "string" ? entry.name : "";
@@ -135,7 +174,10 @@ function parseDiscoveredModels(payload: unknown): ModelCatalogEntry[] {
       : typeof entry.displayName === "string"
         ? entry.displayName
         : id;
-    return [{ id, name, reasoning: true }];
+    const advertisedContextWindow = [entry.contextWindow, entry.context_window, entry.max_context_length]
+      .find((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
+    const matched = fixedProtocolModelMetadata(protocol, id);
+    return [{ id, name, reasoning: true, protocol, contextWindow: advertisedContextWindow ?? matched?.contextWindow ?? 0 }];
   });
   return [...new Map(models.map((model) => [model.id, model])).values()]
     .sort((left, right) => left.id.localeCompare(right.id));
@@ -155,19 +197,19 @@ function resultText(result: unknown): string {
   }
 }
 
-function isInsideWorkspace(cwd: string, candidate: string): boolean {
-  const root = fs.realpathSync(cwd);
-  const absolute = path.resolve(cwd, candidate);
-  let existing = absolute;
-  while (!fs.existsSync(existing)) {
-    const parent = path.dirname(existing);
-    if (parent === existing) break;
-    existing = parent;
-  }
-  const resolvedExisting = fs.existsSync(existing) ? fs.realpathSync(existing) : existing;
-  const resolved = path.resolve(resolvedExisting, path.relative(existing, absolute));
-  const relative = path.relative(root, resolved);
-  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+function responseUsage(message: AssistantMessage): ResponseUsage {
+  return {
+    provider: message.provider,
+    model: message.model,
+    responseModel: message.responseModel,
+    inputTokens: message.usage.input,
+    outputTokens: message.usage.output,
+    cacheReadTokens: message.usage.cacheRead,
+    cacheWriteTokens: message.usage.cacheWrite,
+    totalTokens: message.usage.totalTokens,
+    requestCount: 1,
+    cost: message.usage.cost.total,
+  };
 }
 
 export class AgentService {
@@ -178,8 +220,11 @@ export class AgentService {
   private pendingQuestions = new Map<string, PendingQuestion>();
   private running = false;
   private eventSequence = 0;
+  private readonly runPermissionGrants = new Set<PermissionGrant>();
+  private sandboxedBashActive = false;
   private appliedSubagentTool?: string;
   private capabilityFallbackReason?: string;
+  private sessionDisplayContextWindow = 0;
 
   constructor(
     private readonly settings: Pick<SettingsStore, "resolve">,
@@ -197,6 +242,10 @@ export class AgentService {
         learningHistory: [],
       }),
     },
+    private readonly sessionDir: string = path.join(agentDir, "sessions"),
+    private readonly permissions: PermissionSettingsReader = { get: () => defaultPermissionSettings },
+    private readonly commandSandbox: WorkspaceCommandSandbox = new WorkspaceCommandSandbox(),
+    private readonly modelMetadata: ModelMetadataStore = new ModelMetadataStore(path.dirname(agentDir)),
   ) {}
 
   async getModelCatalog(allowNetwork = true): Promise<ProviderCatalogEntry[]> {
@@ -219,19 +268,50 @@ export class AgentService {
         id: model.id,
         name: model.name,
         reasoning: model.reasoning,
+        protocol: model.api,
+        contextWindow: model.contextWindow,
+        maxOutputTokens: model.maxTokens,
+        pricing: { ...model.cost },
+        metadataSource: "official",
+        metadataSourceUrl: officialMetadataSources[provider.id],
       })),
     }));
+    const protocolMetadata = buildProtocolModelMetadataIndex(builtins.flatMap((provider) => provider.models));
     const discoveredModels = this.readDiscoveredModels();
-    const compatible = Object.entries(compatibleProviderDefinitions).map(([id, definition]): ProviderCatalogEntry => ({
-      id,
-      name: definition.name,
-      baseUrl: definition.baseUrl,
-      kind: "compatible",
-      supportsApiKey: true,
-      supportsOAuth: false,
-      models: discoveredModels[id]?.models ?? [{ id: definition.defaultModel, name: definition.defaultModel, reasoning: true }],
-    }));
-    return [...builtins, ...compatible];
+    const compatible = Object.entries(compatibleProviderDefinitions).map(([id, definition]): ProviderCatalogEntry => {
+      const discovered = discoveredModels[id];
+      const defaultMetadata = matchProtocolModelMetadata(protocolMetadata, definition.api, definition.defaultModel);
+      const models = discovered?.models ?? [{
+        id: definition.defaultModel,
+        name: definition.defaultModel,
+        reasoning: true,
+        protocol: definition.api,
+        contextWindow: defaultMetadata?.contextWindow ?? 0,
+      }];
+      return {
+        id,
+        name: definition.name,
+        baseUrl: definition.baseUrl,
+        kind: "compatible",
+        supportsApiKey: true,
+        supportsOAuth: false,
+        models: models.map((model) => ({
+          ...model,
+          protocol: definition.api,
+          contextWindow: model.contextWindow || matchProtocolModelMetadata(protocolMetadata, definition.api, model.id)?.contextWindow || 0,
+          maxOutputTokens: model.maxOutputTokens
+            || matchProtocolModelMetadata(protocolMetadata, definition.api, model.id)?.maxOutputTokens
+            || 0,
+          pricing: matchProtocolModelMetadata(protocolMetadata, definition.api, model.id)?.pricing
+            ?? model.pricing
+            ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          metadataSource: matchProtocolModelMetadata(protocolMetadata, definition.api, model.id) ? "official" : "endpoint",
+          metadataSourceUrl: matchProtocolModelMetadata(protocolMetadata, definition.api, model.id)?.sourceUrl,
+          metadataUpdatedAt: discovered?.updatedAt,
+        })),
+      };
+    });
+    return this.modelMetadata.apply([...builtins, ...compatible]);
   }
 
   async discoverModels(input: SaveModelSettings): Promise<ModelCatalogEntry[]> {
@@ -282,30 +362,33 @@ export class AgentService {
     } catch {
       throw new Error("模型端点没有返回有效的 JSON。");
     }
-    const models = parseDiscoveredModels(payload);
+    const models = parseDiscoveredModels(payload, compatible.api);
     if (models.length === 0) throw new Error("模型端点返回成功，但没有找到任何模型。");
     this.writeDiscoveredModels(input.provider, input.baseUrl, models);
     return models;
   }
 
-  async send(prompt: string, cwd?: string): Promise<string> {
+  async send(prompt: string, cwd?: string, conversationId?: string): Promise<string> {
     if (this.running) throw new Error("Agent 正在执行，请先停止当前任务或等待完成。");
     if (!prompt.trim()) throw new Error("消息不能为空。");
 
     const resolvedCwd = this.resolveCwd(cwd);
     const config = this.settings.resolve();
-    const session = await this.ensureSession(resolvedCwd, config);
+    const session = await this.ensureSession(resolvedCwd, config, conversationId);
     const runId = randomUUID();
     this.activeRunId = runId;
     this.running = true;
     this.eventSequence = 0;
+    this.runPermissionGrants.clear();
     this.emit({ type: "run.started", runId });
+    this.emitContextUsage(runId, session);
 
     void session.prompt(prompt.trim()).then(() => {
       if (this.activeRunId !== runId) return;
       const modelError = session.agent.state.errorMessage;
       this.activeRunId = undefined;
       this.running = false;
+      this.emitContextUsage(runId, session);
       if (modelError) this.emit({ type: "run.error", runId, message: modelError });
       else this.emit({ type: "run.completed", runId });
     }).catch((error: unknown) => {
@@ -317,6 +400,98 @@ export class AgentService {
     });
 
     return runId;
+  }
+
+  async listConversations(): Promise<ConversationHistoryItem[]> {
+    const sessions = await SessionManager.listAll(this.sessionDir);
+    return sessions
+      .sort((left, right) => right.modified.getTime() - left.modified.getTime())
+      .map((session) => this.historyItem(session));
+  }
+
+  async loadConversation(conversationId: string): Promise<ConversationHistoryDetail> {
+    const sessions = await SessionManager.listAll(this.sessionDir);
+    const info = sessions.find((session) => session.id === conversationId);
+    if (!info) throw new Error("找不到该会话，文件可能已被移动或删除。");
+    const manager = SessionManager.open(info.path, this.sessionDir, info.cwd || this.fallbackCwd);
+    const branch = manager.getBranch();
+    const turns: ConversationHistoryDetail["turns"] = [];
+    let latestAssistant: { message: AssistantMessage; entryIndex: number } | undefined;
+
+    for (const [entryIndex, entry] of branch.entries()) {
+      if (entry.type !== "message") continue;
+      const record = entry.message as unknown as Record<string, unknown>;
+      const role = typeof record.role === "string" ? record.role : "";
+      if (role === "user") {
+        const question = this.messageText(record.content);
+        if (question) turns.push({ id: entry.id, question, answer: "", activities: [] });
+        continue;
+      }
+      const current = turns.at(-1);
+      if (!current) continue;
+
+      if (role === "assistant") {
+        const assistant = entry.message as AssistantMessage;
+        latestAssistant = { message: assistant, entryIndex };
+        current.usage = mergeAnswerUsage(current.usage, responseUsage(assistant));
+        for (const [contentIndex, content] of assistant.content.entries()) {
+          if (content.type === "text") current.answer += content.text;
+          else if (content.type === "thinking" && content.thinking) {
+            current.activities.push({ id: `${entry.id}-thinking-${contentIndex}`, type: "thinking", text: content.thinking });
+          } else if (content.type === "toolCall") {
+            if (content.name === "ask_user") {
+              const question = typeof content.arguments.question === "string" ? content.arguments.question : "Pi 需要你的回答";
+              const options = Array.isArray(content.arguments.options)
+                ? content.arguments.options.filter((option): option is QuestionOption => Boolean(option) && typeof option.label === "string")
+                : [];
+              current.activities.push({ id: content.id, type: "question", question, options, status: "pending" });
+            } else {
+              current.activities.push({ id: content.id, type: "tool", name: content.name, args: content.arguments, output: "", status: "running" });
+            }
+          }
+        }
+      } else if (role === "toolResult") {
+        const result = entry.message as ToolResultMessage;
+        const activity = current.activities.find((item) => item.id === result.toolCallId);
+        if (activity?.type === "tool") {
+          activity.output = this.messageText(result.content);
+          activity.status = result.isError ? "error" : "success";
+        } else if (activity?.type === "question") {
+          const answer = result.details && typeof result.details === "object" && typeof (result.details as Record<string, unknown>).answer === "string"
+            ? (result.details as Record<string, unknown>).answer as string
+            : this.messageText(result.content).replace(/^User answered:\s*/i, "");
+          activity.answer = answer;
+          activity.status = "answered";
+        }
+      }
+    }
+
+    for (const turn of turns) {
+      turn.activities = turn.activities.map((activity) => activity.type === "tool" && activity.status === "running"
+        ? { ...activity, status: "error" }
+        : activity);
+    }
+
+    let contextUsage: ContextUsageInfo | undefined;
+    if (latestAssistant) {
+      const catalog = await this.getModelCatalog(false);
+      const contextWindow = catalog.find((provider) => provider.id === latestAssistant.message.provider)
+        ?.models.find((model) => model.id === latestAssistant.message.model)?.contextWindow
+        ?? fixedProtocolModelMetadata(latestAssistant.message.api, latestAssistant.message.model)?.contextWindow
+        ?? 0;
+      if (contextWindow > 0) {
+        let latestCompactionIndex = -1;
+        for (let index = branch.length - 1; index >= 0; index -= 1) {
+          if (branch[index].type === "compaction") {
+            latestCompactionIndex = index;
+            break;
+          }
+        }
+        const tokens = latestAssistant.entryIndex > latestCompactionIndex ? latestAssistant.message.usage.totalTokens : null;
+        contextUsage = { tokens, contextWindow, percent: tokens === null ? null : (tokens / contextWindow) * 100 };
+      }
+    }
+    return { ...this.historyItem(info), turns, contextUsage };
   }
 
   async abort(): Promise<void> {
@@ -333,6 +508,14 @@ export class AgentService {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  getPermissionRuntime(): PermissionRuntime {
+    return {
+      ...this.permissions.get(),
+      sandbox: this.commandSandbox.isAvailable() ? "available" : "unavailable",
+      platform: process.platform,
+    };
   }
 
   async reloadPackages(): Promise<boolean> {
@@ -452,6 +635,7 @@ export class AgentService {
 
   dispose(): void {
     this.disposeSession();
+    void this.commandSandbox.reset();
   }
 
   private readDiscoveredModels(): DiscoveredModelsFile["providers"] {
@@ -459,16 +643,24 @@ export class AgentService {
       const filePath = path.join(this.agentDir, "discovered-models.json");
       if (!fs.existsSync(filePath)) return {};
       const stored = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<DiscoveredModelsFile>;
-      if (stored.version !== 1 || !stored.providers || typeof stored.providers !== "object") return {};
+      if ((stored.version !== 1 && stored.version !== 2) || !stored.providers || typeof stored.providers !== "object") return {};
       const providers: DiscoveredModelsFile["providers"] = {};
       for (const [providerId, entry] of Object.entries(stored.providers)) {
         if (!entry || typeof entry !== "object" || !Array.isArray(entry.models)) continue;
+        const protocol = compatibleProviderDefinitions[providerId]?.api;
         const models = entry.models.filter((model): model is ModelCatalogEntry => (
           Boolean(model)
           && typeof model.id === "string"
           && typeof model.name === "string"
           && typeof model.reasoning === "boolean"
-        ));
+        )).map((model) => {
+          const knownContextWindow = protocol ? fixedProtocolModelMetadata(protocol, model.id)?.contextWindow : undefined;
+          const storedContextWindow = typeof model.contextWindow === "number" && model.contextWindow > 0 ? model.contextWindow : 0;
+          // Version 1 used 128K as an unconditional fallback, so that value is
+          // not trustworthy unless the model is now covered by known metadata.
+          const contextWindow = knownContextWindow ?? (stored.version === 1 && storedContextWindow === 128_000 ? 0 : storedContextWindow);
+          return { ...model, protocol: model.protocol ?? protocol, contextWindow };
+        });
         if (models.length === 0) continue;
         providers[providerId] = {
           baseUrl: typeof entry.baseUrl === "string" ? entry.baseUrl : "",
@@ -488,12 +680,45 @@ export class AgentService {
     const providers = this.readDiscoveredModels();
     providers[providerId] = { baseUrl: baseUrl.replace(/\/$/, ""), updatedAt: new Date().toISOString(), models };
     fs.mkdirSync(this.agentDir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(temporaryPath, JSON.stringify({ version: 1, providers } satisfies DiscoveredModelsFile, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.writeFileSync(temporaryPath, JSON.stringify({ version: 2, providers } satisfies DiscoveredModelsFile, null, 2), { encoding: "utf8", mode: 0o600 });
     fs.renameSync(temporaryPath, filePath);
   }
 
-  private async ensureSession(cwd: string, config: RuntimeConfig): Promise<AgentSession> {
-    const key = JSON.stringify([cwd, config.provider, config.baseUrl, config.modelId, config.thinkingLevel, config.apiKey]);
+  private historyItem(session: SessionInfo): ConversationHistoryItem {
+    const isProject = Boolean(session.cwd) && path.resolve(session.cwd) !== path.resolve(this.fallbackCwd);
+    const title = session.name?.trim() || session.firstMessage.trim().replace(/\s+/g, " ") || "未命名对话";
+    return {
+      id: session.id,
+      title: title.length > 60 ? `${title.slice(0, 60)}…` : title,
+      cwd: session.cwd || this.fallbackCwd,
+      createdAt: session.created.toISOString(),
+      updatedAt: session.modified.toISOString(),
+      project: isProject ? { id: session.cwd, name: path.basename(session.cwd), path: session.cwd } : undefined,
+    };
+  }
+
+  private messageText(content: unknown): string {
+    if (typeof content === "string") return content.trim();
+    if (!Array.isArray(content)) return "";
+    return content.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const entry = item as Record<string, unknown>;
+      return entry.type === "text" && typeof entry.text === "string" ? [entry.text] : [];
+    }).join("\n").trim();
+  }
+
+  private async sessionManager(cwd: string, conversationId?: string): Promise<SessionManager> {
+    fs.mkdirSync(this.sessionDir, { recursive: true, mode: 0o700 });
+    if (conversationId) {
+      const existing = (await SessionManager.list(cwd, this.sessionDir)).find((session) => session.id === conversationId);
+      if (existing) return SessionManager.open(existing.path, this.sessionDir, cwd);
+      return SessionManager.create(cwd, this.sessionDir, { id: conversationId });
+    }
+    return SessionManager.create(cwd, this.sessionDir);
+  }
+
+  private async ensureSession(cwd: string, config: RuntimeConfig, conversationId?: string): Promise<AgentSession> {
+    const key = JSON.stringify([cwd, conversationId, config.provider, config.baseUrl, config.modelId, config.thinkingLevel, config.apiKey]);
     if (this.session && this.sessionKey === key) return this.session;
     this.disposeSession();
 
@@ -503,24 +728,41 @@ export class AgentService {
       agentDir: this.agentDir,
       extensionFactories: [
         (pi) => {
+          const sandboxedBash = createBashTool(cwd, { operations: this.commandSandbox.createOperations() });
+          pi.registerTool({ ...sandboxedBash, label: "bash (workspace sandbox)" });
           pi.on("tool_call", async (event) => {
             if (!this.activeRunId) return undefined;
             const input = event.input as Record<string, unknown>;
-            const candidatePath = typeof input.path === "string" ? input.path : undefined;
-            const outsideWorkspace = candidatePath ? !isInsideWorkspace(cwd, candidatePath) : false;
-            const sensitiveTool = ["bash", "edit", "write"].includes(event.toolName);
-            if (!outsideWorkspace && !sensitiveTool) return undefined;
+            const mode = this.permissions.get().mode;
+            const sandboxAvailable = event.toolName === "bash" && mode === "balanced" && this.sandboxedBashActive
+              ? await this.commandSandbox.prepare(cwd)
+              : false;
+            const decision = decideToolPermission({
+              toolName: event.toolName,
+              input,
+              cwd,
+              mode,
+              sandboxAvailable,
+              runGrants: this.runPermissionGrants,
+            });
+            if (decision.action === "allow") return undefined;
             const summary = resultText(event.input);
+            const options: QuestionOption[] = [
+              { label: "允许一次", description: "仅允许当前这次工具调用" },
+            ];
+            if (decision.allowForRun) {
+              options.push({ label: "允许本次任务", description: "本次回复中不再询问同类操作" });
+            }
+            options.push({ label: "拒绝", description: "阻止本次调用并让 Agent 调整方案" });
             const answer = await this.requestUser(
               event.toolCallId,
-              outsideWorkspace
-                ? `${event.toolName} 将访问所选工作目录之外的路径，是否允许本次访问？\n${summary}`
-                : `${event.toolName} 将执行可能修改系统或工作区的操作，是否允许？\n${summary}`,
-              [
-                { label: "允许一次", description: "仅允许当前这次工具调用" },
-                { label: "拒绝", description: "阻止本次调用并让 Agent 调整方案" },
-              ],
+              `${decision.reason}\n\n${summary}`,
+              options,
             );
+            if (answer === "允许本次任务" && decision.allowForRun) {
+              this.runPermissionGrants.add(decision.allowForRun);
+              return undefined;
+            }
             return answer === "允许一次" ? undefined : { block: true, reason: "用户拒绝了本次工具调用" };
           });
         },
@@ -538,13 +780,14 @@ export class AgentService {
       modelRuntime: runtime.modelRuntime,
       resourceLoader,
       customTools,
-      sessionManager: SessionManager.inMemory(cwd),
+      sessionManager: await this.sessionManager(cwd, conversationId),
     });
 
     this.applyToolPolicy(session);
     this.unsubscribe = session.subscribe((event) => this.handleSessionEvent(event));
     this.session = session;
     this.sessionKey = key;
+    this.sessionDisplayContextWindow = runtime.displayContextWindow;
     return session;
   }
 
@@ -584,7 +827,15 @@ export class AgentService {
           extensionFactories: [(pi) => {
             pi.on("tool_call", (event) => {
               const input = event.input as Record<string, unknown>;
-              if (typeof input.path === "string" && !isInsideWorkspace(cwd, input.path)) {
+              const decision = decideToolPermission({
+                toolName: event.toolName,
+                input,
+                cwd,
+                mode: "balanced",
+                sandboxAvailable: false,
+                runGrants: new Set(),
+              });
+              if (decision.kind === "outside-workspace") {
                 return { block: true, reason: "子 Agent 不允许访问工作目录之外的路径" };
               }
               return undefined;
@@ -637,6 +888,7 @@ export class AgentService {
   }
 
   private applyToolPolicy(session: AgentSession): void {
+    this.sandboxedBashActive = session.getToolDefinition("bash")?.label === "bash (workspace sandbox)";
     const activeTools = new Set(session.getActiveToolNames());
     for (const name of ["read", "grep", "find", "ls", "bash", "edit", "write", "ask_user"]) {
       if (session.getToolDefinition(name)) activeTools.add(name);
@@ -696,12 +948,28 @@ export class AgentService {
       allowModelNetwork: false,
     });
     const compatible = compatibleProviderDefinitions[config.provider];
+    const protocolMetadata = buildProtocolModelMetadataIndex(modelRuntime.getProviders().flatMap((provider) => (
+      provider.getModels().map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        reasoning: entry.reasoning,
+        protocol: entry.api,
+        contextWindow: entry.contextWindow,
+        maxOutputTokens: entry.maxTokens,
+        pricing: { ...entry.cost },
+        metadataSourceUrl: officialMetadataSources[provider.id],
+      }))
+    )));
+    let matchedMetadata: ProtocolModelMetadata | undefined;
 
     if (compatible) {
       const endpoint = new URL(config.baseUrl);
       const isLocal = endpoint.hostname === "localhost" || endpoint.hostname === "127.0.0.1" || endpoint.hostname === "[::1]";
       const apiKey = config.apiKey || (isLocal ? "local" : undefined);
       if (apiKey) await modelRuntime.setRuntimeApiKey(config.provider, apiKey, { allowNetwork: false });
+      const discoveredModel = this.readDiscoveredModels()[config.provider]?.models.find((model) => model.id === config.modelId);
+      matchedMetadata = matchProtocolModelMetadata(protocolMetadata, compatible.api, config.modelId);
+      const displayContextWindow = discoveredModel?.contextWindow || matchedMetadata?.contextWindow || 0;
       modelRuntime.registerProvider(config.provider, {
         name: compatible.name,
         baseUrl: config.baseUrl,
@@ -713,9 +981,12 @@ export class AgentService {
           api: compatible.api,
           reasoning: true,
           input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 128_000,
-          maxTokens: 32_000,
+          cost: matchedMetadata?.pricing ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          // The SDK requires a positive runtime limit. Keep the conservative
+          // fallback internal; the UI only exposes displayContextWindow when
+          // the endpoint or authoritative metadata supplied one.
+          contextWindow: displayContextWindow || 128_000,
+          maxTokens: matchedMetadata?.maxOutputTokens || 32_000,
           compat: compatible.api === "openai-completions" ? {
             supportsDeveloperRole: false,
             supportsReasoningEffort: config.thinkingLevel !== "off",
@@ -743,7 +1014,24 @@ export class AgentService {
         : "请保存 API Key，或在启动 Pi Desktop 前配置该 provider 所需的环境凭据。";
       throw new Error(`尚未配置 ${provider?.name ?? config.provider} 的凭据。${loginHint}`);
     }
-    return { modelRuntime, model, thinkingLevel: config.thinkingLevel };
+    const metadataOverride = this.modelMetadata.get(config.provider, config.modelId);
+    const effectiveModel: Model<Api> = metadataOverride ? {
+      ...model,
+      name: metadataOverride.name,
+      contextWindow: metadataOverride.contextWindow || model.contextWindow,
+      maxTokens: metadataOverride.maxOutputTokens || model.maxTokens,
+      cost: { ...metadataOverride.pricing },
+    } : model;
+    return {
+      modelRuntime,
+      model: effectiveModel,
+      thinkingLevel: config.thinkingLevel,
+      displayContextWindow: metadataOverride?.contextWindow || (compatible
+        ? this.readDiscoveredModels()[config.provider]?.models.find((entry) => entry.id === config.modelId)?.contextWindow
+          || matchedMetadata?.contextWindow
+          || 0
+        : model.contextWindow),
+    };
   }
 
   private handleSessionEvent(event: AgentSessionEvent): void {
@@ -757,6 +1045,11 @@ export class AgentService {
       } else if (event.assistantMessageEvent.type === "thinking_delta") {
         this.emit({ type: "thinking.delta", runId, text: event.assistantMessageEvent.delta });
       }
+    } else if (event.type === "message_end" && event.message.role === "assistant") {
+      this.emit({ type: "response.usage", runId, usage: responseUsage(event.message) });
+      this.emitContextUsage(runId);
+    } else if (event.type === "compaction_end") {
+      this.emitContextUsage(runId);
     } else if (event.type === "tool_execution_start") {
       this.emit({ type: "tool.started", runId, callId: event.toolCallId, name: event.toolName, args: event.args });
     } else if (event.type === "tool_execution_update") {
@@ -769,6 +1062,21 @@ export class AgentService {
         name: event.toolName,
         output: resultText(event.result),
         isError: event.isError,
+      });
+    }
+  }
+
+  private emitContextUsage(runId: string, session: AgentSession | undefined = this.session): void {
+    const usage = session?.getContextUsage();
+    if (usage && this.sessionDisplayContextWindow > 0) {
+      this.emit({
+        type: "context.updated",
+        runId,
+        usage: {
+          tokens: usage.tokens,
+          contextWindow: this.sessionDisplayContextWindow,
+          percent: usage.tokens === null ? null : (usage.tokens / this.sessionDisplayContextWindow) * 100,
+        },
       });
     }
   }
@@ -797,7 +1105,7 @@ export class AgentService {
       if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new Error("所选工作目录不存在。");
       return resolved;
     }
-    fs.mkdirSync(this.fallbackCwd, { recursive: true });
+    fs.mkdirSync(this.fallbackCwd, { recursive: true, mode: 0o700 });
     return this.fallbackCwd;
   }
 
@@ -807,6 +1115,8 @@ export class AgentService {
     this.session?.dispose();
     this.session = undefined;
     this.sessionKey = undefined;
+    this.sessionDisplayContextWindow = 0;
+    this.sandboxedBashActive = false;
     this.activeRunId = undefined;
     this.running = false;
     for (const pending of this.pendingQuestions.values()) pending.resolve("会话已结束");

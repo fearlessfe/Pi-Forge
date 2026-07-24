@@ -3,6 +3,8 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
+  CircleDollarSign,
+  Database,
   ExternalLink,
   KeyRound,
   LogIn,
@@ -11,6 +13,8 @@ import {
   Palette,
   Package,
   RefreshCw,
+  RotateCcw,
+  Search,
   Settings2,
   Sparkles,
 } from "lucide-react";
@@ -18,6 +22,9 @@ import { useEffect, useMemo, useState } from "react";
 import type {
   ModelSettings,
   ModelCatalogEntry,
+  ModelMetadataOverride,
+  PermissionRuntime,
+  PermissionSettings,
   ProviderCatalogEntry,
   ProviderId,
   SaveModelSettings,
@@ -30,6 +37,7 @@ import { PluginsPanel } from "./PluginsPanel";
 type SettingsViewProps = {
   activeSection: SettingsSection;
   settings: ModelSettings;
+  permissionRuntime: PermissionRuntime;
   providerCatalog: ProviderCatalogEntry[];
   authFlow: AuthFlowState | null;
   theme: Theme;
@@ -38,7 +46,11 @@ type SettingsViewProps = {
   onSectionChange: (section: SettingsSection) => void;
   onThemeChange: (theme: Theme) => void;
   onSave: (settings: SaveModelSettings) => Promise<void>;
+  onSavePermissions: (settings: PermissionSettings) => Promise<void>;
   onDiscoverModels: (settings: SaveModelSettings) => Promise<ModelCatalogEntry[]>;
+  onRefreshMetadata: () => Promise<ProviderCatalogEntry[]>;
+  onSaveMetadata: (providerId: ProviderId, modelId: string, metadata: ModelMetadataOverride) => Promise<ProviderCatalogEntry[]>;
+  onResetMetadata: (providerId: ProviderId, modelId: string) => Promise<ProviderCatalogEntry[]>;
   onTest: (settings: SaveModelSettings) => Promise<void>;
   onLogin: (providerId: ProviderId) => Promise<void>;
   onAnswerAuthPrompt: (requestId: string, value: string) => Promise<void>;
@@ -51,7 +63,7 @@ const sections: Array<{
   group: string;
   items: Array<{ id: SettingsSection; label: string; icon: typeof Sparkles }>;
 }> = [
-  { group: "AI", items: [{ id: "models", label: "大模型", icon: Sparkles }, { id: "permissions", label: "权限", icon: LockKeyhole }] },
+  { group: "AI", items: [{ id: "models", label: "大模型", icon: Sparkles }, { id: "model-metadata", label: "模型元信息", icon: Database }, { id: "permissions", label: "权限", icon: LockKeyhole }] },
   { group: "扩展", items: [{ id: "plugins", label: "插件", icon: Package }] },
   { group: "应用", items: [{ id: "general", label: "通用", icon: Settings2 }, { id: "appearance", label: "外观", icon: Palette }] },
 ];
@@ -142,7 +154,7 @@ function ModelSelect({
 }) {
   const options = models.some((model) => model.id === value) || !value
     ? models
-    : [{ id: value, name: value, reasoning: false }, ...models];
+    : [{ id: value, name: value, reasoning: false, contextWindow: 0 }, ...models];
   const selectedModel = options.find((model) => model.id === value);
 
   return (
@@ -428,15 +440,269 @@ function ModelsPanel({
   );
 }
 
-function PermissionsPanel() {
+type MetadataForm = {
+  name: string;
+  contextWindow: string;
+  maxOutputTokens: string;
+  input: string;
+  output: string;
+  cacheRead: string;
+  cacheWrite: string;
+};
+
+function metadataForm(model: ModelCatalogEntry): MetadataForm {
+  return {
+    name: model.name,
+    contextWindow: String(model.contextWindow || 0),
+    maxOutputTokens: String(model.maxOutputTokens || 0),
+    input: String(model.pricing?.input || 0),
+    output: String(model.pricing?.output || 0),
+    cacheRead: String(model.pricing?.cacheRead || 0),
+    cacheWrite: String(model.pricing?.cacheWrite || 0),
+  };
+}
+
+function metadataNumber(value: string, label: string): number {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) throw new Error(`${label}必须是大于或等于 0 的数字。`);
+  return number;
+}
+
+function compactTokens(value: number): string {
+  if (!value) return "未知";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })}M`;
+  if (value >= 1_000) return `${(value / 1_000).toLocaleString(undefined, { maximumFractionDigits: 1 })}K`;
+  return value.toLocaleString();
+}
+
+function compactPrice(value: number | undefined): string {
+  if (!value) return "—";
+  return `$${value.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+}
+
+function ModelMetadataPanel({
+  settings,
+  providerCatalog,
+  onRefreshMetadata,
+  onSaveMetadata,
+  onResetMetadata,
+}: Pick<SettingsViewProps, "settings" | "providerCatalog" | "onRefreshMetadata" | "onSaveMetadata" | "onResetMetadata">) {
+  const allModels = useMemo(() => providerCatalog.flatMap((provider) => provider.models.map((model) => ({ provider, model }))), [providerCatalog]);
+  const initialKey = `${settings.provider}\u0000${settings.modelId}`;
+  const [selectedKey, setSelectedKey] = useState(initialKey);
+  const [query, setQuery] = useState("");
+  const [providerFilter, setProviderFilter] = useState("all");
+  const [form, setForm] = useState<MetadataForm | null>(null);
+  const [busy, setBusy] = useState<"refresh" | "save" | "reset" | null>(null);
+  const [message, setMessage] = useState<string>();
+  const [error, setError] = useState<string>();
+  const selected = allModels.find(({ provider, model }) => `${provider.id}\u0000${model.id}` === selectedKey) ?? allModels[0];
+  const visibleModels = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase();
+    return allModels.filter(({ provider, model }) => (
+      (providerFilter === "all" || provider.id === providerFilter)
+      && (!normalized || `${provider.name} ${provider.id} ${model.name} ${model.id}`.toLocaleLowerCase().includes(normalized))
+    ));
+  }, [allModels, providerFilter, query]);
+
+  useEffect(() => {
+    if (selected) setForm(metadataForm(selected.model));
+  }, [selected?.provider.id, selected?.model.id, selected?.model.name, selected?.model.contextWindow, selected?.model.maxOutputTokens, selected?.model.pricing]);
+
+  function updateForm(key: keyof MetadataForm, value: string) {
+    setForm((current) => current ? { ...current, [key]: value } : current);
+  }
+
+  async function refresh() {
+    setBusy("refresh");
+    setError(undefined);
+    setMessage(undefined);
+    try {
+      const catalog = await onRefreshMetadata();
+      const modelCount = catalog.reduce((sum, provider) => sum + provider.models.length, 0);
+      setMessage(`已同步 ${catalog.length} 个提供商、${modelCount} 个模型；用户修改保持不变。`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function save(event: React.FormEvent) {
+    event.preventDefault();
+    if (!selected || !form) return;
+    setBusy("save");
+    setError(undefined);
+    setMessage(undefined);
+    try {
+      await onSaveMetadata(selected.provider.id, selected.model.id, {
+        name: form.name.trim(),
+        contextWindow: metadataNumber(form.contextWindow, "上下文窗口"),
+        maxOutputTokens: metadataNumber(form.maxOutputTokens, "最大输出"),
+        pricing: {
+          input: metadataNumber(form.input, "输入价格"),
+          output: metadataNumber(form.output, "输出价格"),
+          cacheRead: metadataNumber(form.cacheRead, "缓存读取价格"),
+          cacheWrite: metadataNumber(form.cacheWrite, "缓存写入价格"),
+        },
+      });
+      setMessage("用户覆盖已保存，后续用量计费会读取这组价格。");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function reset() {
+    if (!selected) return;
+    setBusy("reset");
+    setError(undefined);
+    setMessage(undefined);
+    try {
+      await onResetMetadata(selected.provider.id, selected.model.id);
+      setMessage("已恢复官方目录中的元信息。");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="settings-panel metadata-settings-panel">
+      <header className="settings-page-header metadata-page-header">
+        <div><h2>模型元信息</h2><p>查看上下文与价格，并维护供用量计费读取的模型数据。</p></div>
+        <button className="secondary-button metadata-refresh-button" type="button" disabled={Boolean(busy)} onClick={() => void refresh()}>
+          <RefreshCw className={busy === "refresh" ? "is-spinning" : ""} size={14} />{busy === "refresh" ? "正在同步" : "同步官方目录"}
+        </button>
+      </header>
+
+      <section className="metadata-summary" aria-label="元信息摘要">
+        <span><Database size={15} /><strong>{providerCatalog.length}</strong><small>提供商</small></span>
+        <span><Sparkles size={15} /><strong>{allModels.length}</strong><small>模型</small></span>
+        <span><CircleDollarSign size={15} /><strong>{allModels.filter(({ model }) => (model.pricing?.input || model.pricing?.output)).length}</strong><small>含价格</small></span>
+        <p>价格单位统一为 USD / 1M tokens；官方目录同步不会覆盖用户修改。</p>
+      </section>
+
+      <div className="metadata-toolbar">
+        <label className="metadata-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索模型或提供商" aria-label="搜索模型元信息" /></label>
+        <select className="native-select metadata-provider-filter" value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)} aria-label="筛选模型提供商">
+          <option value="all">全部提供商</option>
+          {providerCatalog.map((provider) => <option value={provider.id} key={provider.id}>{provider.name}</option>)}
+        </select>
+      </div>
+
+      <div className="metadata-workspace">
+        <div className="metadata-table-wrap">
+          <table className="metadata-table">
+            <thead><tr><th>模型</th><th>上下文</th><th>输入</th><th>输出</th></tr></thead>
+            <tbody>
+              {visibleModels.map(({ provider, model }) => {
+                const key = `${provider.id}\u0000${model.id}`;
+                return (
+                  <tr className={key === selectedKey ? "is-selected" : ""} key={key} onClick={() => setSelectedKey(key)}>
+                    <td><button type="button" onClick={() => setSelectedKey(key)}><strong>{model.name}</strong><small>{provider.name} · {model.id}</small></button>{model.isMetadataOverridden && <i>已编辑</i>}</td>
+                    <td>{compactTokens(model.contextWindow)}</td>
+                    <td>{compactPrice(model.pricing?.input)}</td>
+                    <td>{compactPrice(model.pricing?.output)}</td>
+                  </tr>
+                );
+              })}
+              {visibleModels.length === 0 && <tr><td className="metadata-empty" colSpan={4}>没有匹配的模型</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        {selected && form && (
+          <form className="metadata-editor" onSubmit={(event) => void save(event)}>
+            <header>
+              <div><span>{selected.provider.name}</span><strong>{selected.model.id}</strong></div>
+              <span className={`metadata-source ${selected.model.isMetadataOverridden ? "is-custom" : ""}`}>{selected.model.isMetadataOverridden ? "用户覆盖" : selected.model.metadataSource === "endpoint" ? "端点数据" : "官方目录"}</span>
+            </header>
+            <label><span>显示名称</span><input value={form.name} onChange={(event) => updateForm("name", event.target.value)} required /></label>
+            <div className="metadata-editor-grid">
+              <label><span>上下文窗口</span><input type="number" min="0" step="1" value={form.contextWindow} onChange={(event) => updateForm("contextWindow", event.target.value)} /><small>tokens</small></label>
+              <label><span>最大输出</span><input type="number" min="0" step="1" value={form.maxOutputTokens} onChange={(event) => updateForm("maxOutputTokens", event.target.value)} /><small>tokens</small></label>
+              <label><span>输入价格</span><input type="number" min="0" step="any" value={form.input} onChange={(event) => updateForm("input", event.target.value)} /><small>$/1M</small></label>
+              <label><span>输出价格</span><input type="number" min="0" step="any" value={form.output} onChange={(event) => updateForm("output", event.target.value)} /><small>$/1M</small></label>
+              <label><span>缓存读取</span><input type="number" min="0" step="any" value={form.cacheRead} onChange={(event) => updateForm("cacheRead", event.target.value)} /><small>$/1M</small></label>
+              <label><span>缓存写入</span><input type="number" min="0" step="any" value={form.cacheWrite} onChange={(event) => updateForm("cacheWrite", event.target.value)} /><small>$/1M</small></label>
+            </div>
+            <p>{selected.model.metadataSourceUrl ? <>数据参考：{new URL(selected.model.metadataSourceUrl).hostname}</> : "兼容端点通常不提供价格；可在这里手动补充。"}</p>
+            <footer>
+              {selected.model.isMetadataOverridden && <button className="secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void reset()}><RotateCcw size={13} />恢复官方值</button>}
+              <button className="primary-button" type="submit" disabled={Boolean(busy)}>{busy === "save" ? "保存中…" : "保存修改"}</button>
+            </footer>
+          </form>
+        )}
+      </div>
+      {message && <div className="metadata-message" role="status">{message}</div>}
+      {error && <div className="settings-error" role="alert">{error.replace(/^Error invoking remote method '[^']+': Error: /, "")}</div>}
+    </div>
+  );
+}
+
+function PermissionsPanel({
+  runtime,
+  agentRunning,
+  onSave,
+}: {
+  runtime: PermissionRuntime;
+  agentRunning: boolean;
+  onSave: (settings: PermissionSettings) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  async function selectMode(mode: PermissionSettings["mode"]) {
+    if (mode === runtime.mode || busy || agentRunning) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await onSave({ mode });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const balanced = runtime.mode === "balanced";
+  const sandboxAvailable = runtime.sandbox === "available";
   return (
     <div className="settings-panel compact-settings-panel">
-      <header className="settings-page-header"><div><h2>权限</h2><p>当前 Agent 的敏感工具策略。</p></div></header>
-      <section className="simple-settings-card">
-        <div className="settings-toggle-row"><span><strong>Shell 命令</strong><small>执行 bash 前展示参数并等待本次授权</small></span><span className="policy-badge">始终询问</span></div>
-        <div className="settings-toggle-row"><span><strong>文件修改</strong><small>edit 与 write 每次执行前询问</small></span><span className="policy-badge">始终询问</span></div>
-        <div className="settings-toggle-row"><span><strong>只读工具</strong><small>read、grep、find、ls 可在所选工作目录运行</small></span><span className="policy-badge policy-badge--allowed">自动允许</span></div>
+      <header className="settings-page-header">
+        <div><h2>权限</h2><p>减少重复确认，同时保留清晰的系统边界。</p></div>
+        <span className={`sandbox-status ${sandboxAvailable ? "is-ready" : ""}`}>
+          <i />{sandboxAvailable ? "命令沙箱可用" : "命令沙箱不可用"}
+        </span>
+      </header>
+      <section className="permission-mode-grid" aria-label="权限模式">
+        <button className={balanced ? "is-selected" : ""} type="button" disabled={busy || agentRunning} onClick={() => void selectMode("balanced")}>
+          <span><strong>平衡</strong><small>推荐</small></span>
+          <p>工作区内读写自动执行；危险命令、越界访问仍需确认。</p>
+          {balanced && <Check size={14} />}
+        </button>
+        <button className={!balanced ? "is-selected" : ""} type="button" disabled={busy || agentRunning} onClick={() => void selectMode("strict")}>
+          <span><strong>严格</strong></span>
+          <p>Shell 和文件修改逐次确认，适合陌生或敏感项目。</p>
+          {!balanced && <Check size={14} />}
+        </button>
       </section>
+      <section className="simple-settings-card">
+        <div className="settings-toggle-row"><span><strong>Shell 命令</strong><small>{balanced && sandboxAvailable ? "限制写入工作区与临时目录，并拦截敏感凭据和未知网络" : "执行前展示完整命令并等待确认"}</small></span><span className={`policy-badge ${balanced && sandboxAvailable ? "policy-badge--allowed" : ""}`}>{balanced && sandboxAvailable ? "沙箱内允许" : "执行前询问"}</span></div>
+        <div className="settings-toggle-row"><span><strong>文件修改</strong><small>{balanced ? "edit 与 write 仅在规范化后的工作区路径内自动执行" : "edit 与 write 每次执行前询问"}</small></span><span className={`policy-badge ${balanced ? "policy-badge--allowed" : ""}`}>{balanced ? "工作区内允许" : "执行前询问"}</span></div>
+        <div className="settings-toggle-row"><span><strong>只读工具</strong><small>read、grep、find、ls 可在所选工作目录运行</small></span><span className="policy-badge policy-badge--allowed">自动允许</span></div>
+        <div className="settings-toggle-row"><span><strong>危险与越界操作</strong><small>递归删除、丢弃 Git 变更、提权及工作区外访问</small></span><span className="policy-badge">始终询问</span></div>
+      </section>
+      <p className="permission-footnote">
+        {sandboxAvailable
+          ? `Shell 由 Anthropic Sandbox Runtime 隔离（${runtime.platform === "darwin" ? "macOS Seatbelt" : "Linux Bubblewrap"}）。`
+          : "当前平台或系统依赖不支持 OS 级沙箱；平衡模式下 Shell 仍会询问，并可仅对本次任务授权。"}
+      </p>
+      {agentRunning && <p className="permission-inline-note">任务运行期间不能切换权限模式。</p>}
+      {error && <div className="settings-error" role="alert">{error}</div>}
     </div>
   );
 }
@@ -475,8 +741,9 @@ export function SettingsView(props: SettingsViewProps) {
       <SettingsNavigation activeSection={props.activeSection} onBack={props.onBack} onSectionChange={props.onSectionChange} />
       <main className="settings-content">
         {props.activeSection === "models" && <ModelsPanel settings={props.settings} providerCatalog={props.providerCatalog} authFlow={props.authFlow} onSave={props.onSave} onDiscoverModels={props.onDiscoverModels} onTest={props.onTest} onLogin={props.onLogin} onAnswerAuthPrompt={props.onAnswerAuthPrompt} onCancelAuth={props.onCancelAuth} onLogout={props.onLogout} onDismissAuth={props.onDismissAuth} />}
+        {props.activeSection === "model-metadata" && <ModelMetadataPanel settings={props.settings} providerCatalog={props.providerCatalog} onRefreshMetadata={props.onRefreshMetadata} onSaveMetadata={props.onSaveMetadata} onResetMetadata={props.onResetMetadata} />}
         {props.activeSection === "plugins" && <PluginsPanel agentRunning={props.agentRunning} />}
-        {props.activeSection === "permissions" && <PermissionsPanel />}
+        {props.activeSection === "permissions" && <PermissionsPanel runtime={props.permissionRuntime} agentRunning={props.agentRunning} onSave={props.onSavePermissions} />}
         {props.activeSection === "general" && <GeneralPanel />}
         {props.activeSection === "appearance" && <AppearancePanel theme={props.theme} onThemeChange={props.onThemeChange} />}
       </main>

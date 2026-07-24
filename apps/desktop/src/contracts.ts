@@ -9,6 +9,17 @@ export type ProviderId = string;
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export type PermissionMode = "balanced" | "strict";
+
+export type PermissionSettings = {
+  mode: PermissionMode;
+};
+
+export type PermissionRuntime = PermissionSettings & {
+  sandbox: "available" | "unavailable";
+  platform: string;
+};
+
 export type ModelSettings = {
   provider: ProviderId;
   baseUrl: string;
@@ -27,6 +38,31 @@ export type ModelCatalogEntry = {
   id: string;
   name: string;
   reasoning: boolean;
+  /** Wire protocol used to call this model, e.g. openai-responses. */
+  protocol?: string;
+  contextWindow: number;
+  /** Maximum generated tokens per response, when published by the provider. */
+  maxOutputTokens?: number;
+  /** USD per one million tokens. */
+  pricing?: ModelPricing;
+  metadataSource?: "official" | "endpoint";
+  metadataSourceUrl?: string;
+  metadataUpdatedAt?: string;
+  isMetadataOverridden?: boolean;
+};
+
+export type ModelPricing = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+};
+
+export type ModelMetadataOverride = {
+  name: string;
+  contextWindow: number;
+  maxOutputTokens: number;
+  pricing: ModelPricing;
 };
 
 export type ProviderCatalogEntry = {
@@ -63,6 +99,32 @@ export type QuestionOption = {
   label: string;
   description?: string;
 };
+
+export type ContextUsageInfo = {
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+};
+
+export type ResponseUsage = {
+  provider: string;
+  model: string;
+  responseModel?: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  /** Number of internal model requests made while producing this answer. */
+  requestCount: number;
+  /** Aggregate cost of all internal model requests for this answer. */
+  cost: number;
+};
+
+export type ConversationActivity =
+  | { id: string; type: "thinking"; text: string }
+  | { id: string; type: "tool"; name: string; args: unknown; output: string; status: "running" | "success" | "error" }
+  | { id: string; type: "question"; question: string; options: QuestionOption[]; answer?: string; status: "pending" | "answered" };
 
 export type PiAgentEventType =
   | "agent_start"
@@ -103,6 +165,8 @@ export type AgentEvent =
   | { type: "tool.updated"; runId: string; callId: string; name: string; output: string }
   | { type: "tool.completed"; runId: string; callId: string; name: string; output: string; isError: boolean }
   | { type: "question.requested"; runId: string; callId: string; question: string; options: QuestionOption[] }
+  | { type: "response.usage"; runId: string; usage: ResponseUsage }
+  | { type: "context.updated"; runId: string; usage: ContextUsageInfo }
   | { type: "agent.event"; runId: string; event: AgentTraceEvent }
   | { type: "run.completed"; runId: string }
   | { type: "run.stopped"; runId: string }
@@ -111,6 +175,29 @@ export type AgentEvent =
 export type SendPromptInput = {
   prompt: string;
   cwd?: string;
+  conversationId?: string;
+};
+
+export type ConversationHistoryItem = {
+  id: string;
+  title: string;
+  cwd: string;
+  createdAt: string;
+  updatedAt: string;
+  project?: { id: string; name: string; path: string };
+};
+
+export type ConversationHistoryTurn = {
+  id: string;
+  question: string;
+  answer: string;
+  activities: ConversationActivity[];
+  usage?: ResponseUsage;
+};
+
+export type ConversationHistoryDetail = ConversationHistoryItem & {
+  turns: ConversationHistoryTurn[];
+  contextUsage?: ContextUsageInfo;
 };
 
 export type PluginResourceType = "extensions" | "skills" | "prompts" | "themes";
@@ -203,9 +290,16 @@ export type PiDesktopApi = {
   settings: {
     get(): Promise<ModelSettings>;
     catalog(): Promise<ProviderCatalogEntry[]>;
+    refreshMetadata(): Promise<ProviderCatalogEntry[]>;
+    saveMetadata(providerId: ProviderId, modelId: string, metadata: ModelMetadataOverride): Promise<ProviderCatalogEntry[]>;
+    resetMetadata(providerId: ProviderId, modelId: string): Promise<ProviderCatalogEntry[]>;
     discoverModels(settings: SaveModelSettings): Promise<ModelCatalogEntry[]>;
     save(settings: SaveModelSettings): Promise<ModelSettings>;
     test(settings: SaveModelSettings): Promise<{ ok: true; response: string }>;
+  };
+  permissions: {
+    get(): Promise<PermissionRuntime>;
+    save(settings: PermissionSettings): Promise<PermissionRuntime>;
   };
   auth: {
     login(providerId: ProviderId): Promise<{ loginId: string }>;
@@ -231,6 +325,8 @@ export type PiDesktopApi = {
   };
   agent: {
     send(input: SendPromptInput): Promise<{ runId: string }>;
+    listConversations(): Promise<ConversationHistoryItem[]>;
+    loadConversation(conversationId: string): Promise<ConversationHistoryDetail>;
     abort(): Promise<void>;
     reset(): Promise<void>;
     answerQuestion(callId: string, answer: string): Promise<void>;

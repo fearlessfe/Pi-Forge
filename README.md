@@ -33,7 +33,7 @@ pnpm build
 
 Pi SDK 当前内置 38 个 Provider，设置页会直接读取 SDK 目录，不在产品代码中维护一份容易过期的硬编码副本。API Key、环境凭据以及 SDK 内置的 OAuth/订阅登录均可使用；浏览器授权、设备码、手动回调、取消和退出登录统一由 Electron 主进程编排。API Key、access token 与 refresh token 都通过操作系统 `safeStorage` 加密，Renderer 只能读取认证类型和状态。
 
-会话中会实时展示 thinking、文本增量、工具参数和输出。每一个 Pi `AgentSessionEvent` 也会按顺序捕获到可展开的事件流中；编译期完整性检查会在 SDK 新增或改名事件时直接失败，避免静默漏事件。`bash`、`edit`、`write` 每次执行前都会等待用户授权。模型还可以调用 `ask_user` 挂起并询问用户，或调用 `spawn_subagent` 创建只读的独立 Pi 子会话并把结果返回给主 Agent。停止按钮会中止当前 Pi Session 请求与等待中的问题。
+会话把 thinking 与连续工具调用收敛为一条可展开的过程摘要；失败、授权请求和最终回答保持突出。输入框下方会显示当前上下文占用与模型上限，每条回答会记录实际 Provider、响应模型、本轮输入/输出/缓存 Token，以及根据 Pi 模型目录单价计算的费用估值；这些信息会随 Session 一起恢复。底层仍会完整捕获每一个 Pi `AgentSessionEvent`，编译期完整性检查会在 SDK 新增或改名事件时直接失败，避免静默漏事件。默认“平衡”权限模式会自动允许规范化工作区路径内的 `edit` 与 `write`；`bash` 在 macOS/Linux 上通过 Anthropic Sandbox Runtime 限制文件系统和网络访问，递归删除、丢弃 Git 变更、提权以及工作区外访问仍会等待用户授权。模型还可以调用 `ask_user` 挂起并询问用户，或调用 `spawn_subagent` 创建只读的独立 Pi 子会话并把结果返回给主 Agent。停止按钮会中止当前 Pi Session 请求与等待中的问题。
 
 测试套件使用本地 OpenAI-compatible 假模型驱动真实 Pi Session，覆盖连接验证、thinking、工具调用、询问用户、子 Agent、多轮上下文、停止任务、密钥隔离和事件序列，不需要真实 API Key。
 
@@ -214,7 +214,8 @@ Coding Agent 可以读取文件、执行命令并修改代码，因此安全边�
 - Electron 启用 `contextIsolation`，关闭 Renderer 的 Node.js 集成。
 - IPC 使用显式白名单并验证所有参数，不暴露通用命令执行接口。
 - Agent 默认限制在用户选定的工作区内访问文件。
-- 命令执行、工作区外访问及其他敏感能力采用可配置的审批策略。
+- 命令执行采用 OS 级沙箱（macOS Seatbelt / Linux Bubblewrap）；沙箱不可用时安全降级为执行前确认。
+- 工作区外访问、危险命令及其他敏感能力采用可配置的审批策略。
 - API Key 只在受信任的后端进程中使用，日志和错误信息必须脱敏。
 - 所有长时间运行的任务都需要支持取消、超时和异常恢复。
 - Diff 只用于辅助审核；不能把“显示了 Diff”等同于用户已授权写入。

@@ -1,13 +1,20 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentEvent, AuthEvent, PiDesktopApi, PluginProgressEvent, SaveModelSettings, SendPromptInput } from "../src/contracts.js";
+import type { AgentEvent, AuthEvent, ModelMetadataOverride, PiDesktopApi, PluginProgressEvent, SaveModelSettings, SendPromptInput } from "../src/contracts.js";
 
 const api: PiDesktopApi = {
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
     catalog: () => ipcRenderer.invoke("settings:catalog"),
+    refreshMetadata: () => ipcRenderer.invoke("settings:refresh-metadata"),
+    saveMetadata: (providerId: string, modelId: string, metadata: ModelMetadataOverride) => ipcRenderer.invoke("settings:save-metadata", providerId, modelId, metadata),
+    resetMetadata: (providerId: string, modelId: string) => ipcRenderer.invoke("settings:reset-metadata", providerId, modelId),
     discoverModels: (settings: SaveModelSettings) => ipcRenderer.invoke("settings:discover-models", settings),
     save: (settings: SaveModelSettings) => ipcRenderer.invoke("settings:save", settings),
     test: (settings: SaveModelSettings) => ipcRenderer.invoke("settings:test", settings),
+  },
+  permissions: {
+    get: () => ipcRenderer.invoke("permissions:get"),
+    save: (settings) => ipcRenderer.invoke("permissions:save", settings),
   },
   auth: {
     login: (providerId) => ipcRenderer.invoke("auth:login", providerId),
@@ -41,6 +48,8 @@ const api: PiDesktopApi = {
   },
   agent: {
     send: (input: SendPromptInput) => ipcRenderer.invoke("agent:send", input),
+    listConversations: () => ipcRenderer.invoke("agent:list-conversations"),
+    loadConversation: (conversationId) => ipcRenderer.invoke("agent:load-conversation", conversationId),
     abort: () => ipcRenderer.invoke("agent:abort"),
     reset: () => ipcRenderer.invoke("agent:reset"),
     answerQuestion: (callId: string, answer: string) => ipcRenderer.invoke("agent:answer-question", callId, answer),

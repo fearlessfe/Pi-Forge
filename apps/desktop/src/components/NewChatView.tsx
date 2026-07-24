@@ -10,16 +10,17 @@ import {
   CircleStop,
   Copy,
   Folder,
+  ListTree,
   MessageCircleQuestion,
   Paperclip,
-  Radio,
   RotateCcw,
   TerminalSquare,
   Users,
   XCircle,
 } from "lucide-react";
 import { useState } from "react";
-import type { ProviderCatalogEntry, ProviderId } from "../contracts";
+import type { ContextUsageInfo, ProviderCatalogEntry, ProviderId, ResponseUsage } from "../contracts";
+import { shouldSubmitOnEnter } from "../keyboard";
 import type { ChatActivity, ChatTurn, Project } from "../types";
 import { BrandMark } from "./BrandMark";
 
@@ -29,6 +30,7 @@ type NewChatViewProps = {
   modelId: string;
   modelProvider: ProviderId;
   modelProviders: ProviderCatalogEntry[];
+  contextUsage?: ContextUsageInfo;
   prompt: string;
   isRunning: boolean;
   onPromptChange: (value: string) => void;
@@ -48,6 +50,51 @@ function formatData(value: unknown): string {
   } catch {
     return String(value ?? "");
   }
+}
+
+function formatTokens(count: number): string {
+  if (count < 1_000) return String(Math.round(count));
+  if (count < 10_000) return `${(count / 1_000).toFixed(1)}k`;
+  if (count < 1_000_000) return `${Math.round(count / 1_000)}k`;
+  return `${(count / 1_000_000).toFixed(1)}M`;
+}
+
+function formatCost(cost: number): string {
+  if (cost === 0) return "$0.000";
+  return `$${cost < 0.001 ? cost.toFixed(6) : cost.toFixed(4)}`;
+}
+
+function ContextIndicator({ usage }: { usage?: ContextUsageInfo }) {
+  if (!usage || usage.contextWindow <= 0) return null;
+  const percent = usage.percent === null ? null : Math.min(100, Math.max(0, usage.percent));
+  const tone = percent !== null && percent >= 90 ? "is-critical" : percent !== null && percent >= 70 ? "is-warning" : "";
+  const title = usage.tokens === null
+    ? `上下文刚完成压缩，将在模型下次响应后更新；上限 ${usage.contextWindow.toLocaleString()} tokens`
+    : `当前上下文 ${usage.tokens.toLocaleString()} / ${usage.contextWindow.toLocaleString()} tokens`;
+  return (
+    <span className={`context-indicator ${tone}`} title={title}>
+      <span>上下文</span>
+      <strong>{usage.tokens === null ? "?" : formatTokens(usage.tokens)} / {formatTokens(usage.contextWindow)}</strong>
+      <progress max={100} value={percent ?? 0} aria-label="上下文使用比例" />
+      <em>{percent === null ? "待更新" : `${percent.toFixed(0)}%`}</em>
+    </span>
+  );
+}
+
+function ResponseUsageLine({ usage }: { usage: ResponseUsage }) {
+  const model = usage.responseModel || usage.model;
+  const cache = usage.cacheReadTokens + usage.cacheWriteTokens;
+  const requestSummary = usage.requestCount > 1
+    ? `本回答共 ${usage.requestCount} 次模型请求；token 显示最终请求，费用为全部请求合计`
+    : "本回答共 1 次模型请求";
+  return (
+    <footer className="response-usage" title={`最终请求：输入 ${usage.inputTokens.toLocaleString()} · 输出 ${usage.outputTokens.toLocaleString()} · 缓存 ${cache.toLocaleString()} · 总计 ${usage.totalTokens.toLocaleString()} tokens · ${requestSummary} · 费用按模型目录单价估算`}>
+      <span>{usage.provider}</span><strong>{model}</strong><i />
+      <span>↑ {formatTokens(usage.inputTokens)}</span><span>↓ {formatTokens(usage.outputTokens)}</span>
+      {cache > 0 && <span>缓存 {formatTokens(cache)}</span>}
+      <span>{formatCost(usage.cost)}</span>
+    </footer>
+  );
 }
 
 function modelValue(provider: ProviderId, modelId: string) {
@@ -163,6 +210,11 @@ function InitialComposer(props: NewChatViewProps) {
           <textarea
             value={props.prompt}
             onChange={(event) => props.onPromptChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (!shouldSubmitOnEnter(event.nativeEvent)) return;
+              event.preventDefault();
+              if (props.prompt.trim() && !props.isRunning) props.onSubmit();
+            }}
             placeholder="描述你想分析、构建或修改的内容…"
             aria-label="对话内容"
           />
@@ -180,7 +232,10 @@ function InitialComposer(props: NewChatViewProps) {
             <small>{props.project ? `Pi 工具将相对 ${props.project.name} 运行` : "未关联工作目录，Pi 使用隔离的空目录"}</small>
           </span>
         </div>
-        <p className="context-hint">命令和文件修改会在执行前询问，thinking 与工具过程会实时展示。</p>
+        <div className="context-hint-row">
+          <p className="context-hint">工作区内操作按权限模式执行；危险或越界行为仍会询问。</p>
+          <ContextIndicator usage={props.contextUsage} />
+        </div>
       </div>
     </section>
   );
@@ -188,10 +243,11 @@ function InitialComposer(props: NewChatViewProps) {
 
 function ThinkingActivity({ activity }: { activity: Extract<ChatActivity, { type: "thinking" }> }) {
   return (
-    <Collapsible.Root className="agent-activity thinking-activity" defaultOpen>
+    <Collapsible.Root className="agent-activity thinking-activity">
       <Collapsible.Trigger className="activity-trigger">
         <BrainCircuit size={14} />
-        <span>Thinking</span>
+        <span>分析过程</span>
+        <small>按需查看</small>
         <ChevronDown size={13} className="activity-chevron" />
       </Collapsible.Trigger>
       <Collapsible.Content className="thinking-content">{activity.text}</Collapsible.Content>
@@ -200,11 +256,22 @@ function ThinkingActivity({ activity }: { activity: Extract<ChatActivity, { type
 }
 
 function ToolActivity({ activity }: { activity: Extract<ChatActivity, { type: "tool" }> }) {
-  const isSubagent = activity.name === "spawn_subagent";
+  const isSubagent = activity.name === "spawn_subagent" || activity.name === "pi_desktop_subagent";
   const Icon = isSubagent ? Users : TerminalSquare;
-  const title = isSubagent ? "子 Agent" : activity.name;
+  const toolLabels: Record<string, string> = {
+    read: "读取文件",
+    grep: "搜索内容",
+    find: "查找文件",
+    ls: "浏览目录",
+    bash: "运行命令",
+    edit: "编辑文件",
+    write: "写入文件",
+    spawn_subagent: "子 Agent",
+    pi_desktop_subagent: "子 Agent",
+  };
+  const title = toolLabels[activity.name] ?? activity.name;
   return (
-    <Collapsible.Root className={`agent-activity tool-activity tool-activity--${activity.status}`} defaultOpen={isSubagent}>
+    <Collapsible.Root className={`agent-activity tool-activity tool-activity--${activity.status}`} defaultOpen={activity.status === "error"}>
       <Collapsible.Trigger className="activity-trigger">
         <Icon size={14} />
         <span>{title}</span>
@@ -215,6 +282,48 @@ function ToolActivity({ activity }: { activity: Extract<ChatActivity, { type: "t
       <Collapsible.Content className="tool-content">
         <div><span>输入</span><pre>{formatData(activity.args)}</pre></div>
         {(activity.output || activity.status !== "running") && <div><span>输出</span><pre>{activity.output || "工具未返回文本"}</pre></div>}
+      </Collapsible.Content>
+    </Collapsible.Root>
+  );
+}
+
+function ProcessActivity({ activities, status }: { activities: ChatActivity[]; status: ChatTurn["status"] }) {
+  const visible = activities.filter((activity): activity is Exclude<ChatActivity, { type: "question" }> => (
+    activity.type !== "question" && !(activity.type === "tool" && activity.name === "ask_user")
+  ));
+  if (visible.length === 0) return status === "running" ? <div className="agent-working"><i />Pi 正在分析任务…</div> : null;
+
+  const tools = visible.filter((activity): activity is Extract<ChatActivity, { type: "tool" }> => activity.type === "tool");
+  const hasThinking = visible.some((activity) => activity.type === "thinking");
+  const errors = tools.filter((activity) => activity.status === "error").length;
+  const latest = visible.at(-1);
+  const latestTool = latest?.type === "tool" ? latest : undefined;
+  const running = status === "running";
+  const headline = running
+    ? latestTool?.status === "running"
+      ? `正在${latestTool.name === "bash" ? "运行命令" : latestTool.name === "read" ? "读取文件" : latestTool.name === "edit" || latestTool.name === "write" ? "修改文件" : "处理任务"}…`
+      : "正在分析下一步…"
+    : errors > 0
+      ? `过程完成，${errors} 个步骤失败`
+      : "过程已完成";
+  const details = [tools.length > 0 ? `${tools.length} 个工具调用` : undefined, hasThinking ? "分析过程" : undefined]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <Collapsible.Root className={`agent-process ${errors > 0 ? "has-error" : ""}`}>
+      <Collapsible.Trigger className="process-trigger">
+        <span className="process-icon">{running ? <i className="activity-spinner" /> : errors > 0 ? <XCircle size={14} /> : <CheckCircle2 size={14} />}</span>
+        <span><strong>{headline}</strong><small>{details || "准备回答"}</small></span>
+        <ChevronDown size={14} className="activity-chevron" />
+      </Collapsible.Trigger>
+      <Collapsible.Content className="process-content">
+        <header><ListTree size={13} /><span>详细过程</span></header>
+        <div className="process-activity-list">
+          {visible.map((activity) => activity.type === "thinking"
+            ? <ThinkingActivity key={activity.id} activity={activity} />
+            : <ToolActivity key={activity.id} activity={activity} />)}
+        </div>
       </Collapsible.Content>
     </Collapsible.Root>
   );
@@ -261,53 +370,13 @@ function QuestionActivity({
   );
 }
 
-function eventSubtype(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object") return undefined;
-  const assistantEvent = (payload as { assistantMessageEvent?: unknown }).assistantMessageEvent;
-  if (!assistantEvent || typeof assistantEvent !== "object") return undefined;
-  const type = (assistantEvent as { type?: unknown }).type;
-  return typeof type === "string" ? type : undefined;
-}
-
-function AgentEventTrace({ trace }: Pick<ChatTurn, "trace">) {
-  const counts = trace.reduce<Record<string, number>>((current, event) => {
-    current[event.eventType] = (current[event.eventType] ?? 0) + 1;
-    return current;
-  }, {});
-  return (
-    <Collapsible.Root className="agent-activity event-trace">
-      <Collapsible.Trigger className="activity-trigger">
-        <Radio size={14} />
-        <span>Pi 事件流</span>
-        <small>{trace.length} 个事件 · {Object.keys(counts).length} 类</small>
-        <ChevronDown size={13} className="activity-chevron" />
-      </Collapsible.Trigger>
-      <Collapsible.Content className="event-trace-content">
-        <div className="event-type-summary">
-          {Object.entries(counts).map(([type, count]) => <span key={type}>{type} <b>{count}</b></span>)}
-        </div>
-        <ol>
-          {trace.map((event) => {
-            const subtype = eventSubtype(event.payload);
-            return (
-              <li key={event.sequence}>
-                <header><code>#{event.sequence}</code><strong>{event.eventType}{subtype ? ` · ${subtype}` : ""}</strong><time>{new Date(event.timestamp).toLocaleTimeString()}</time></header>
-                <pre>{formatData(event.payload)}</pre>
-              </li>
-            );
-          })}
-        </ol>
-      </Collapsible.Content>
-    </Collapsible.Root>
-  );
-}
-
 function ConversationTurn({ turn, onRetry, onAnswerQuestion }: {
   turn: ChatTurn;
   onRetry: (turnId: string) => void;
   onAnswerQuestion: NewChatViewProps["onAnswerQuestion"];
 }) {
   const [copied, setCopied] = useState(false);
+  const activities = Array.isArray(turn.activities) ? turn.activities : [];
 
   async function copyQuestion() {
     await navigator.clipboard.writeText(turn.question);
@@ -332,14 +401,12 @@ function ConversationTurn({ turn, onRetry, onAnswerQuestion }: {
       </section>
       <section className="qa-message qa-answer" aria-label="Agent 回答">
         <div className="agent-response">
-          {turn.activities.map((activity) => activity.type === "thinking"
-            ? <ThinkingActivity key={activity.id} activity={activity} />
-            : activity.type === "tool"
-              ? <ToolActivity key={activity.id} activity={activity} />
-              : <QuestionActivity key={`question-${activity.id}`} turnId={turn.id} activity={activity} onAnswer={onAnswerQuestion} />)}
-          {turn.trace.length > 0 && <AgentEventTrace trace={turn.trace} />}
+          {activities.filter((activity) => activity.type === "question").map((activity) => activity.type === "question"
+            ? <QuestionActivity key={`question-${activity.id}`} turnId={turn.id} activity={activity} onAnswer={onAnswerQuestion} />
+            : null)}
+          <ProcessActivity activities={activities} status={turn.status} />
           {turn.answer && <div className="answer-content"><p>{turn.answer}</p></div>}
-          {turn.status === "running" && !turn.answer && turn.activities.length === 0 && <div className="agent-working"><i />Pi 正在思考…</div>}
+          {turn.usage && <ResponseUsageLine usage={turn.usage} />}
           {turn.status === "error" && <div className="agent-error"><XCircle size={14} />{turn.error}</div>}
           {turn.status === "stopped" && <div className="agent-stopped">任务已停止</div>}
         </div>
@@ -361,6 +428,11 @@ function ActiveConversation(props: NewChatViewProps) {
           <textarea
             value={props.prompt}
             onChange={(event) => props.onPromptChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (!shouldSubmitOnEnter(event.nativeEvent)) return;
+              event.preventDefault();
+              if (props.prompt.trim() && !props.isRunning) props.onSubmit();
+            }}
             placeholder={props.isRunning ? "Agent 执行中，可先停止当前任务…" : "继续给 Pi 指令…"}
             aria-label="继续对话"
             disabled={props.isRunning}
@@ -373,7 +445,8 @@ function ActiveConversation(props: NewChatViewProps) {
           </div>
         </form>
         <p className="dock-context">
-          {props.project ? <><Folder size={12} /><code>{props.project.path}</code><span>修改类工具执行前需授权</span></> : <><span>普通对话</span><span>隔离目录 · 不访问本地项目</span></>}
+          <span className="dock-scope">{props.project ? <><Folder size={12} /><code>{props.project.path}</code></> : <>普通对话 · 隔离目录</>}</span>
+          <ContextIndicator usage={props.contextUsage} />
         </p>
       </footer>
     </section>

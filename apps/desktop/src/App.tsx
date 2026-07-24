@@ -3,8 +3,11 @@ import { useEffect, useMemo, useState } from "react";
 import { ConversationSidebar } from "./components/ConversationSidebar";
 import { NewChatView } from "./components/NewChatView";
 import { SettingsView } from "./components/SettingsView";
-import type { AgentEvent, AuthEvent, ModelSettings, ProviderCatalogEntry, SaveModelSettings } from "./contracts";
-import type { AppView, AuthFlowState, ChatTurn, Project, SettingsSection, Theme } from "./types";
+import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, SaveModelSettings } from "./contracts";
+import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
+import { isPrimaryShortcut, shortcutLabel } from "./keyboard";
+import { mergeAnswerUsage } from "./response-usage";
+import type { AppView, AuthFlowState, ChatTurn, Conversation, Project, SettingsSection, Theme } from "./types";
 
 type Notice = {
   title: string;
@@ -22,6 +25,12 @@ const initialModelSettings: ModelSettings = {
   credentials: [],
 };
 
+const initialPermissionRuntime: PermissionRuntime = {
+  mode: "balanced",
+  sandbox: "unavailable",
+  platform: "unknown",
+};
+
 function getInitialTheme(): Theme {
   const saved = window.localStorage.getItem("pi-theme");
   if (saved === "dark" || saved === "light") return saved;
@@ -31,6 +40,25 @@ function getInitialTheme(): Theme {
 function eventError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.replace(/^Error invoking remote method '[^']+': Error: /, "");
+}
+
+function historyTimestamp(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) {
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function historyConversation(item: ConversationHistoryItem): Conversation {
+  return {
+    id: item.id,
+    title: item.title,
+    subtitle: item.project?.name ?? "普通对话",
+    updatedAt: historyTimestamp(item.updatedAt),
+  };
 }
 
 function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[] {
@@ -100,8 +128,13 @@ function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[] {
             status: "pending",
           }],
         };
+      case "response.usage":
+        return { ...current, usage: mergeAnswerUsage(current.usage, event.usage) };
+      case "context.updated":
+        return current;
       case "agent.event":
-        return { ...current, trace: [...current.trace, event.event] };
+        // Raw SDK events are acknowledged here but intentionally stay out of the user-facing UI.
+        return current;
       case "run.completed":
         return current.status === "stopped" ? current : { ...current, status: "completed" };
       case "run.stopped":
@@ -139,10 +172,17 @@ export function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("models");
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
   const [project, setProject] = useState<Project | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [conversationTurns, setConversationTurns] = useState<Record<string, ChatTurn[]>>({});
+  const [conversationContexts, setConversationContexts] = useState<Record<string, ContextUsageInfo | undefined>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [searchRequest, setSearchRequest] = useState(0);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [modelSettings, setModelSettings] = useState<ModelSettings>(initialModelSettings);
+  const [permissionRuntime, setPermissionRuntime] = useState<PermissionRuntime>(initialPermissionRuntime);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
+  const [contextUsage, setContextUsage] = useState<ContextUsageInfo>();
   const [authFlow, setAuthFlow] = useState<AuthFlowState | null>(null);
   const [prompt, setPrompt] = useState("");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
@@ -161,9 +201,24 @@ export function App() {
   }, [notice]);
 
   useEffect(() => {
+    if (!selectedConversationId) return;
+    setConversationTurns((current) => current[selectedConversationId] === turns
+      ? current
+      : { ...current, [selectedConversationId]: turns });
+  }, [selectedConversationId, turns]);
+
+  useEffect(() => {
     void refreshModelSettings();
+    void refreshPermissionRuntime();
     void refreshProviderCatalog("无法读取模型目录");
-    const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => setTurns((current) => applyAgentEvent(current, event)));
+    void refreshConversationHistory();
+    const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => {
+      if (event.type === "context.updated") setContextUsage(event.usage);
+      setTurns((current) => applyAgentEvent(current, event));
+      if (event.type === "run.completed" || event.type === "run.error" || event.type === "run.stopped") {
+        void refreshConversationHistory();
+      }
+    });
     const unsubscribeAuth = window.piDesktop?.auth?.onEvent((event) => {
       setAuthFlow((current) => applyAuthEvent(current, event));
       if (event.type === "auth.completed") {
@@ -186,12 +241,37 @@ export function App() {
     });
   }
 
+  async function refreshPermissionRuntime() {
+    await window.piDesktop?.permissions?.get().then(setPermissionRuntime).catch((error: unknown) => {
+      setNotice({ title: "无法读取权限设置", message: eventError(error), type: "info" });
+    });
+  }
+
   async function refreshProviderCatalog(errorTitle: string) {
     if (!window.piDesktop) return;
     try {
       setProviderCatalog(await window.piDesktop.settings.catalog());
     } catch (error) {
       setNotice({ title: errorTitle, message: eventError(error), type: "info" });
+    }
+  }
+
+  async function refreshConversationHistory() {
+    if (!window.piDesktop || typeof window.piDesktop.agent.listConversations !== "function") return;
+    try {
+      const history = await window.piDesktop.agent.listConversations();
+      setConversations(history.filter((item) => !item.project).map(historyConversation));
+      const grouped = new Map<string, Project>();
+      for (const item of history) {
+        if (!item.project) continue;
+        const existing = grouped.get(item.project.id);
+        const conversation = historyConversation(item);
+        if (existing) existing.conversations.push(conversation);
+        else grouped.set(item.project.id, { ...item.project, conversations: [conversation] });
+      }
+      setProjects([...grouped.values()]);
+    } catch (error) {
+      setNotice({ title: "无法读取会话历史", message: eventError(error), type: "info" });
     }
   }
 
@@ -203,6 +283,11 @@ export function App() {
     if (currentProvider?.kind === "compatible") configured.add(currentProvider.id);
     return providerCatalog.filter((provider) => configured.has(provider.id) && provider.models.length > 0);
   }, [modelSettings.configuredProviders, modelSettings.provider, providerCatalog]);
+  const selectedContextWindow = providerCatalog.find((provider) => provider.id === modelSettings.provider)
+    ?.models.find((model) => model.id === modelSettings.modelId)?.contextWindow ?? 0;
+  const displayedContextUsage = contextUsage ?? (selectedContextWindow > 0
+    ? { tokens: turns.length === 0 ? 0 : null, contextWindow: selectedContextWindow, percent: turns.length === 0 ? 0 : null }
+    : undefined);
 
   async function resetConversation() {
     if (isRunning) await window.piDesktop?.agent.abort();
@@ -212,39 +297,106 @@ export function App() {
   }
 
   function startNewChat() {
+    if (selectedConversationId) {
+      setConversationContexts((current) => ({ ...current, [selectedConversationId]: contextUsage }));
+    }
     setView("chat");
     setProject(null);
     setSelectedConversationId(null);
+    setContextUsage(undefined);
     void resetConversation();
   }
 
   function selectConversation(conversationId: string, nextProject?: Project) {
+    void openConversation(conversationId, nextProject);
+  }
+
+  async function openConversation(conversationId: string, nextProject?: Project) {
+    if (conversationId === selectedConversationId) return;
+    if (selectedConversationId) {
+      setConversationContexts((current) => ({ ...current, [selectedConversationId]: contextUsage }));
+    }
+    if (isRunning) await window.piDesktop?.agent.abort();
+    await window.piDesktop?.agent.reset();
     setView("chat");
     setSelectedConversationId(conversationId);
-    setProject(nextProject ?? null);
-    void resetConversation();
+    setProject(nextProject ? projects.find((entry) => entry.id === nextProject.id) ?? nextProject : null);
+    setPrompt("");
+    const cachedTurns = conversationTurns[conversationId];
+    if (cachedTurns) {
+      setTurns(cachedTurns);
+      setContextUsage(conversationContexts[conversationId]);
+      return;
+    }
+    if (!window.piDesktop || typeof window.piDesktop.agent.loadConversation !== "function") {
+      setTurns([]);
+      return;
+    }
+    try {
+      const history = await window.piDesktop.agent.loadConversation(conversationId);
+      const restoredTurns = Array.isArray(history.turns) ? history.turns.map(normalizeHistoryTurn) : [];
+      const restoredContext = normalizeContextUsage(history.contextUsage);
+      setConversationTurns((current) => ({ ...current, [conversationId]: restoredTurns }));
+      setConversationContexts((current) => ({ ...current, [conversationId]: restoredContext }));
+      setTurns(restoredTurns);
+      setContextUsage(restoredContext);
+    } catch (error) {
+      setTurns([]);
+      setNotice({ title: "无法打开会话", message: eventError(error), type: "info" });
+    }
   }
 
   async function chooseWorkspace() {
     const selected = await window.piDesktop?.workspace.choose();
     if (!selected) return;
-    setProject({
+    const nextProject = {
       id: selected.path,
       name: selected.name,
       path: selected.path,
-      conversations: [],
-    });
+      conversations: projects.find((entry) => entry.id === selected.path)?.conversations ?? [],
+    };
+    setProjects((current) => current.some((entry) => entry.id === nextProject.id)
+      ? current
+      : [...current, nextProject]);
+    setProject(nextProject);
+  }
+
+  function ensureConversation(question: string): string {
+    if (selectedConversationId) return selectedConversationId;
+    const conversationId = `conversation-${Date.now()}`;
+    const normalizedTitle = question.trim().replace(/\s+/g, " ");
+    const conversation: Conversation = {
+      id: conversationId,
+      title: normalizedTitle.length > 34 ? `${normalizedTitle.slice(0, 34)}…` : normalizedTitle,
+      subtitle: project ? project.name : "普通对话",
+      updatedAt: "刚刚",
+    };
+    setSelectedConversationId(conversationId);
+    if (project) {
+      setProjects((current) => {
+        const existing = current.find((entry) => entry.id === project.id);
+        if (existing) return current.map((entry) => entry.id === project.id
+          ? { ...entry, conversations: [conversation, ...entry.conversations] }
+          : entry);
+        return [...current, { ...project, conversations: [conversation] }];
+      });
+      setProject((current) => current ? { ...current, conversations: [conversation, ...current.conversations] } : current);
+    } else {
+      setConversations((current) => [conversation, ...current]);
+    }
+    return conversationId;
   }
 
   async function sendQuestion(question: string) {
     if (!question.trim() || isRunning) return;
+    const wasNewConversation = !selectedConversationId;
+    const conversationId = ensureConversation(question);
     const id = `${Date.now()}-${turns.length}`;
     setTurns((current) => [...current, {
       id,
       question: question.trim(),
       answer: "",
       activities: [],
-      trace: [],
       status: "running",
     }]);
     setPrompt("");
@@ -256,12 +408,21 @@ export function App() {
       return;
     }
     try {
-      const { runId } = await window.piDesktop.agent.send({ prompt: question.trim(), cwd: project?.path });
+      const { runId } = await window.piDesktop.agent.send({ prompt: question.trim(), cwd: project?.path, conversationId });
       setTurns((current) => current.map((turn) => turn.id === id && !turn.runId ? { ...turn, runId } : turn));
     } catch (error) {
       setTurns((current) => current.map((turn) => turn.id === id
         ? { ...turn, status: "error", error: eventError(error) }
         : turn));
+      if (wasNewConversation) {
+        setSelectedConversationId((current) => current === conversationId ? null : current);
+        setConversationTurns((current) => {
+          const next = { ...current };
+          delete next[conversationId];
+          return next;
+        });
+        void refreshConversationHistory();
+      }
     }
   }
 
@@ -296,6 +457,17 @@ export function App() {
     setNotice({ title: "设置已保存", message: "模型配置已保存；API Key（如有）已加密存储。", type: "success" });
   }
 
+  async function savePermissionSettings(input: PermissionSettings) {
+    if (!window.piDesktop?.permissions) throw new Error("权限设置只能在 Electron 应用中保存。");
+    const saved = await window.piDesktop.permissions.save(input);
+    setPermissionRuntime(saved);
+    setNotice({
+      title: "权限模式已更新",
+      message: saved.mode === "balanced" ? "工作区内操作将自动执行，危险操作仍会询问。" : "Shell 与文件修改将在执行前确认。",
+      type: "success",
+    });
+  }
+
   async function discoverModels(input: SaveModelSettings) {
     if (!window.piDesktop) throw new Error("模型列表只能在 Electron 应用中获取。");
     if (typeof window.piDesktop.settings.discoverModels !== "function") {
@@ -304,6 +476,27 @@ export function App() {
     const models = await window.piDesktop.settings.discoverModels(input);
     setProviderCatalog((current) => current.map((provider) => provider.id === input.provider ? { ...provider, models } : provider));
     return models;
+  }
+
+  async function refreshModelMetadata() {
+    if (!window.piDesktop?.settings.refreshMetadata) throw new Error("模型元信息同步需要重新启动新版 Pi Desktop。");
+    const catalog = await window.piDesktop.settings.refreshMetadata();
+    setProviderCatalog(catalog);
+    return catalog;
+  }
+
+  async function saveModelMetadata(providerId: string, modelId: string, metadata: ModelMetadataOverride) {
+    if (!window.piDesktop?.settings.saveMetadata) throw new Error("模型元信息编辑需要重新启动新版 Pi Desktop。");
+    const catalog = await window.piDesktop.settings.saveMetadata(providerId, modelId, metadata);
+    setProviderCatalog(catalog);
+    return catalog;
+  }
+
+  async function resetModelMetadata(providerId: string, modelId: string) {
+    if (!window.piDesktop?.settings.resetMetadata) throw new Error("模型元信息编辑需要重新启动新版 Pi Desktop。");
+    const catalog = await window.piDesktop.settings.resetMetadata(providerId, modelId);
+    setProviderCatalog(catalog);
+    return catalog;
   }
 
   async function selectChatModel(providerId: string, modelId: string) {
@@ -323,6 +516,7 @@ export function App() {
         setTurns([]);
         setPrompt("");
         setSelectedConversationId(null);
+        setContextUsage(undefined);
       }
       setNotice({
         title: "模型已切换",
@@ -364,22 +558,41 @@ export function App() {
     setNotice({ title: "已退出登录", message: `${providerId} 的已保存凭据已删除。`, type: "success" });
   }
 
+  useEffect(() => {
+    function handleShortcut(event: KeyboardEvent) {
+      if (event.repeat) return;
+      if (isPrimaryShortcut(event, "n")) {
+        event.preventDefault();
+        startNewChat();
+      } else if (isPrimaryShortcut(event, "k")) {
+        event.preventDefault();
+        setView("chat");
+        setSidebarCollapsed(false);
+        setSearchRequest((current) => current + 1);
+      }
+    }
+
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [isRunning]);
+
   return (
     <div className="desktop-page">
       <section className="desktop-window" aria-label="Pi Desktop">
         <header className="window-bar">
           <span className="window-drag-spacer" aria-hidden="true" />
           <span className="window-title">Pi Desktop — {title}</span>
-          <span className="window-shortcut">⌘ K</span>
+          <span className="window-shortcut" title="搜索对话或项目">{shortcutLabel("K")}</span>
         </header>
 
         {view === "chat" ? (
           <div className={`chat-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
             <ConversationSidebar
               collapsed={sidebarCollapsed}
-              conversations={[]}
-              projects={project ? [project] : []}
+              conversations={conversations}
+              projects={projects}
               selectedConversationId={selectedConversationId}
+              searchRequest={searchRequest}
               onToggleCollapsed={() => setSidebarCollapsed((current) => !current)}
               onSelectConversation={selectConversation}
               onNewChat={startNewChat}
@@ -395,6 +608,7 @@ export function App() {
                 modelId={modelSettings.modelId}
                 modelProvider={modelSettings.provider}
                 modelProviders={configuredModelProviders}
+                contextUsage={displayedContextUsage}
                 prompt={prompt}
                 isRunning={isRunning}
                 onPromptChange={setPrompt}
@@ -412,6 +626,7 @@ export function App() {
           <SettingsView
             activeSection={settingsSection}
             settings={modelSettings}
+            permissionRuntime={permissionRuntime}
             providerCatalog={providerCatalog}
             authFlow={authFlow}
             theme={theme}
@@ -420,7 +635,11 @@ export function App() {
             onSectionChange={setSettingsSection}
             onThemeChange={setTheme}
             onSave={saveModelSettings}
+            onSavePermissions={savePermissionSettings}
             onDiscoverModels={discoverModels}
+            onRefreshMetadata={refreshModelMetadata}
+            onSaveMetadata={saveModelMetadata}
+            onResetMetadata={resetModelMetadata}
             onTest={testModelSettings}
             onLogin={loginProvider}
             onAnswerAuthPrompt={answerAuthPrompt}
