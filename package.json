@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "pnpm --filter @pi-desktop/renderer dev",
     "build": "pnpm --filter @pi-desktop/renderer build",
+    "test": "pnpm --filter @pi-desktop/renderer test",
     "typecheck": "pnpm --filter @pi-desktop/renderer typecheck"
   }
 }

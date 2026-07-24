@@ -2,25 +2,38 @@
 
 Pi Desktop 是一个基于 Pi Coding Agent 构建的桌面端 AI 编程助手。它计划在保留 Pi Agent 能力的基础上，提供更加直观的图形界面，用于管理工作区、与 Agent 对话、查看工具执行过程、审核代码变更以及操作集成终端。
 
-> 当前项目已完成 Renderer 前端脚手架与核心页面，本文档同时描述产品方向、技术方案和后续实施范围。
+> 当前项目已接入 Electron 与 Pi Coding Agent SDK，已经能够配置真实模型、建立流式多轮会话并运行 Agent 工具。本文档同时描述已实现能力、产品方向和后续实施范围。
 
-前端页面脚手架已经落地在 `apps/desktop`，当前可运行会话首页、项目对话树、设置页面和深浅主题。Electron 主进程、Pi Adapter 与本地存储仍在后续实施范围内。
+桌面应用位于 `apps/desktop`。Renderer 通过受限 preload API 与 Electron 主进程通信；API Key、Pi Session、文件系统和工具执行不会进入浏览器进程。
 
 ## 本地开发
 
-需要 Node.js 20+ 与 pnpm 10+。
+需要 Node.js 22.19+ 与 pnpm 10+（Pi Coding Agent 0.81 的运行时要求）。
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-默认地址为 `http://127.0.0.1:4173`。
+该命令会先编译 Electron 主进程，然后启动 Vite Renderer 与 Pi Desktop 窗口。Renderer 固定监听 `http://127.0.0.1:4173`；如果端口已被占用，命令会安全退出，避免 Electron 误连到其他本地服务。
 
 ```bash
 pnpm typecheck
+pnpm test
 pnpm build
 ```
+
+## 配置并开始真实对话
+
+1. 打开左下角账户菜单，进入“设置 → 大模型”。
+2. 选择 Anthropic、OpenAI 或 OpenAI Compatible，填写 API 地址、真实模型 ID 与 thinking 级别。
+3. 输入 API Key 并保存。Key 由 Electron `safeStorage` 使用操作系统凭据加密，Renderer 只能看到“是否已配置”。本地 OpenAI Compatible 服务可不填 Key。
+4. 可点击“验证连接”发送一条最小真实模型请求。
+5. 返回对话；如需代码工具，先通过目录菜单授权一个工作目录，然后发送任务。
+
+会话中会实时展示 thinking、文本增量、工具参数和输出。每一个 Pi `AgentSessionEvent` 也会按顺序捕获到可展开的事件流中；编译期完整性检查会在 SDK 新增或改名事件时直接失败，避免静默漏事件。`bash`、`edit`、`write` 每次执行前都会等待用户授权。模型还可以调用 `ask_user` 挂起并询问用户，或调用 `spawn_subagent` 创建只读的独立 Pi 子会话并把结果返回给主 Agent。停止按钮会中止当前 Pi Session 请求与等待中的问题。
+
+测试套件使用本地 OpenAI-compatible 假模型驱动真实 Pi Session，覆盖连接验证、thinking、工具调用、询问用户、子 Agent、多轮上下文、停止任务、密钥隔离和事件序列，不需要真实 API Key。
 
 ## 项目目标
 

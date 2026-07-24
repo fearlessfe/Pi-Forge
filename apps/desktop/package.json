@@ -3,27 +3,41 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "main": "dist-electron/electron/main.js",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "typecheck": "tsc -b --pretty false",
-    "preview": "vite preview"
+    "dev": "tsc -p tsconfig.electron.json && concurrently -k -s first \"vite\" \"wait-on tcp:4173 && VITE_DEV_SERVER_URL=http://127.0.0.1:4173 electron dist-electron/electron/main.js\"",
+    "build": "tsc -p tsconfig.electron.json && tsc -b && vite build",
+    "test": "vitest run",
+    "typecheck": "tsc -b --pretty false && tsc -p tsconfig.electron.json --noEmit --pretty false && tsc -p tsconfig.test.json --pretty false",
+    "preview": "vite preview",
+    "start": "electron dist-electron/electron/main.js"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "0.81.1",
+    "@earendil-works/pi-coding-agent": "0.81.1",
     "@radix-ui/react-collapsible": "latest",
     "@radix-ui/react-dropdown-menu": "latest",
     "@radix-ui/react-select": "latest",
     "lucide-react": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "typebox": "1.1.38"
   },
   "devDependencies": {
     "@tailwindcss/vite": "latest",
+    "@types/node": "^26.1.1",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@vitejs/plugin-react": "latest",
+    "concurrently": "^10.0.3",
+    "electron": "^43.2.0",
     "tailwindcss": "latest",
     "typescript": "latest",
-    "vite": "latest"
+    "vite": "latest",
+    "vitest": "^4.1.10",
+    "wait-on": "^9.1.0"
   }
 }

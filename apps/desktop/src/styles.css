@@ -728,6 +728,14 @@ textarea:focus-visible,
 
 .model-trigger {
   font-family: var(--mono);
+  max-width: 230px;
+  cursor: default;
+}
+
+.model-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .send-button {
@@ -752,6 +760,16 @@ textarea:focus-visible,
 .send-button:disabled {
   opacity: .45;
   cursor: not-allowed;
+}
+
+.stop-button {
+  color: #fff;
+  background: var(--danger);
+  box-shadow: 0 8px 24px rgb(255 133 133 / 13%);
+}
+
+.stop-button:hover:not(:disabled) {
+  background: #ff6f6f;
 }
 
 .conversation-context {
@@ -908,6 +926,318 @@ textarea:focus-visible,
 
 .answer-content p {
   margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-response {
+  width: 100%;
+  display: grid;
+  gap: 9px;
+}
+
+.agent-activity {
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.activity-trigger {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 0;
+  color: var(--text-2);
+  background: transparent;
+  cursor: pointer;
+  font-size: 10.5px;
+  text-align: left;
+}
+
+.activity-trigger > span {
+  font-weight: 650;
+}
+
+.activity-trigger > small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.activity-trigger > svg:first-child {
+  color: var(--brand);
+}
+
+.activity-chevron {
+  color: var(--faint);
+  transition: transform .16s ease;
+}
+
+.agent-activity[data-state="open"] .activity-chevron {
+  transform: rotate(180deg);
+}
+
+.thinking-activity {
+  border-color: rgb(115 169 255 / 19%);
+  background: rgb(115 169 255 / 4%);
+}
+
+.thinking-activity .activity-trigger > svg:first-child {
+  color: var(--running);
+}
+
+.thinking-content {
+  max-height: 230px;
+  overflow: auto;
+  padding: 0 11px 11px 32px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-style: italic;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.tool-activity--error {
+  border-color: rgb(255 133 133 / 24%);
+}
+
+.tool-content {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.tool-content > div {
+  min-width: 0;
+}
+
+.tool-content span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--faint);
+  font-size: 8.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.tool-content pre {
+  max-height: 230px;
+  overflow: auto;
+  margin: 0;
+  padding: 9px;
+  border-radius: 7px;
+  color: var(--text-2);
+  background: var(--bg);
+  font: 9.5px/1.55 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.activity-spinner,
+.agent-working > i {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--brand);
+  border-radius: 999px;
+  animation: agent-spin .8s linear infinite;
+}
+
+@keyframes agent-spin { to { transform: rotate(360deg); } }
+
+.question-activity {
+  padding: 12px;
+  border-color: rgb(244 199 107 / 28%);
+  background: rgb(244 199 107 / 5%);
+}
+
+.question-activity > header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--warning);
+  font-size: 10.5px;
+}
+
+.question-activity > p {
+  margin: 10px 0;
+  color: var(--text-2);
+  font-size: 10.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.question-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 7px;
+}
+
+.question-options button {
+  min-height: 45px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-2);
+  background: var(--bg);
+  cursor: pointer;
+  text-align: left;
+}
+
+.question-options button:hover {
+  border-color: var(--warning);
+}
+
+.question-options strong,
+.question-options small {
+  display: block;
+}
+
+.question-options strong { font-size: 10px; }
+.question-options small { margin-top: 3px; color: var(--muted); font-size: 8.5px; }
+
+.question-custom-answer {
+  display: flex;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.question-custom-answer input {
+  min-width: 0;
+  height: 33px;
+  flex: 1;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--bg);
+  font-size: 10px;
+}
+
+.question-custom-answer button {
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--brand-ink);
+  background: var(--brand);
+  cursor: pointer;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.question-custom-answer button:disabled { opacity: .45; cursor: not-allowed; }
+
+.question-answer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--success);
+  font-size: 10px;
+}
+
+.agent-working,
+.agent-error,
+.agent-stopped {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 10.5px;
+}
+
+.agent-error { color: var(--danger); background: rgb(255 133 133 / 6%); }
+.agent-stopped { color: var(--warning); }
+
+.event-trace {
+  border-color: rgb(123 241 168 / 14%);
+  background: rgb(123 241 168 / 2.5%);
+}
+
+.event-trace-content {
+  max-height: 420px;
+  overflow: auto;
+  padding: 0 10px 10px;
+}
+
+.event-type-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 2px 0 9px;
+}
+
+.event-type-summary > span {
+  padding: 4px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 5px;
+  color: var(--muted);
+  background: var(--bg);
+  font: 8px var(--mono);
+}
+
+.event-type-summary b {
+  color: var(--brand);
+}
+
+.event-trace ol {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.event-trace li {
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--bg);
+}
+
+.event-trace li > header {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  color: var(--text-2);
+  font-size: 8.5px;
+}
+
+.event-trace li code {
+  color: var(--brand);
+  font: 8px var(--mono);
+}
+
+.event-trace li strong {
+  font: 500 8.5px var(--mono);
+}
+
+.event-trace li time {
+  margin-left: auto;
+  color: var(--faint);
+  font: 8px var(--mono);
+}
+
+.event-trace li pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--muted);
+  font: 8px/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .message-bubble-stack {
@@ -1406,6 +1736,7 @@ textarea:focus-visible,
 
 .settings-field > input,
 .select-trigger,
+.native-select,
 .secret-input {
   width: 100%;
   height: 40px;
@@ -1422,6 +1753,7 @@ textarea:focus-visible,
 
 :root[data-theme="light"] .settings-field > input,
 :root[data-theme="light"] .select-trigger,
+:root[data-theme="light"] .native-select,
 :root[data-theme="light"] .secret-input {
   border-color: var(--border);
   background: #fff;
@@ -1430,6 +1762,26 @@ textarea:focus-visible,
 .select-trigger {
   justify-content: space-between;
   cursor: pointer;
+}
+
+.native-select {
+  appearance: none;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 17px, calc(100% - 12px) 17px;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+
+.secret-input > input {
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  outline: 0;
+  border: 0;
+  color: var(--text-2);
+  background: transparent;
+  font: 10px var(--mono);
 }
 
 .select-content {
@@ -1547,9 +1899,27 @@ textarea:focus-visible,
 
 .settings-panel-footer > span {
   margin-left: 11px;
-  color: var(--success);
+  color: var(--muted);
   font-size: 9.5px;
 }
+
+.settings-error {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgb(255 133 133 / 22%);
+  border-radius: 9px;
+  color: var(--danger);
+  background: rgb(255 133 133 / 6%);
+  font-size: 10px;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+.connection-status.is-idle { color: var(--muted); }
 
 .settings-panel-footer > small {
   margin-left: auto;
@@ -1604,6 +1974,12 @@ textarea:focus-visible,
   color: var(--warning);
   background: rgb(244 199 107 / 9%);
   font-size: 9.5px;
+}
+
+.policy-badge--allowed {
+  border-color: rgb(101 217 141 / 22%);
+  color: var(--success);
+  background: rgb(101 217 141 / 8%);
 }
 
 .switch {
