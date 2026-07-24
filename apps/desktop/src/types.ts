@@ -1,4 +1,4 @@
-import type { AgentTraceEvent } from "./contracts";
+import type { AgentTraceEvent, AuthPrompt, ProviderId } from "./contracts";
 
 export type Theme = "dark" | "light";
 
@@ -24,6 +24,20 @@ export type ModelOption = {
   id: string;
   name: string;
   description: string;
+};
+
+export type AuthFlowState = {
+  loginId: string;
+  providerId: ProviderId;
+  status: "running" | "error";
+  message?: string;
+  url?: string;
+  deviceCode?: {
+    userCode: string;
+    verificationUri: string;
+    expiresInSeconds?: number;
+  };
+  prompt?: AuthPrompt;
 };
 
 export type ChatTurn = {

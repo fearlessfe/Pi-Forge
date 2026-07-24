@@ -1,9 +1,15 @@
 import { safeStorage } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import type { ModelSettings, ProviderId, SaveModelSettings, ThinkingLevel } from "../src/contracts.js";
+import {
+  compatibleProviderIds,
+  type ModelSettings,
+  type ProviderId,
+  type SaveModelSettings,
+  type ThinkingLevel,
+} from "../src/contracts.js";
 
-type ModelConfiguration = Omit<ModelSettings, "hasApiKey" | "configuredProviders">;
+type ModelConfiguration = Omit<ModelSettings, "hasApiKey" | "configuredProviders" | "credentials">;
 
 type StoredSettings = ModelConfiguration & {
   encryptedApiKeys: Partial<Record<ProviderId, string>>;
@@ -24,7 +30,7 @@ const defaults: StoredSettings = {
   encryptedApiKeys: {},
 };
 
-const providers = new Set<ProviderId>(["anthropic", "openai", "openai-compatible"]);
+const compatibleProviders = new Set<string>(compatibleProviderIds);
 const thinkingLevels = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export class SettingsStore {
@@ -42,7 +48,12 @@ export class SettingsStore {
       modelId: stored.modelId,
       thinkingLevel: stored.thinkingLevel,
       hasApiKey: Boolean(stored.encryptedApiKeys[stored.provider]),
-      configuredProviders: [...providers].filter((provider) => Boolean(stored.encryptedApiKeys[provider])),
+      configuredProviders: Object.entries(stored.encryptedApiKeys)
+        .filter(([, encrypted]) => Boolean(encrypted))
+        .map(([provider]) => provider),
+      credentials: Object.entries(stored.encryptedApiKeys)
+        .filter(([, encrypted]) => Boolean(encrypted))
+        .map(([providerId]) => ({ providerId, type: "api_key" as const })),
     };
   }
 
@@ -79,15 +90,33 @@ export class SettingsStore {
     return { ...validated, apiKey };
   }
 
+  readLegacyApiKeys(): Record<ProviderId, string> {
+    const stored = this.read();
+    const result: Record<ProviderId, string> = {};
+    for (const [provider, encrypted] of Object.entries(stored.encryptedApiKeys)) {
+      if (!encrypted) continue;
+      this.requireEncryption("无法迁移 API Key");
+      result[provider] = this.secureStorage.decryptString(Buffer.from(encrypted, "base64"));
+    }
+    return result;
+  }
+
+  clearLegacyApiKeys(): void {
+    const stored = this.read();
+    if (Object.keys(stored.encryptedApiKeys).length === 0) return;
+    this.write({ ...stored, encryptedApiKeys: {} });
+  }
+
   private read(): StoredSettings {
     try {
       if (!fs.existsSync(this.filePath)) return defaults;
       const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as StoredSettingsFile;
       const configuration = this.validate({ ...defaults, ...parsed });
       const encryptedApiKeys: Partial<Record<ProviderId, string>> = {};
-      for (const provider of providers) {
-        const encrypted = parsed.encryptedApiKeys?.[provider];
-        if (typeof encrypted === "string" && encrypted) encryptedApiKeys[provider] = encrypted;
+      for (const [provider, encrypted] of Object.entries(parsed.encryptedApiKeys ?? {})) {
+        if (/^[a-z0-9][a-z0-9._-]*$/i.test(provider) && typeof encrypted === "string" && encrypted) {
+          encryptedApiKeys[provider] = encrypted;
+        }
       }
       if (typeof parsed.encryptedApiKey === "string" && !encryptedApiKeys[configuration.provider]) {
         encryptedApiKeys[configuration.provider] = parsed.encryptedApiKey;
@@ -113,24 +142,37 @@ export class SettingsStore {
     }
   }
 
+  private write(stored: StoredSettings): void {
+    const directory = path.dirname(this.filePath);
+    const temporaryPath = `${this.filePath}.tmp`;
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(temporaryPath, JSON.stringify(stored, null, 2), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(temporaryPath, this.filePath);
+  }
+
   private validate(input: Omit<SaveModelSettings, "apiKey"> | SaveModelSettings): ModelConfiguration {
-    if (!providers.has(input.provider)) throw new Error("不支持的模型提供商。");
+    const provider = input.provider?.trim();
+    if (!provider || !/^[a-z0-9][a-z0-9._-]*$/i.test(provider)) throw new Error("模型提供商格式无效。");
     if (!thinkingLevels.has(input.thinkingLevel)) throw new Error("不支持的 thinking 级别。");
     if (!input.modelId?.trim()) throw new Error("模型 ID 不能为空。");
 
-    let url: URL;
-    try {
-      url = new URL(input.baseUrl);
-    } catch {
-      throw new Error("API 地址格式不正确。");
-    }
-    if (url.protocol !== "https:" && url.protocol !== "http:") {
-      throw new Error("API 地址仅支持 HTTP 或 HTTPS。");
+    const baseUrl = input.baseUrl.trim();
+    if (!baseUrl && compatibleProviders.has(provider)) throw new Error("兼容端点必须填写 API 地址。");
+    if (baseUrl) {
+      let url: URL;
+      try {
+        url = new URL(baseUrl);
+      } catch {
+        throw new Error("API 地址格式不正确。");
+      }
+      if (url.protocol !== "https:" && url.protocol !== "http:") {
+        throw new Error("API 地址仅支持 HTTP 或 HTTPS。");
+      }
     }
 
     return {
-      provider: input.provider,
-      baseUrl: input.baseUrl.replace(/\/$/, ""),
+      provider,
+      baseUrl: baseUrl.replace(/\/$/, ""),
       modelId: input.modelId.trim(),
       thinkingLevel: input.thinkingLevel,
     };

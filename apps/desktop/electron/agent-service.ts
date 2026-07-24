@@ -8,12 +8,17 @@ import {
   type AgentSessionEvent,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, type Api, type CredentialStore, type Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgentEvent, QuestionOption, SaveModelSettings } from "../src/contracts.js";
+import type {
+  AgentEvent,
+  ProviderCatalogEntry,
+  QuestionOption,
+  SaveModelSettings,
+} from "../src/contracts.js";
 import { captureAgentSessionEvent } from "./agent-event-adapter.js";
 import { SettingsStore } from "./settings-store.js";
 
@@ -24,6 +29,45 @@ type PendingQuestion = {
 };
 
 type RuntimeConfig = ReturnType<SettingsStore["resolve"]>;
+
+type CompatibleProviderDefinition = {
+  name: string;
+  api: Api;
+  baseUrl: string;
+  defaultModel: string;
+  authHeader: boolean;
+};
+
+const compatibleProviderDefinitions: Record<string, CompatibleProviderDefinition> = {
+  "openai-compatible": {
+    name: "OpenAI Completions Compatible",
+    api: "openai-completions",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    defaultModel: "qwen3-coder",
+    authHeader: true,
+  },
+  "openai-responses-compatible": {
+    name: "OpenAI Responses Compatible",
+    api: "openai-responses",
+    baseUrl: "http://127.0.0.1:8000/v1",
+    defaultModel: "gpt-5",
+    authHeader: true,
+  },
+  "anthropic-compatible": {
+    name: "Anthropic Messages Compatible",
+    api: "anthropic-messages",
+    baseUrl: "http://127.0.0.1:8000",
+    defaultModel: "claude-sonnet-4-6",
+    authHeader: false,
+  },
+  "google-compatible": {
+    name: "Google Generative AI Compatible",
+    api: "google-generative-ai",
+    baseUrl: "http://127.0.0.1:8000/v1beta",
+    defaultModel: "gemini-3-flash-preview",
+    authHeader: false,
+  },
+};
 
 const questionParameters = Type.Object({
   question: Type.String({ description: "A concise question for the user" }),
@@ -85,7 +129,41 @@ export class AgentService {
     private readonly agentDir: string,
     private readonly fallbackCwd: string,
     private readonly emit: EventSink,
+    private readonly credentials: CredentialStore = new InMemoryCredentialStore(),
   ) {}
+
+  async getModelCatalog(): Promise<ProviderCatalogEntry[]> {
+    const runtime = await ModelRuntime.create({
+      credentials: this.credentials,
+      modelsPath: path.join(this.agentDir, "models.json"),
+      modelsStorePath: path.join(this.agentDir, "models-store.json"),
+      allowModelNetwork: false,
+    });
+    const builtins = runtime.getProviders().map((provider): ProviderCatalogEntry => ({
+      id: provider.id,
+      name: provider.name,
+      baseUrl: provider.baseUrl ?? "",
+      kind: "builtin",
+      supportsApiKey: Boolean(provider.auth.apiKey),
+      supportsOAuth: Boolean(provider.auth.oauth),
+      oauthName: provider.auth.oauth?.name,
+      models: provider.getModels().map((model) => ({
+        id: model.id,
+        name: model.name,
+        reasoning: model.reasoning,
+      })),
+    }));
+    const compatible = Object.entries(compatibleProviderDefinitions).map(([id, definition]): ProviderCatalogEntry => ({
+      id,
+      name: definition.name,
+      baseUrl: definition.baseUrl,
+      kind: "compatible",
+      supportsApiKey: true,
+      supportsOAuth: false,
+      models: [{ id: definition.defaultModel, name: definition.defaultModel, reasoning: true }],
+    }));
+    return [...builtins, ...compatible];
+  }
 
   async send(prompt: string, cwd?: string): Promise<string> {
     if (this.running) throw new Error("Agent 正在执行，请先停止当前任务或等待完成。");
@@ -321,38 +399,60 @@ export class AgentService {
   }
 
   private async createModelRuntime(config: RuntimeConfig) {
-    const provider = config.provider === "openai-compatible" ? "pi-desktop-openai-compatible" : config.provider;
-    const api: Api = config.provider === "anthropic"
-      ? "anthropic-messages"
-      : config.provider === "openai"
-        ? "openai-responses"
-        : "openai-completions";
-    const apiKey = config.apiKey || (config.provider === "openai-compatible" ? "local" : undefined);
-    if (!apiKey) throw new Error("尚未配置 API Key，请先在设置中保存模型配置。");
-    const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
-    await modelRuntime.setRuntimeApiKey(provider, apiKey);
-    modelRuntime.registerProvider(provider, {
-      name: config.provider === "openai-compatible" ? "OpenAI Compatible" : config.provider,
-      baseUrl: config.baseUrl,
-      api,
-      authHeader: config.provider !== "anthropic",
-      models: [{
-        id: config.modelId,
-        name: config.modelId,
-        api,
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 32_000,
-        compat: config.provider === "openai-compatible" ? {
-          supportsDeveloperRole: false,
-          supportsReasoningEffort: config.thinkingLevel !== "off",
-        } : undefined,
-      }],
+    const modelRuntime = await ModelRuntime.create({
+      credentials: this.credentials,
+      modelsPath: path.join(this.agentDir, "models.json"),
+      modelsStorePath: path.join(this.agentDir, "models-store.json"),
+      allowModelNetwork: false,
     });
-    const model = modelRuntime.getModel(provider, config.modelId) as Model<Api> | undefined;
-    if (!model) throw new Error(`找不到模型 ${config.modelId}。`);
+    const compatible = compatibleProviderDefinitions[config.provider];
+
+    if (compatible) {
+      const endpoint = new URL(config.baseUrl);
+      const isLocal = endpoint.hostname === "localhost" || endpoint.hostname === "127.0.0.1" || endpoint.hostname === "[::1]";
+      const apiKey = config.apiKey || (isLocal ? "local" : undefined);
+      if (apiKey) await modelRuntime.setRuntimeApiKey(config.provider, apiKey, { allowNetwork: false });
+      modelRuntime.registerProvider(config.provider, {
+        name: compatible.name,
+        baseUrl: config.baseUrl,
+        api: compatible.api,
+        authHeader: compatible.authHeader,
+        models: [{
+          id: config.modelId,
+          name: config.modelId,
+          api: compatible.api,
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 32_000,
+          compat: compatible.api === "openai-completions" ? {
+            supportsDeveloperRole: false,
+            supportsReasoningEffort: config.thinkingLevel !== "off",
+          } : undefined,
+        }],
+      });
+    } else {
+      const provider = modelRuntime.getProvider(config.provider);
+      if (!provider) throw new Error(`Pi SDK 中不存在 provider：${config.provider}。`);
+      if (config.apiKey) {
+        await modelRuntime.setRuntimeApiKey(config.provider, config.apiKey, { allowNetwork: false });
+      }
+      if (config.baseUrl && config.baseUrl !== provider.baseUrl) {
+        modelRuntime.registerProvider(config.provider, { baseUrl: config.baseUrl });
+      }
+    }
+
+    const model = modelRuntime.getModel(config.provider, config.modelId) as Model<Api> | undefined;
+    if (!model) throw new Error(`在 ${config.provider} 的 Pi 模型目录中找不到 ${config.modelId}。`);
+    const auth = await modelRuntime.getAuth(model);
+    if (!auth) {
+      const provider = modelRuntime.getProvider(config.provider);
+      const loginHint = provider?.auth.oauth && !provider.auth.apiKey
+        ? "该 Provider 需要 OAuth/订阅登录，请先在设置中完成登录。"
+        : "请保存 API Key，或在启动 Pi Desktop 前配置该 provider 所需的环境凭据。";
+      throw new Error(`尚未配置 ${provider?.name ?? config.provider} 的凭据。${loginHint}`);
+    }
     return { modelRuntime, model, thinkingLevel: config.thinkingLevel };
   }
 

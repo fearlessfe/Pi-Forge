@@ -3,8 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ConversationSidebar } from "./components/ConversationSidebar";
 import { NewChatView } from "./components/NewChatView";
 import { SettingsView } from "./components/SettingsView";
-import type { AgentEvent, ModelSettings, SaveModelSettings } from "./contracts";
-import type { AppView, ChatTurn, Project, SettingsSection, Theme } from "./types";
+import type { AgentEvent, AuthEvent, ModelSettings, ProviderCatalogEntry, SaveModelSettings } from "./contracts";
+import type { AppView, AuthFlowState, ChatTurn, Project, SettingsSection, Theme } from "./types";
 
 type Notice = {
   title: string;
@@ -19,6 +19,7 @@ const initialModelSettings: ModelSettings = {
   thinkingLevel: "medium",
   hasApiKey: false,
   configuredProviders: [],
+  credentials: [],
 };
 
 function getInitialTheme(): Theme {
@@ -111,6 +112,28 @@ function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[] {
   });
 }
 
+function applyAuthEvent(current: AuthFlowState | null, event: AuthEvent): AuthFlowState | null {
+  if (event.type === "auth.started") return { loginId: event.loginId, providerId: event.providerId, status: "running" };
+  if (!current || current.loginId !== event.loginId) return current;
+  switch (event.type) {
+    case "auth.url":
+      return { ...current, url: event.url, message: event.instructions ?? "请在浏览器中完成登录。" };
+    case "auth.device-code":
+      return { ...current, deviceCode: { userCode: event.userCode, verificationUri: event.verificationUri, expiresInSeconds: event.expiresInSeconds }, message: "请在浏览器中输入设备码。" };
+    case "auth.progress":
+      return { ...current, message: event.message };
+    case "auth.prompt":
+      return { ...current, prompt: event.prompt };
+    case "auth.prompt-cancelled":
+      return current.prompt?.requestId === event.requestId ? { ...current, prompt: undefined } : current;
+    case "auth.error":
+      return { ...current, status: "error", prompt: undefined, message: event.message };
+    case "auth.completed":
+    case "auth.cancelled":
+      return null;
+  }
+}
+
 export function App() {
   const [view, setView] = useState<AppView>("chat");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("models");
@@ -118,6 +141,8 @@ export function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [modelSettings, setModelSettings] = useState<ModelSettings>(initialModelSettings);
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
+  const [authFlow, setAuthFlow] = useState<AuthFlowState | null>(null);
   const [prompt, setPrompt] = useState("");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -135,11 +160,34 @@ export function App() {
   }, [notice]);
 
   useEffect(() => {
-    void window.piDesktop?.settings.get().then(setModelSettings).catch((error: unknown) => {
+    void refreshModelSettings();
+    void window.piDesktop?.settings.catalog().then(setProviderCatalog).catch((error: unknown) => {
+      setNotice({ title: "无法读取模型目录", message: eventError(error), type: "info" });
+    });
+    const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => setTurns((current) => applyAgentEvent(current, event)));
+    const unsubscribeAuth = window.piDesktop?.auth?.onEvent((event) => {
+      setAuthFlow((current) => applyAuthEvent(current, event));
+      if (event.type === "auth.completed") {
+        void refreshModelSettings();
+        void window.piDesktop?.settings.catalog().then(setProviderCatalog).catch((error: unknown) => {
+          setNotice({ title: "模型目录刷新失败", message: eventError(error), type: "info" });
+        });
+        setNotice({ title: "登录成功", message: `${event.providerId} 的 OAuth 凭据已安全保存。`, type: "success" });
+      } else if (event.type === "auth.error") {
+        setNotice({ title: "登录失败", message: event.message, type: "info" });
+      }
+    });
+    return () => {
+      unsubscribeAgent?.();
+      unsubscribeAuth?.();
+    };
+  }, []);
+
+  async function refreshModelSettings() {
+    await window.piDesktop?.settings.get().then(setModelSettings).catch((error: unknown) => {
       setNotice({ title: "无法读取模型设置", message: eventError(error), type: "info" });
     });
-    return window.piDesktop?.agent.onEvent((event) => setTurns((current) => applyAgentEvent(current, event)));
-  }, []);
+  }
 
   const title = useMemo(() => (view === "settings" ? "设置" : project?.name ?? "新建对话"), [project, view]);
   const isRunning = turns.some((turn) => turn.status === "running");
@@ -241,11 +289,35 @@ export function App() {
     setNotice({ title: "连接成功", message: `模型返回：${result.response}`, type: "success" });
   }
 
+  async function loginProvider(providerId: string) {
+    if (!window.piDesktop?.auth) throw new Error("OAuth 模块尚未加载，请完全退出并重新启动 Pi Desktop。");
+    await window.piDesktop.auth.login(providerId);
+  }
+
+  async function answerAuthPrompt(requestId: string, value: string) {
+    if (!window.piDesktop?.auth) throw new Error("OAuth 模块尚未加载，请重新启动 Pi Desktop。");
+    await window.piDesktop.auth.answer(requestId, value);
+    setAuthFlow((current) => current?.prompt?.requestId === requestId ? { ...current, prompt: undefined } : current);
+  }
+
+  async function cancelAuth(loginId: string) {
+    if (!window.piDesktop?.auth) throw new Error("OAuth 模块尚未加载，请重新启动 Pi Desktop。");
+    await window.piDesktop.auth.cancel(loginId);
+    setAuthFlow(null);
+  }
+
+  async function logoutProvider(providerId: string) {
+    if (!window.piDesktop?.auth) throw new Error("OAuth 模块尚未加载，请重新启动 Pi Desktop。");
+    await window.piDesktop.auth.logout(providerId);
+    await refreshModelSettings();
+    setNotice({ title: "已退出登录", message: `${providerId} 的已保存凭据已删除。`, type: "success" });
+  }
+
   return (
     <div className="desktop-page">
       <section className="desktop-window" aria-label="Pi Desktop">
         <header className="window-bar">
-          <span className="traffic-lights" aria-hidden="true"><i /><i /><i /></span>
+          <span className="window-drag-spacer" aria-hidden="true" />
           <span className="window-title">Pi Desktop — {title}</span>
           <span className="window-shortcut">⌘ K</span>
         </header>
@@ -281,12 +353,19 @@ export function App() {
           <SettingsView
             activeSection={settingsSection}
             settings={modelSettings}
+            providerCatalog={providerCatalog}
+            authFlow={authFlow}
             theme={theme}
             onBack={() => setView("chat")}
             onSectionChange={setSettingsSection}
             onThemeChange={setTheme}
             onSave={saveModelSettings}
             onTest={testModelSettings}
+            onLogin={loginProvider}
+            onAnswerAuthPrompt={answerAuthPrompt}
+            onCancelAuth={cancelAuth}
+            onLogout={logoutProvider}
+            onDismissAuth={() => setAuthFlow(null)}
           />
         )}
 

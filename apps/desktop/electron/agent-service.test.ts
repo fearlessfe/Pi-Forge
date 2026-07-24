@@ -67,6 +67,34 @@ afterEach(() => {
 });
 
 describe("AgentService with a real Pi session", () => {
+  it("exposes the complete Pi provider catalog plus every supported compatible protocol", async () => {
+    const configuration: SaveModelSettings = {
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      modelId: "claude-sonnet-4-6",
+      thinkingLevel: "off",
+    };
+    const service = new AgentService({ resolve: () => ({ ...configuration }) }, createDirectory("catalog-agent"), createDirectory("catalog-workspace"), () => {});
+
+    try {
+      const catalog = await service.getModelCatalog();
+      expect(catalog.length).toBeGreaterThan(35);
+      expect(catalog).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "anthropic", kind: "builtin", supportsApiKey: true }),
+        expect.objectContaining({ id: "google", kind: "builtin" }),
+        expect.objectContaining({ id: "amazon-bedrock", kind: "builtin" }),
+        expect.objectContaining({ id: "openrouter", kind: "builtin" }),
+        expect.objectContaining({ id: "openai-compatible", kind: "compatible" }),
+        expect.objectContaining({ id: "openai-responses-compatible", kind: "compatible" }),
+        expect.objectContaining({ id: "anthropic-compatible", kind: "compatible" }),
+        expect.objectContaining({ id: "google-compatible", kind: "compatible" }),
+      ]));
+      expect(catalog.find((provider) => provider.id === "openrouter")?.models.length).toBeGreaterThan(100);
+    } finally {
+      service.dispose();
+    }
+  });
+
   it("validates a saved model configuration through a real provider request", async () => {
     let requestUrl = "";
     let authorization = "";

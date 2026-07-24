@@ -84,6 +84,22 @@ describe("SettingsStore", () => {
     expect(store.resolve().apiKey).toBe("legacy-secret");
   });
 
+  it("exposes and clears legacy encrypted API keys for CredentialStore migration", () => {
+    const store = new SettingsStore(createDirectory(), secureStorage);
+    store.save({
+      provider: "google",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      modelId: "gemini-3.5-flash",
+      thinkingLevel: "medium",
+      apiKey: "gemini-secret",
+    });
+
+    expect(store.readLegacyApiKeys()).toEqual({ google: "gemini-secret" });
+    store.clearLegacyApiKeys();
+    expect(store.get()).toMatchObject({ provider: "google", hasApiKey: false, credentials: [] });
+    expect(store.resolve().apiKey).toBeUndefined();
+  });
+
   it("rejects invalid endpoints and refuses plaintext fallback", () => {
     const directory = createDirectory();
     const unavailable: SafeStorageLike = {
@@ -107,5 +123,23 @@ describe("SettingsStore", () => {
       apiKey: "must-not-be-plaintext",
     })).toThrow("操作系统安全存储当前不可用");
     expect(fs.existsSync(path.join(directory, "model-settings.json"))).toBe(false);
+  });
+
+  it("accepts Pi built-in providers with ambient authentication and no fixed endpoint", () => {
+    const store = new SettingsStore(createDirectory(), secureStorage);
+    const saved = store.save({
+      provider: "amazon-bedrock",
+      baseUrl: "",
+      modelId: "us.anthropic.claude-sonnet-4-20250514-v1:0",
+      thinkingLevel: "medium",
+    });
+
+    expect(saved).toMatchObject({ provider: "amazon-bedrock", baseUrl: "", hasApiKey: false });
+    expect(() => store.save({
+      provider: "google-compatible",
+      baseUrl: "",
+      modelId: "gemini-3-flash-preview",
+      thinkingLevel: "medium",
+    })).toThrow("兼容端点必须填写 API 地址");
   });
 });

@@ -26,10 +26,12 @@ pnpm build
 ## 配置并开始真实对话
 
 1. 打开左下角账户菜单，进入“设置 → 大模型”。
-2. 选择 Anthropic、OpenAI 或 OpenAI Compatible，填写 API 地址、真实模型 ID 与 thinking 级别。
-3. 输入 API Key 并保存。Key 由 Electron `safeStorage` 使用操作系统凭据加密，Renderer 只能看到“是否已配置”。本地 OpenAI Compatible 服务可不填 Key。
+2. 从 Pi SDK 的完整内置 Provider 目录中选择服务商与模型；也可选择 OpenAI Completions、OpenAI Responses、Anthropic Messages 或 Google Generative AI 兼容端点。
+3. 输入 API Key 并保存。Key 由 Electron `safeStorage` 使用操作系统凭据加密，Renderer 只能看到“是否已配置”。也支持 Pi Provider 官方定义的环境凭据与系统凭据链；本地兼容服务可不填 Key。
 4. 可点击“验证连接”发送一条最小真实模型请求。
 5. 返回对话；如需代码工具，先通过目录菜单授权一个工作目录，然后发送任务。
+
+Pi SDK 当前内置 38 个 Provider，设置页会直接读取 SDK 目录，不在产品代码中维护一份容易过期的硬编码副本。API Key、环境凭据以及 SDK 内置的 OAuth/订阅登录均可使用；浏览器授权、设备码、手动回调、取消和退出登录统一由 Electron 主进程编排。API Key、access token 与 refresh token 都通过操作系统 `safeStorage` 加密，Renderer 只能读取认证类型和状态。
 
 会话中会实时展示 thinking、文本增量、工具参数和输出。每一个 Pi `AgentSessionEvent` 也会按顺序捕获到可展开的事件流中；编译期完整性检查会在 SDK 新增或改名事件时直接失败，避免静默漏事件。`bash`、`edit`、`write` 每次执行前都会等待用户授权。模型还可以调用 `ask_user` 挂起并询问用户，或调用 `spawn_subagent` 创建只读的独立 Pi 子会话并把结果返回给主 Agent。停止按钮会中止当前 Pi Session 请求与等待中的问题。
 
