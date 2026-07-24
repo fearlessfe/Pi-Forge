@@ -1240,12 +1240,6 @@ textarea:focus-visible,
   gap: 6px;
 }
 
-.process-activity-list .agent-activity {
-  border-color: var(--border-soft);
-  border-radius: 8px;
-  background: var(--bg);
-}
-
 .agent-activity {
   width: 100%;
   overflow: hidden;
@@ -1314,6 +1308,78 @@ textarea:focus-visible,
 
 .tool-activity--error {
   border-color: rgb(255 133 133 / 24%);
+}
+
+.tool-group {
+  width: 100%;
+  color: var(--muted);
+}
+
+.tool-group-trigger {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  text-align: left;
+}
+
+.tool-group-trigger:hover {
+  color: var(--text-2);
+}
+
+.tool-group-trigger > span {
+  font-weight: 600;
+}
+
+.tool-group-trigger > svg:first-child {
+  color: var(--faint);
+}
+
+.tool-group-trigger > .activity-spinner,
+.tool-group-trigger > svg:nth-last-child(2) {
+  margin-left: auto;
+}
+
+.tool-group-trigger > .activity-chevron {
+  margin-left: 0;
+}
+
+.tool-group[data-state="open"] > .tool-group-trigger .activity-chevron {
+  transform: rotate(180deg);
+}
+
+.tool-group.has-error > .tool-group-trigger {
+  color: var(--danger);
+}
+
+.tool-group-content {
+  display: grid;
+  gap: 2px;
+  padding: 0 0 4px 22px;
+}
+
+.tool-group-content .agent-activity {
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.tool-group-content .agent-activity:hover,
+.tool-group-content .agent-activity[data-state="open"] {
+  border-color: var(--border-soft);
+  background: rgb(255 255 255 / 1.5%);
+}
+
+.tool-group-content .activity-trigger {
+  min-height: 31px;
+  padding: 0 6px;
 }
 
 .tool-content {

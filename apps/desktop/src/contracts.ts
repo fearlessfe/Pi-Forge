@@ -122,6 +122,7 @@ export type ResponseUsage = {
 };
 
 export type ConversationActivity =
+  | { id: string; type: "message"; text: string }
   | { id: string; type: "thinking"; text: string }
   | { id: string; type: "tool"; name: string; args: unknown; output: string; status: "running" | "success" | "error" }
   | { id: string; type: "question"; question: string; options: QuestionOption[]; answer?: string; status: "pending" | "answered" };

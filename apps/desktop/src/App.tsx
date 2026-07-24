@@ -4,6 +4,7 @@ import { ConversationSidebar } from "./components/ConversationSidebar";
 import { NewChatView } from "./components/NewChatView";
 import { SettingsView } from "./components/SettingsView";
 import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, SaveModelSettings } from "./contracts";
+import { appendMessageDelta } from "./conversation-activity";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { isPrimaryShortcut, shortcutLabel } from "./keyboard";
 import { mergeAnswerUsage } from "./response-usage";
@@ -80,8 +81,13 @@ function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[] {
     switch (event.type) {
       case "run.started":
         return current;
-      case "message.delta":
-        return { ...current, answer: current.answer + event.text };
+      case "message.delta": {
+        return {
+          ...current,
+          answer: current.answer + event.text,
+          activities: appendMessageDelta(current.activities, event.text),
+        };
+      }
       case "thinking.delta": {
         const last = current.activities.at(-1);
         const activities = last?.type === "thinking"

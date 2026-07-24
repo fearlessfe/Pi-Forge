@@ -9,6 +9,9 @@ function normalizeActivity(value: unknown, index: number): ConversationActivity 
   if (!value || typeof value !== "object") return undefined;
   const activity = value as Record<string, unknown>;
   const id = typeof activity.id === "string" ? activity.id : `history-activity-${index}`;
+  if (activity.type === "message") {
+    return { id, type: "message", text: typeof activity.text === "string" ? activity.text : "" };
+  }
   if (activity.type === "thinking") {
     return { id, type: "thinking", text: typeof activity.text === "string" ? activity.text : "" };
   }

@@ -435,7 +435,10 @@ export class AgentService {
         latestAssistant = { message: assistant, entryIndex };
         current.usage = mergeAnswerUsage(current.usage, responseUsage(assistant));
         for (const [contentIndex, content] of assistant.content.entries()) {
-          if (content.type === "text") current.answer += content.text;
+          if (content.type === "text") {
+            current.answer += content.text;
+            current.activities.push({ id: `${entry.id}-message-${contentIndex}`, type: "message", text: content.text });
+          }
           else if (content.type === "thinking" && content.thinking) {
             current.activities.push({ id: `${entry.id}-thinking-${contentIndex}`, type: "thinking", text: content.thinking });
           } else if (content.type === "toolCall") {

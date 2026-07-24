@@ -5,6 +5,6 @@
     "lib": ["ES2022", "DOM"],
     "types": ["node", "vitest/globals"]
   },
-  "include": ["electron/**/*.test.ts", "electron/**/*.ts", "electron/**/*.cts", "src/contracts.ts", "src/types.ts", "src/keyboard.ts", "src/keyboard.test.ts", "src/conversation-history.ts", "src/conversation-history.test.ts"],
+  "include": ["electron/**/*.test.ts", "electron/**/*.ts", "electron/**/*.cts", "src/contracts.ts", "src/types.ts", "src/keyboard.ts", "src/keyboard.test.ts", "src/conversation-activity.ts", "src/conversation-activity.test.ts", "src/conversation-history.ts", "src/conversation-history.test.ts"],
   "exclude": []
 }

@@ -15,11 +15,12 @@ describe("conversation history compatibility", () => {
 
   it("sanitizes malformed nested history fields instead of throwing", () => {
     expect(normalizeHistoryTurn({
-      activities: [null, { type: "question", question: "continue?" }, { type: "tool", name: "read" }],
+      activities: [null, { type: "message", text: "Checking now." }, { type: "question", question: "continue?" }, { type: "tool", name: "read" }],
       usage: { provider: "anthropic", model: "claude", inputTokens: Number.NaN },
     }, 2)).toMatchObject({
       id: "history-2",
       activities: [
+        { type: "message", text: "Checking now." },
         { type: "question", options: [], status: "pending" },
         { type: "tool", name: "read", output: "", status: "error" },
       ],

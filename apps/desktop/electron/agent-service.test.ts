@@ -327,6 +327,7 @@ describe("AgentService with a real Pi session", () => {
           activities: [
             expect.objectContaining({ type: "thinking", text: "I should inspect the files" }),
             expect.objectContaining({ type: "tool", name: "read", output: "project readme", status: "success" }),
+            expect.objectContaining({ type: "message", text: "historical answer" }),
           ],
         }],
       });

@@ -10,7 +10,6 @@ import {
   CircleStop,
   Copy,
   Folder,
-  ListTree,
   MessageCircleQuestion,
   Paperclip,
   RotateCcw,
@@ -258,18 +257,7 @@ function ThinkingActivity({ activity }: { activity: Extract<ChatActivity, { type
 function ToolActivity({ activity }: { activity: Extract<ChatActivity, { type: "tool" }> }) {
   const isSubagent = activity.name === "spawn_subagent" || activity.name === "pi_desktop_subagent";
   const Icon = isSubagent ? Users : TerminalSquare;
-  const toolLabels: Record<string, string> = {
-    read: "读取文件",
-    grep: "搜索内容",
-    find: "查找文件",
-    ls: "浏览目录",
-    bash: "运行命令",
-    edit: "编辑文件",
-    write: "写入文件",
-    spawn_subagent: "子 Agent",
-    pi_desktop_subagent: "子 Agent",
-  };
-  const title = toolLabels[activity.name] ?? activity.name;
+  const title = toolLabel(activity.name);
   return (
     <Collapsible.Root className={`agent-activity tool-activity tool-activity--${activity.status}`} defaultOpen={activity.status === "error"}>
       <Collapsible.Trigger className="activity-trigger">
@@ -287,43 +275,49 @@ function ToolActivity({ activity }: { activity: Extract<ChatActivity, { type: "t
   );
 }
 
-function ProcessActivity({ activities, status }: { activities: ChatActivity[]; status: ChatTurn["status"] }) {
-  const visible = activities.filter((activity): activity is Exclude<ChatActivity, { type: "question" }> => (
-    activity.type !== "question" && !(activity.type === "tool" && activity.name === "ask_user")
-  ));
-  if (visible.length === 0) return status === "running" ? <div className="agent-working"><i />Pi 正在分析任务…</div> : null;
+const toolLabels: Record<string, string> = {
+  read: "读取文件",
+  grep: "搜索内容",
+  find: "查找文件",
+  ls: "浏览目录",
+  bash: "运行命令",
+  edit: "编辑文件",
+  write: "写入文件",
+  spawn_subagent: "子 Agent",
+  pi_desktop_subagent: "子 Agent",
+};
 
-  const tools = visible.filter((activity): activity is Extract<ChatActivity, { type: "tool" }> => activity.type === "tool");
-  const hasThinking = visible.some((activity) => activity.type === "thinking");
-  const errors = tools.filter((activity) => activity.status === "error").length;
-  const latest = visible.at(-1);
-  const latestTool = latest?.type === "tool" ? latest : undefined;
-  const running = status === "running";
-  const headline = running
-    ? latestTool?.status === "running"
-      ? `正在${latestTool.name === "bash" ? "运行命令" : latestTool.name === "read" ? "读取文件" : latestTool.name === "edit" || latestTool.name === "write" ? "修改文件" : "处理任务"}…`
-      : "正在分析下一步…"
-    : errors > 0
-      ? `过程完成，${errors} 个步骤失败`
-      : "过程已完成";
-  const details = [tools.length > 0 ? `${tools.length} 个工具调用` : undefined, hasThinking ? "分析过程" : undefined]
-    .filter(Boolean)
-    .join(" · ");
+function toolLabel(name: string) {
+  return toolLabels[name] ?? name;
+}
+
+function ProcessGroup({ activities }: { activities: Exclude<ChatActivity, { type: "message" | "question" }>[] }) {
+  const tools = activities.filter((activity): activity is Extract<ChatActivity, { type: "tool" }> => activity.type === "tool");
+  const allCommands = tools.length > 0 && tools.every((tool) => tool.name === "bash");
+  const running = tools.some((tool) => tool.status === "running");
+  const failed = tools.some((tool) => tool.status === "error");
+  const title = tools.length === 0
+    ? "分析过程"
+    : allCommands
+      ? running
+        ? tools.length > 1 ? "正在运行多个命令" : "正在运行命令"
+        : tools.length > 1 ? "运行了多个命令" : "运行了 1 个命令"
+      : running
+        ? tools.length > 1 ? "正在调用多个工具" : `正在${toolLabel(tools[0].name)}`
+        : tools.length > 1 ? "调用了多个工具" : `调用了${toolLabel(tools[0].name)}`;
 
   return (
-    <Collapsible.Root className={`agent-process ${errors > 0 ? "has-error" : ""}`}>
-      <Collapsible.Trigger className="process-trigger">
-        <span className="process-icon">{running ? <i className="activity-spinner" /> : errors > 0 ? <XCircle size={14} /> : <CheckCircle2 size={14} />}</span>
-        <span><strong>{headline}</strong><small>{details || "准备回答"}</small></span>
+    <Collapsible.Root className={`tool-group ${failed ? "has-error" : ""}`} defaultOpen={failed}>
+      <Collapsible.Trigger className="tool-group-trigger">
+        <TerminalSquare size={15} />
+        <span>{title}</span>
+        {running ? <i className="activity-spinner" /> : failed ? <XCircle size={13} /> : <CheckCircle2 size={13} />}
         <ChevronDown size={14} className="activity-chevron" />
       </Collapsible.Trigger>
-      <Collapsible.Content className="process-content">
-        <header><ListTree size={13} /><span>详细过程</span></header>
-        <div className="process-activity-list">
-          {visible.map((activity) => activity.type === "thinking"
-            ? <ThinkingActivity key={activity.id} activity={activity} />
-            : <ToolActivity key={activity.id} activity={activity} />)}
-        </div>
+      <Collapsible.Content className="tool-group-content">
+        {activities.map((activity) => activity.type === "thinking"
+          ? <ThinkingActivity key={activity.id} activity={activity} />
+          : <ToolActivity key={activity.id} activity={activity} />)}
       </Collapsible.Content>
     </Collapsible.Root>
   );
@@ -370,14 +364,66 @@ function QuestionActivity({
   );
 }
 
+function MessageActivity({ text }: { text: string }) {
+  if (!text) return null;
+  return <div className="answer-content"><p>{text}</p></div>;
+}
+
+function ActivityTimeline({
+  turn,
+  onAnswerQuestion,
+}: {
+  turn: ChatTurn;
+  onAnswerQuestion: NewChatViewProps["onAnswerQuestion"];
+}) {
+  const activities = Array.isArray(turn.activities) ? turn.activities : [];
+  const visible = activities.filter((activity) => !(activity.type === "tool" && activity.name === "ask_user"));
+  const hasMessages = visible.some((activity) => activity.type === "message" && activity.text);
+  const timeline: Array<
+    | { type: "direct"; activity: Extract<ChatActivity, { type: "message" | "question" }> }
+    | { type: "process"; key: string; activities: Exclude<ChatActivity, { type: "message" | "question" }>[] }
+  > = [];
+  let process: Exclude<ChatActivity, { type: "message" | "question" }>[] = [];
+
+  function flushProcess() {
+    if (process.length === 0) return;
+    timeline.push({ type: "process", key: `process-${process[0].id}`, activities: process });
+    process = [];
+  }
+
+  for (const activity of visible) {
+    if (activity.type === "message" || activity.type === "question") {
+      flushProcess();
+      timeline.push({ type: "direct", activity });
+    } else {
+      process.push(activity);
+    }
+  }
+  flushProcess();
+
+  if (visible.length === 0) {
+    if (turn.answer) return <MessageActivity text={turn.answer} />;
+    return turn.status === "running" ? <div className="agent-working"><i />Pi 正在分析任务…</div> : null;
+  }
+
+  return (
+    <>
+      {timeline.map((item) => {
+        if (item.type === "process") return <ProcessGroup key={item.key} activities={item.activities} />;
+        if (item.activity.type === "message") return <MessageActivity key={item.activity.id} text={item.activity.text} />;
+        return <QuestionActivity key={item.activity.id} turnId={turn.id} activity={item.activity} onAnswer={onAnswerQuestion} />;
+      })}
+      {!hasMessages && turn.answer && <MessageActivity text={turn.answer} />}
+    </>
+  );
+}
+
 function ConversationTurn({ turn, onRetry, onAnswerQuestion }: {
   turn: ChatTurn;
   onRetry: (turnId: string) => void;
   onAnswerQuestion: NewChatViewProps["onAnswerQuestion"];
 }) {
   const [copied, setCopied] = useState(false);
-  const activities = Array.isArray(turn.activities) ? turn.activities : [];
-
   async function copyQuestion() {
     await navigator.clipboard.writeText(turn.question);
     setCopied(true);
@@ -401,11 +447,7 @@ function ConversationTurn({ turn, onRetry, onAnswerQuestion }: {
       </section>
       <section className="qa-message qa-answer" aria-label="Agent 回答">
         <div className="agent-response">
-          {activities.filter((activity) => activity.type === "question").map((activity) => activity.type === "question"
-            ? <QuestionActivity key={`question-${activity.id}`} turnId={turn.id} activity={activity} onAnswer={onAnswerQuestion} />
-            : null)}
-          <ProcessActivity activities={activities} status={turn.status} />
-          {turn.answer && <div className="answer-content"><p>{turn.answer}</p></div>}
+          <ActivityTimeline turn={turn} onAnswerQuestion={onAnswerQuestion} />
           {turn.usage && <ResponseUsageLine usage={turn.usage} />}
           {turn.status === "error" && <div className="agent-error"><XCircle size={14} />{turn.error}</div>}
           {turn.status === "stopped" && <div className="agent-stopped">任务已停止</div>}
