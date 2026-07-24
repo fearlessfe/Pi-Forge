@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { shortcutLabel } from "../keyboard";
+import { useI18n } from "../i18n";
 import type { Conversation, Project } from "../types";
 import { BrandMark } from "./BrandMark";
 
@@ -63,6 +64,7 @@ function ConversationRow({
   onRename: (title: string) => Promise<void>;
   onDelete: () => Promise<void>;
 }) {
+  const { t } = useI18n();
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(conversation.title);
   const [saving, setSaving] = useState(false);
@@ -86,7 +88,7 @@ function ConversationRow({
           autoFocus
           value={title}
           maxLength={60}
-          aria-label={`重命名“${conversation.title}”`}
+          aria-label={t("重命名“{title}”", { title: conversation.title })}
           onChange={(event) => setTitle(event.target.value)}
           onFocus={(event) => event.currentTarget.select()}
           onKeyDown={(event) => {
@@ -97,8 +99,8 @@ function ConversationRow({
             }
           }}
         />
-        <button type="submit" aria-label="保存名称" disabled={!title.trim() || saving}><Check size={13} /></button>
-        <button type="button" aria-label="取消重命名" disabled={saving} onClick={() => { setTitle(conversation.title); setEditing(false); }}><X size={13} /></button>
+        <button type="submit" aria-label={t("保存名称")} disabled={!title.trim() || saving}><Check size={13} /></button>
+        <button type="button" aria-label={t("取消重命名")} disabled={saving} onClick={() => { setTitle(conversation.title); setEditing(false); }}><X size={13} /></button>
       </form>
     );
   }
@@ -118,8 +120,8 @@ function ConversationRow({
           <button
             className="conversation-actions"
             type="button"
-            aria-label={`管理“${conversation.title}”`}
-            title={actionsDisabled ? "Agent 运行中暂不可管理会话" : "管理会话"}
+            aria-label={t("管理“{title}”", { title: conversation.title })}
+            title={t(actionsDisabled ? "Agent 运行中暂不可管理会话" : "管理会话")}
             disabled={actionsDisabled}
           >
             <MoreHorizontal size={14} />
@@ -128,12 +130,12 @@ function ConversationRow({
         <DropdownMenu.Portal>
           <DropdownMenu.Content className="dropdown-content conversation-menu" side="right" align="start" sideOffset={6}>
             <DropdownMenu.Item className="dropdown-item conversation-menu-item" onSelect={() => setEditing(true)}>
-              <Pencil size={13} /><span>重命名</span>
+              <Pencil size={13} /><span>{t("重命名")}</span>
             </DropdownMenu.Item>
             <DropdownMenu.Item className="dropdown-item conversation-menu-item is-danger" onSelect={() => {
-              if (window.confirm(`确定删除“${conversation.title}”吗？此操作不可恢复。`)) void onDelete();
+              if (window.confirm(t("确定删除“{title}”吗？此操作不可恢复。", { title: conversation.title }))) void onDelete();
             }}>
-              <Trash2 size={13} /><span>删除对话</span>
+              <Trash2 size={13} /><span>{t("删除对话")}</span>
             </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
@@ -161,6 +163,7 @@ function ProjectGroup({
   onDeleteConversation: (conversationId: string, project: Project) => Promise<void>;
   conversationActionsDisabled: boolean;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(project.conversations.some(({ id }) => id === selectedConversationId));
 
   return (
@@ -182,19 +185,19 @@ function ProjectGroup({
         <button
           className="project-new-chat"
           type="button"
-          aria-label={`在“${project.name}”中新建会话`}
-          title="新建项目会话"
+          aria-label={t("在“{name}”中新建会话", { name: project.name })}
+          title={t("新建项目会话")}
           onClick={() => onNewProjectChat(project)}
         >
           <Plus size={14} />
         </button>
-        <Collapsible.Trigger className="project-toggle" type="button" aria-label={`${forceOpen || open ? "收起" : "展开"}“${project.name}”`}>
+        <Collapsible.Trigger className="project-toggle" type="button" aria-label={`${t(forceOpen || open ? "收起" : "展开")} “${project.name}”`}>
           {forceOpen || open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         </Collapsible.Trigger>
       </div>
       <Collapsible.Content className="project-thread-list">
         {project.conversations.length === 0 ? (
-          <p className="sidebar-empty sidebar-empty--project">暂无对话</p>
+          <p className="sidebar-empty sidebar-empty--project">{t("暂无对话")}</p>
         ) : project.conversations.map((conversation) => (
           <ConversationRow
             key={conversation.id}
@@ -230,6 +233,7 @@ export function ConversationSidebar({
   onOpenPlugins,
   onOpenPet,
 }: ConversationSidebarProps) {
+  const { t } = useI18n();
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -274,23 +278,23 @@ export function ConversationSidebar({
         <button
           className="icon-button sidebar-collapse"
           type="button"
-          aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
-          title={collapsed ? "展开侧栏" : "收起侧栏"}
+          aria-label={t(collapsed ? "展开侧栏" : "收起侧栏")}
+          title={t(collapsed ? "展开侧栏" : "收起侧栏")}
           onClick={onToggleCollapsed}
         >
           {collapsed ? <ChevronsRight size={17} /> : <ChevronsLeft size={17} />}
         </button>
       </header>
 
-      <nav className="sidebar-primary-nav" aria-label="主要导航">
-        <button className="primary-nav-item is-active" type="button" onClick={onNewChat} title="新建对话">
+      <nav className="sidebar-primary-nav" aria-label={t("主要导航")}>
+        <button className="primary-nav-item is-active" type="button" onClick={onNewChat} title={t("新建对话")}>
           <Plus size={18} />
-          <span>新建对话</span>
+          <span>{t("新建对话")}</span>
           <kbd>{shortcutLabel("N")}</kbd>
         </button>
-        <button className="primary-nav-item" type="button" onClick={onOpenPlugins} title="插件">
+        <button className="primary-nav-item" type="button" onClick={onOpenPlugins} title={t("插件")}>
           <Package size={17} />
-          <span>插件</span>
+          <span>{t("插件")}</span>
         </button>
       </nav>
 
@@ -305,15 +309,15 @@ export function ConversationSidebar({
               onKeyDown={(event) => {
                 if (event.key === "Escape") toggleSearch();
               }}
-              placeholder="搜索对话或项目"
-              aria-label="搜索对话或项目"
+              placeholder={t("搜索对话或项目")}
+              aria-label={t("搜索对话或项目")}
             />
-            <button type="button" onClick={toggleSearch} aria-label="关闭搜索"><X size={13} /></button>
+            <button type="button" onClick={toggleSearch} aria-label={t("关闭搜索")}><X size={13} /></button>
           </div>
         ) : (
           <div className="sidebar-section-title">
-            <span>普通对话</span>
-            <button className="icon-button" type="button" aria-label="搜索对话" onClick={toggleSearch}>
+            <span>{t("普通对话")}</span>
+            <button className="icon-button" type="button" aria-label={t("搜索对话")} onClick={toggleSearch}>
               <Search size={14} />
             </button>
           </div>
@@ -330,11 +334,11 @@ export function ConversationSidebar({
             onDelete={() => onDeleteConversation(conversation.id)}
           />
         ))}
-        {!normalizedQuery && conversations.length === 0 && <p className="sidebar-empty">暂无普通对话</p>}
+        {!normalizedQuery && conversations.length === 0 && <p className="sidebar-empty">{t("暂无普通对话")}</p>}
 
         <div className="sidebar-section-title sidebar-section-title--projects">
-          <span>项目</span>
-          <button className="icon-button" type="button" aria-label="添加项目" onClick={onAddProject}>
+          <span>{t("项目")}</span>
+          <button className="icon-button" type="button" aria-label={t("添加项目")} onClick={onAddProject}>
             <Plus size={14} />
           </button>
         </div>
@@ -351,33 +355,33 @@ export function ConversationSidebar({
             conversationActionsDisabled={conversationActionsDisabled}
           />
         ))}
-        {!normalizedQuery && projects.length === 0 && <p className="sidebar-empty">暂无项目</p>}
-        {noSearchResults && <p className="sidebar-search-empty">没有找到“{searchQuery.trim()}”</p>}
+        {!normalizedQuery && projects.length === 0 && <p className="sidebar-empty">{t("暂无项目")}</p>}
+        {noSearchResults && <p className="sidebar-search-empty">{t("没有找到“{query}”", { query: searchQuery.trim() })}</p>}
       </div>
 
       <div className="sidebar-user-zone">
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
-            <button className="user-trigger" type="button" title="本地账户">
+            <button className="user-trigger" type="button" title={t("本地账户")}>
               <span className="user-avatar">PZ</span>
               <span>
                 <strong>Pengzhen</strong>
-                <small>所有数据保存在本机</small>
+                <small>{t("所有数据保存在本机")}</small>
               </span>
               <MoreHorizontal size={17} />
             </button>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content className="dropdown-content user-menu" side="top" align="start" sideOffset={8}>
-              <div className="dropdown-account">Pengzhen · 本地账户</div>
+              <div className="dropdown-account">Pengzhen · {t("本地账户")}</div>
               <DropdownMenu.Item className="dropdown-item user-menu-item" onSelect={onOpenPet}>
                 <span className="menu-item-icon"><Sparkles size={15} /></span>
-                <span><strong>宠物</strong><small>陪伴模式与个性设置</small></span>
+                <span><strong>{t("宠物")}</strong><small>{t("陪伴模式与个性设置")}</small></span>
                 <ChevronRight size={14} />
               </DropdownMenu.Item>
               <DropdownMenu.Item className="dropdown-item user-menu-item" onSelect={onOpenSettings}>
                 <span className="menu-item-icon"><Settings size={15} /></span>
-                <span><strong>设置</strong><small>模型、权限与应用偏好</small></span>
+                <span><strong>{t("设置")}</strong><small>{t("模型、权限与应用偏好")}</small></span>
                 <ChevronRight size={14} />
               </DropdownMenu.Item>
             </DropdownMenu.Content>

@@ -7,6 +7,7 @@ import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, 
 import { appendMessageDelta } from "./conversation-activity";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { isPrimaryShortcut, shortcutLabel } from "./keyboard";
+import { useI18n } from "./i18n";
 import { mergeAnswerUsage } from "./response-usage";
 import type { AppView, AuthFlowState, ChatTurn, Conversation, Project, SettingsSection, Theme } from "./types";
 
@@ -43,22 +44,22 @@ function eventError(error: unknown): string {
   return message.replace(/^Error invoking remote method '[^']+': Error: /, "");
 }
 
-function historyTimestamp(timestamp: string): string {
+function historyTimestamp(timestamp: string, locale: string): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "";
   const today = new Date();
   if (date.toDateString() === today.toDateString()) {
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
   }
-  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  return date.toLocaleDateString(locale, { month: "short", day: "numeric" });
 }
 
-function historyConversation(item: ConversationHistoryItem): Conversation {
+function historyConversation(item: ConversationHistoryItem, t: (message: string) => string, locale: string): Conversation {
   return {
     id: item.id,
     title: item.title,
-    subtitle: item.project?.name ?? "普通对话",
-    updatedAt: historyTimestamp(item.updatedAt),
+    subtitle: item.project?.name ?? t("普通对话"),
+    updatedAt: historyTimestamp(item.updatedAt, locale),
   };
 }
 
@@ -151,14 +152,14 @@ function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[] {
   });
 }
 
-function applyAuthEvent(current: AuthFlowState | null, event: AuthEvent): AuthFlowState | null {
+function applyAuthEvent(current: AuthFlowState | null, event: AuthEvent, t: (message: string) => string): AuthFlowState | null {
   if (event.type === "auth.started") return { loginId: event.loginId, providerId: event.providerId, status: "running" };
   if (!current || current.loginId !== event.loginId) return current;
   switch (event.type) {
     case "auth.url":
-      return { ...current, url: event.url, message: event.instructions ?? "请在浏览器中完成登录。" };
+      return { ...current, url: event.url, message: event.instructions ?? t("请在浏览器中完成登录。") };
     case "auth.device-code":
-      return { ...current, deviceCode: { userCode: event.userCode, verificationUri: event.verificationUri, expiresInSeconds: event.expiresInSeconds }, message: "请在浏览器中输入设备码。" };
+      return { ...current, deviceCode: { userCode: event.userCode, verificationUri: event.verificationUri, expiresInSeconds: event.expiresInSeconds }, message: t("请在浏览器中输入设备码。") };
     case "auth.progress":
       return { ...current, message: event.message };
     case "auth.prompt":
@@ -174,6 +175,7 @@ function applyAuthEvent(current: AuthFlowState | null, event: AuthEvent): AuthFl
 }
 
 export function App() {
+  const { language, locale, t } = useI18n();
   const [view, setView] = useState<AppView>("chat");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("models");
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
@@ -216,7 +218,7 @@ export function App() {
   useEffect(() => {
     void refreshModelSettings();
     void refreshPermissionRuntime();
-    void refreshProviderCatalog("无法读取模型目录");
+    void refreshProviderCatalog(t("无法读取模型目录"));
     void refreshConversationHistory();
     const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => {
       if (event.type === "context.updated") setContextUsage(event.usage);
@@ -226,30 +228,30 @@ export function App() {
       }
     });
     const unsubscribeAuth = window.piDesktop?.auth?.onEvent((event) => {
-      setAuthFlow((current) => applyAuthEvent(current, event));
+      setAuthFlow((current) => applyAuthEvent(current, event, t));
       if (event.type === "auth.completed") {
         void refreshModelSettings();
-        void refreshProviderCatalog("模型目录刷新失败");
-        setNotice({ title: "登录成功", message: `${event.providerId} 的 OAuth 凭据已安全保存。`, type: "success" });
+        void refreshProviderCatalog(t("模型目录刷新失败"));
+        setNotice({ title: t("登录成功"), message: t("{provider} 的 OAuth 凭据已安全保存。", { provider: event.providerId }), type: "success" });
       } else if (event.type === "auth.error") {
-        setNotice({ title: "登录失败", message: event.message, type: "info" });
+        setNotice({ title: t("登录失败"), message: event.message, type: "info" });
       }
     });
     return () => {
       unsubscribeAgent?.();
       unsubscribeAuth?.();
     };
-  }, []);
+  }, [language]);
 
   async function refreshModelSettings() {
     await window.piDesktop?.settings.get().then(setModelSettings).catch((error: unknown) => {
-      setNotice({ title: "无法读取模型设置", message: eventError(error), type: "info" });
+      setNotice({ title: t("无法读取模型设置"), message: eventError(error), type: "info" });
     });
   }
 
   async function refreshPermissionRuntime() {
     await window.piDesktop?.permissions?.get().then(setPermissionRuntime).catch((error: unknown) => {
-      setNotice({ title: "无法读取权限设置", message: eventError(error), type: "info" });
+      setNotice({ title: t("无法读取权限设置"), message: eventError(error), type: "info" });
     });
   }
 
@@ -266,22 +268,22 @@ export function App() {
     if (!window.piDesktop || typeof window.piDesktop.agent.listConversations !== "function") return;
     try {
       const history = await window.piDesktop.agent.listConversations();
-      setConversations(history.filter((item) => !item.project).map(historyConversation));
+      setConversations(history.filter((item) => !item.project).map((item) => historyConversation(item, t, locale)));
       const grouped = new Map<string, Project>();
       for (const item of history) {
         if (!item.project) continue;
         const existing = grouped.get(item.project.id);
-        const conversation = historyConversation(item);
+        const conversation = historyConversation(item, t, locale);
         if (existing) existing.conversations.push(conversation);
         else grouped.set(item.project.id, { ...item.project, conversations: [conversation] });
       }
       setProjects([...grouped.values()]);
     } catch (error) {
-      setNotice({ title: "无法读取会话历史", message: eventError(error), type: "info" });
+      setNotice({ title: t("无法读取会话历史"), message: eventError(error), type: "info" });
     }
   }
 
-  const title = useMemo(() => (view === "settings" ? "设置" : project?.name ?? "新建对话"), [project, view]);
+  const title = useMemo(() => (view === "settings" ? t("设置") : project?.name ?? t("新建对话")), [project, t, view]);
   const isRunning = turns.some((turn) => turn.status === "running");
   const configuredModelProviders = useMemo(() => {
     const configured = new Set(modelSettings.configuredProviders);
@@ -326,7 +328,7 @@ export function App() {
 
   async function renameConversation(conversationId: string, title: string, scopeProject?: Project) {
     if (!window.piDesktop?.agent.renameConversation) {
-      setNotice({ title: "无法重命名会话", message: "请完全退出并重新启动新版 Pi Desktop。", type: "info" });
+      setNotice({ title: t("无法重命名会话"), message: t("请完全退出并重新启动新版 Pi Desktop。"), type: "info" });
       throw new Error("会话重命名接口不可用。");
     }
     try {
@@ -342,16 +344,16 @@ export function App() {
       } else {
         setConversations((current) => current.map(rename));
       }
-      setNotice({ title: "会话已重命名", message: title, type: "success" });
+      setNotice({ title: t("会话已重命名"), message: title, type: "success" });
     } catch (error) {
-      setNotice({ title: "无法重命名会话", message: eventError(error), type: "info" });
+      setNotice({ title: t("无法重命名会话"), message: eventError(error), type: "info" });
       throw error;
     }
   }
 
   async function deleteConversation(conversationId: string, scopeProject?: Project) {
     if (!window.piDesktop?.agent.deleteConversation) {
-      setNotice({ title: "无法删除会话", message: "请完全退出并重新启动新版 Pi Desktop。", type: "info" });
+      setNotice({ title: t("无法删除会话"), message: t("请完全退出并重新启动新版 Pi Desktop。"), type: "info" });
       return;
     }
     try {
@@ -379,9 +381,9 @@ export function App() {
         setContextUsage(undefined);
         if (!scopeProject) setProject(null);
       }
-      setNotice({ title: "会话已删除", message: "本地会话历史已删除。", type: "success" });
+      setNotice({ title: t("会话已删除"), message: t("本地会话历史已删除。"), type: "success" });
     } catch (error) {
-      setNotice({ title: "无法删除会话", message: eventError(error), type: "info" });
+      setNotice({ title: t("无法删除会话"), message: eventError(error), type: "info" });
     }
   }
 
@@ -420,7 +422,7 @@ export function App() {
       setContextUsage(restoredContext);
     } catch (error) {
       setTurns([]);
-      setNotice({ title: "无法打开会话", message: eventError(error), type: "info" });
+      setNotice({ title: t("无法打开会话"), message: eventError(error), type: "info" });
     }
   }
 
@@ -446,8 +448,8 @@ export function App() {
     const conversation: Conversation = {
       id: conversationId,
       title: normalizedTitle.length > 34 ? `${normalizedTitle.slice(0, 34)}…` : normalizedTitle,
-      subtitle: project ? project.name : "普通对话",
-      updatedAt: "刚刚",
+      subtitle: project ? project.name : t("普通对话"),
+      updatedAt: t("刚刚"),
     };
     setSelectedConversationId(conversationId);
     if (project) {
@@ -531,8 +533,8 @@ export function App() {
     if (!window.piDesktop) throw new Error("模型设置只能在 Electron 应用中保存。");
     const saved = await window.piDesktop.settings.save(input);
     setModelSettings(saved);
-    void refreshProviderCatalog("模型目录刷新失败");
-    setNotice({ title: "设置已保存", message: "模型配置已保存；API Key（如有）已加密存储。", type: "success" });
+    void refreshProviderCatalog(t("模型目录刷新失败"));
+    setNotice({ title: t("设置已保存"), message: t("模型配置已保存；API Key（如有）已加密存储。"), type: "success" });
   }
 
   async function savePermissionSettings(input: PermissionSettings) {
@@ -540,8 +542,8 @@ export function App() {
     const saved = await window.piDesktop.permissions.save(input);
     setPermissionRuntime(saved);
     setNotice({
-      title: "权限模式已更新",
-      message: saved.mode === "balanced" ? "工作区内操作将自动执行，危险操作仍会询问。" : "Shell 与文件修改将在执行前确认。",
+      title: t("权限模式已更新"),
+      message: t(saved.mode === "balanced" ? "工作区内操作将自动执行，危险操作仍会询问。" : "Shell 与文件修改将在执行前确认。"),
       type: "success",
     });
   }
@@ -597,19 +599,19 @@ export function App() {
         setContextUsage(undefined);
       }
       setNotice({
-        title: "模型已切换",
-        message: `${provider.name} · ${modelId}${startsNewConversation ? "；已开始新对话" : ""}`,
+        title: t("模型已切换"),
+        message: `${provider.name} · ${modelId}${startsNewConversation ? t("；已开始新对话") : ""}`,
         type: "success",
       });
     } catch (error) {
-      setNotice({ title: "模型切换失败", message: eventError(error), type: "info" });
+      setNotice({ title: t("模型切换失败"), message: eventError(error), type: "info" });
     }
   }
 
   async function testModelSettings(input: SaveModelSettings) {
     if (!window.piDesktop) throw new Error("连接验证只能在 Electron 应用中运行。");
     const result = await window.piDesktop.settings.test(input);
-    setNotice({ title: "连接成功", message: `模型返回：${result.response}`, type: "success" });
+    setNotice({ title: t("连接成功"), message: t("模型返回：{response}", { response: result.response }), type: "success" });
   }
 
   async function loginProvider(providerId: string) {
@@ -633,7 +635,7 @@ export function App() {
     if (!window.piDesktop?.auth) throw new Error("OAuth 模块尚未加载，请重新启动 Pi Desktop。");
     await window.piDesktop.auth.logout(providerId);
     await refreshModelSettings();
-    setNotice({ title: "已退出登录", message: `${providerId} 的已保存凭据已删除。`, type: "success" });
+    setNotice({ title: t("已退出登录"), message: t("{provider} 的已保存凭据已删除。", { provider: providerId }), type: "success" });
   }
 
   useEffect(() => {
@@ -660,7 +662,7 @@ export function App() {
         <header className="window-bar">
           <span className="window-drag-spacer" aria-hidden="true" />
           <span className="window-title">Pi Desktop — {title}</span>
-          <span className="window-shortcut" title="搜索对话或项目">{shortcutLabel("K")}</span>
+          <span className="window-shortcut" title={t("搜索对话或项目")}>{shortcutLabel("K")}</span>
         </header>
 
         {view === "chat" ? (
@@ -681,7 +683,7 @@ export function App() {
               onAddProject={() => void chooseWorkspace()}
               onOpenSettings={() => { setSettingsSection("models"); setView("settings"); }}
               onOpenPlugins={() => { setSettingsSection("plugins"); setView("settings"); }}
-              onOpenPet={() => setNotice({ title: "Pi 宠物", message: "陪伴模式将在后续版本接入。", type: "info" })}
+              onOpenPet={() => setNotice({ title: t("Pi 宠物"), message: t("陪伴模式将在后续版本接入。"), type: "info" })}
             />
             <main className="chat-main">
               <NewChatView
@@ -733,9 +735,9 @@ export function App() {
 
         {notice && (
           <div className={`notice notice--${notice.type}`} role="status">
-            <span className="notice-icon">{notice.type === "success" ? <CheckCircle2 size={17} /> : notice.title.includes("插件") ? <Package size={17} /> : <Sparkles size={17} />}</span>
+            <span className="notice-icon">{notice.type === "success" ? <CheckCircle2 size={17} /> : notice.title.includes(t("插件")) ? <Package size={17} /> : <Sparkles size={17} />}</span>
             <span><strong>{notice.title}</strong><small>{notice.message}</small></span>
-            <button type="button" onClick={() => setNotice(null)} aria-label="关闭提示"><X size={14} /></button>
+            <button type="button" onClick={() => setNotice(null)} aria-label={t("关闭提示")}><X size={14} /></button>
           </div>
         )}
       </section>

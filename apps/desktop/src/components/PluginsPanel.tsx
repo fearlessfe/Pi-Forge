@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useI18n } from "../i18n";
 import type {
   InstalledPlugin,
   PackageCapabilityProvider,
@@ -40,9 +41,9 @@ function errorMessage(error: unknown): string {
   return message.replace(/^Error invoking remote method '[^']+': Error: /, "");
 }
 
-function compactNumber(value?: number): string | undefined {
+function compactNumber(value?: number, locale = "zh-CN"): string | undefined {
   if (value === undefined) return undefined;
-  return new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+  return new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
 function compatibilityCopy(plugin: PluginPackage): string {
@@ -72,20 +73,22 @@ function PackageCapabilityCard({
   onChange: (source: string) => void;
   onSave: () => void;
 }) {
+  const { t } = useI18n();
   const sources = [...new Set([
     ...installed.map((plugin) => plugin.source),
     ...history.flatMap((provider) => provider.kind === "plugin" ? [provider.source] : []),
   ])];
   return (
     <section className="capability-card package-capability-card">
-      <header><span><strong>{title}</strong><small>{description}</small></span><span className="capability-state">{effective?.kind === "plugin" ? effective.source.replace(/^npm:/, "") : effective?.kind === "none" ? "未启用" : "等待会话"}</span></header>
-      <label className="capability-tool-field"><span>能力提供者</span><select className="native-select" value={value} onChange={(event) => onChange(event.target.value)}><option value="">不启用</option>{sources.map((source) => <option value={source} key={source}>{source.replace(/^npm:/, "")}</option>)}</select><small>切换不会删除旧插件数据；旧版本仍保留在历史中。</small></label>
-      <footer><span>{history.filter((provider) => provider.kind === "plugin").length} 个历史提供者</span><button className="primary-button" type="button" disabled={busy} onClick={onSave}>应用能力提供者</button></footer>
+      <header><span><strong>{t(title)}</strong><small>{t(description)}</small></span><span className="capability-state">{effective?.kind === "plugin" ? effective.source.replace(/^npm:/, "") : t(effective?.kind === "none" ? "未启用" : "等待会话")}</span></header>
+      <label className="capability-tool-field"><span>{t("能力提供者")}</span><select className="native-select" value={value} onChange={(event) => onChange(event.target.value)}><option value="">{t("不启用")}</option>{sources.map((source) => <option value={source} key={source}>{source.replace(/^npm:/, "")}</option>)}</select><small>{t("切换不会删除旧插件数据；旧版本仍保留在历史中。")}</small></label>
+      <footer><span>{history.filter((provider) => provider.kind === "plugin").length} {t("个历史提供者")}</span><button className="primary-button" type="button" disabled={busy} onClick={onSave}>{t("应用能力提供者")}</button></footer>
     </section>
   );
 }
 
 export function PluginsPanel({ agentRunning }: PluginsPanelProps) {
+  const { t, locale } = useI18n();
   const [tab, setTab] = useState<"discover" | "installed">("discover");
   const [query, setQuery] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
@@ -288,27 +291,27 @@ export function PluginsPanel({ agentRunning }: PluginsPanelProps) {
   return (
     <div className="settings-panel plugins-panel">
       <header className="settings-page-header plugins-header">
-        <div><h2>插件</h2><p>发现并管理 npm 上标记为 pi-package 的扩展、Skills、Prompts 与主题。</p></div>
-        <button className="secondary-button plugin-reload-button" type="button" disabled={Boolean(operation) || agentRunning} onClick={() => void reloadPlugins()}><RefreshCw size={13} />重新加载</button>
+        <div><h2>{t("插件")}</h2><p>{t("发现并管理 npm 上标记为 pi-package 的扩展、Skills、Prompts 与主题。")}</p></div>
+        <button className="secondary-button plugin-reload-button" type="button" disabled={Boolean(operation) || agentRunning} onClick={() => void reloadPlugins()}><RefreshCw size={13} />{t("重新加载")}</button>
       </header>
 
-      <div className="plugin-tabs" role="tablist" aria-label="插件分类">
-        <button className={tab === "discover" ? "is-active" : ""} type="button" onClick={() => setTab("discover")}>发现插件</button>
-        <button className={tab === "installed" ? "is-active" : ""} type="button" onClick={() => setTab("installed")}>已安装 <span>{installed.length}</span></button>
+      <div className="plugin-tabs" role="tablist" aria-label={t("插件分类")}>
+        <button className={tab === "discover" ? "is-active" : ""} type="button" onClick={() => setTab("discover")}>{t("发现插件")}</button>
+        <button className={tab === "installed" ? "is-active" : ""} type="button" onClick={() => setTab("installed")}>{t("已安装")} <span>{installed.length}</span></button>
       </div>
 
       {tab === "discover" ? (
         <>
           <form className="plugin-search" onSubmit={(event) => { event.preventDefault(); void searchPackages(query.trim()); }}>
             <Search size={15} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Pi 插件，例如 browser、git、memory" aria-label="搜索插件" />
-            {query && <button className="plugin-search-clear" type="button" onClick={() => { setQuery(""); void searchPackages(""); }} aria-label="清空搜索"><X size={13} /></button>}
-            <button className="primary-button" type="submit" disabled={loading}>{loading ? "搜索中…" : "搜索"}</button>
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("搜索 Pi 插件，例如 browser、git、memory")} aria-label={t("搜索插件")} />
+            {query && <button className="plugin-search-clear" type="button" onClick={() => { setQuery(""); void searchPackages(""); }} aria-label={t("清空搜索")}><X size={13} /></button>}
+            <button className="primary-button" type="submit" disabled={loading}>{t(loading ? "搜索中…" : "搜索")}</button>
           </form>
 
           <div className="plugin-result-meta">
-            <span>{submittedQuery ? `“${submittedQuery}” 的搜索结果` : "Pi Packages"}</span>
-            <small>{total.toLocaleString("zh-CN")} 个包</small>
+            <span>{submittedQuery ? t("“{query}” 的搜索结果", { query: submittedQuery }) : "Pi Packages"}</span>
+            <small>{total.toLocaleString(locale)} {t("个包")}</small>
           </div>
 
           <div className="plugin-grid">
@@ -321,12 +324,12 @@ export function PluginsPanel({ agentRunning }: PluginsPanelProps) {
                   <p>{plugin.description}</p>
                   <div className="plugin-tags">
                     {plugin.resources.length > 0 ? plugin.resources.map((resource) => <span key={resource}>{resourceLabels[resource]}</span>) : <span>Pi Package</span>}
-                    <span className={`compatibility-badge compatibility-badge--${plugin.compatibility}`}>{compatibilityCopy(plugin)}</span>
+                    <span className={`compatibility-badge compatibility-badge--${plugin.compatibility}`}>{t(compatibilityCopy(plugin))}</span>
                   </div>
                   <footer>
-                    <span>{compactNumber(plugin.weeklyDownloads) ? `${compactNumber(plugin.weeklyDownloads)} 周下载` : plugin.license ?? "许可证未知"}</span>
+                    <span>{compactNumber(plugin.weeklyDownloads, locale) ? `${compactNumber(plugin.weeklyDownloads, locale)} ${t("周下载")}` : plugin.license ?? t("许可证未知")}</span>
                     <button className={isInstalled ? "secondary-button" : "primary-button"} type="button" disabled={isInstalled || Boolean(operation) || agentRunning} onClick={() => void openInstall(plugin)}>
-                      {isInstalled ? <><Check size={13} />已安装</> : isLoadingDetails ? "读取中…" : <><Download size={13} />安装</>}
+                      {isInstalled ? <><Check size={13} />{t("已安装")}</> : isLoadingDetails ? t("读取中…") : <><Download size={13} />{t("安装")}</>}
                     </button>
                   </footer>
                 </article>
@@ -334,26 +337,26 @@ export function PluginsPanel({ agentRunning }: PluginsPanelProps) {
             })}
           </div>
 
-          {!loading && packages.length === 0 && <div className="plugin-empty"><Search size={20} /><strong>没有找到插件</strong><span>换个关键词试试，或检查网络连接。</span></div>}
-          {packages.length > 0 && packages.length < total && <button className="plugin-load-more secondary-button" type="button" disabled={loading} onClick={() => void searchPackages(submittedQuery, packages.length, true)}>{loading ? "加载中…" : "加载更多"}</button>}
+          {!loading && packages.length === 0 && <div className="plugin-empty"><Search size={20} /><strong>{t("没有找到插件")}</strong><span>{t("换个关键词试试，或检查网络连接。")}</span></div>}
+          {packages.length > 0 && packages.length < total && <button className="plugin-load-more secondary-button" type="button" disabled={loading} onClick={() => void searchPackages(submittedQuery, packages.length, true)}>{t(loading ? "加载中…" : "加载更多")}</button>}
         </>
       ) : (
         <>
           <section className="capability-card">
-            <header><span><strong>Subagent 能力提供者</strong><small>可以保留 Pi Desktop 内置实现，或让第三方 Extension 工具接管。</small></span><span className={`capability-state ${runtime?.fallbackReason ? "is-fallback" : ""}`}>{runtime?.effectiveSubagent.kind === "plugin" ? runtime.effectiveSubagent.toolName : runtime?.effectiveSubagent.kind === "builtin" ? "内置" : "等待会话"}</span></header>
+            <header><span><strong>{t("Subagent 能力提供者")}</strong><small>{t("可以保留 Pi Desktop 内置实现，或让第三方 Extension 工具接管。")}</small></span><span className={`capability-state ${runtime?.fallbackReason ? "is-fallback" : ""}`}>{runtime?.effectiveSubagent.kind === "plugin" ? runtime.effectiveSubagent.toolName : t(runtime?.effectiveSubagent.kind === "builtin" ? "内置" : "等待会话")}</span></header>
             <div className="capability-options">
-              <label><input type="radio" name="subagent-provider" checked={subagentKind === "builtin"} onChange={() => setSubagentKind("builtin")} /><span><strong>内置实现</strong><small>使用 Pi Desktop 的只读子 Agent。</small></span></label>
-              <label><input type="radio" name="subagent-provider" checked={subagentKind === "plugin"} onChange={() => setSubagentKind("plugin")} /><span><strong>第三方工具</strong><small>使用已安装 Extension 注册的工具。</small></span></label>
+              <label><input type="radio" name="subagent-provider" checked={subagentKind === "builtin"} onChange={() => setSubagentKind("builtin")} /><span><strong>{t("内置实现")}</strong><small>{t("使用 Pi Desktop 的只读子 Agent。")}</small></span></label>
+              <label><input type="radio" name="subagent-provider" checked={subagentKind === "plugin"} onChange={() => setSubagentKind("plugin")} /><span><strong>{t("第三方工具")}</strong><small>{t("使用已安装 Extension 注册的工具。")}</small></span></label>
             </div>
             {subagentKind === "plugin" && (
               <div className="capability-provider-fields">
-                <label className="capability-tool-field"><span>插件来源</span><select className="native-select" value={subagentSource} onChange={(event) => { const source = event.target.value; setSubagentSource(source); setSubagentTool(subagentChoices.find((choice) => choice.source === source)?.toolName ?? ""); }}><option value="">选择已加载或历史插件</option>{[...new Set(subagentChoices.map((choice) => choice.source))].map((source) => <option value={source} key={source}>{source.replace(/^npm:/, "")}</option>)}</select></label>
-                <label className="capability-tool-field"><span>Extension 工具</span><select className="native-select" value={subagentTool} onChange={(event) => setSubagentTool(event.target.value)}><option value="">选择工具</option>{subagentChoices.filter((choice) => choice.source === subagentSource).map((choice) => <option value={choice.toolName} key={`${choice.source}:${choice.toolName}`}>{choice.toolName} — {choice.description}</option>)}</select></label>
-                <small>提供者由包来源、准确版本和工具名共同识别，同名工具不会再互相覆盖。</small>
+                <label className="capability-tool-field"><span>{t("插件来源")}</span><select className="native-select" value={subagentSource} onChange={(event) => { const source = event.target.value; setSubagentSource(source); setSubagentTool(subagentChoices.find((choice) => choice.source === source)?.toolName ?? ""); }}><option value="">{t("选择已加载或历史插件")}</option>{[...new Set(subagentChoices.map((choice) => choice.source))].map((source) => <option value={source} key={source}>{source.replace(/^npm:/, "")}</option>)}</select></label>
+                <label className="capability-tool-field"><span>Extension {t("工具")}</span><select className="native-select" value={subagentTool} onChange={(event) => setSubagentTool(event.target.value)}><option value="">{t("选择工具")}</option>{subagentChoices.filter((choice) => choice.source === subagentSource).map((choice) => <option value={choice.toolName} key={`${choice.source}:${choice.toolName}`}>{choice.toolName} — {choice.description}</option>)}</select></label>
+                <small>{t("提供者由包来源、准确版本和工具名共同识别，同名工具不会再互相覆盖。")}</small>
               </div>
             )}
             {runtime?.fallbackReason && <div className="capability-fallback"><AlertTriangle size={13} />{runtime.fallbackReason}</div>}
-            <footer><span>{runtime ? `${runtime.tools.filter((tool) => tool.active).length}/${runtime.tools.length} 个工具已启用` : "正在读取运行时…"}</span><button className="primary-button" type="button" disabled={Boolean(operation) || agentRunning} onClick={() => void saveSubagentProvider()}>{operation === "capability" ? "切换中…" : "应用能力提供者"}</button></footer>
+            <footer><span>{runtime ? `${runtime.tools.filter((tool) => tool.active).length}/${runtime.tools.length} ${t("个工具已启用")}` : t("正在读取运行时…")}</span><button className="primary-button" type="button" disabled={Boolean(operation) || agentRunning} onClick={() => void saveSubagentProvider()}>{t(operation === "capability" ? "切换中…" : "应用能力提供者")}</button></footer>
           </section>
 
           <div className="package-capability-grid">
@@ -362,23 +365,23 @@ export function PluginsPanel({ agentRunning }: PluginsPanelProps) {
           </div>
 
           {runtime?.hasSession && runtime.tools.some((tool) => tool.sourceKind === "package" || tool.sourceKind === "project") && (
-            <section className="runtime-tools-card"><header><strong>已加载的插件工具</strong><small>Reload 后从当前 Agent 工具注册表读取</small></header><div>{runtime.tools.filter((tool) => tool.sourceKind === "package" || tool.sourceKind === "project").map((tool) => <span className={tool.active ? "is-active" : ""} key={`${tool.source}:${tool.name}`}><code>{tool.name}</code><small>{tool.active ? "已启用" : "未启用"}</small></span>)}</div></section>
+            <section className="runtime-tools-card"><header><strong>{t("已加载的插件工具")}</strong><small>{t("Reload 后从当前 Agent 工具注册表读取")}</small></header><div>{runtime.tools.filter((tool) => tool.sourceKind === "package" || tool.sourceKind === "project").map((tool) => <span className={tool.active ? "is-active" : ""} key={`${tool.source}:${tool.name}`}><code>{tool.name}</code><small>{t(tool.active ? "已启用" : "未启用")}</small></span>)}</div></section>
           )}
 
           <div className="installed-plugin-list">
             {installed.map((plugin) => (
               <article className="installed-plugin" key={plugin.source}>
                 <span className="plugin-icon"><PackageCheck size={18} /></span>
-                <span><strong>{plugin.name}</strong><small>{plugin.version ? `v${plugin.version}` : plugin.source}{plugin.installed ? " · 已就绪" : " · 文件缺失"}</small></span>
-                <button className="secondary-button danger-button" type="button" disabled={Boolean(operation) || agentRunning} onClick={() => void removePlugin(plugin)}><Trash2 size={13} />卸载</button>
+                <span><strong>{plugin.name}</strong><small>{plugin.version ? `v${plugin.version}` : plugin.source} · {t(plugin.installed ? "已就绪" : "文件缺失")}</small></span>
+                <button className="secondary-button danger-button" type="button" disabled={Boolean(operation) || agentRunning} onClick={() => void removePlugin(plugin)}><Trash2 size={13} />{t("卸载")}</button>
               </article>
             ))}
-            {installed.length === 0 && <div className="plugin-empty"><PackageCheck size={20} /><strong>还没有安装插件</strong><span>从“发现插件”中选择一个 Pi Package。</span></div>}
+            {installed.length === 0 && <div className="plugin-empty"><PackageCheck size={20} /><strong>{t("还没有安装插件")}</strong><span>{t("从“发现插件”中选择一个 Pi Package。")}</span></div>}
           </div>
         </>
       )}
 
-      {agentRunning && <div className="plugin-warning"><AlertTriangle size={14} />Agent 执行期间不能安装、卸载或重新加载插件。</div>}
+      {agentRunning && <div className="plugin-warning"><AlertTriangle size={14} />{t("Agent 执行期间不能安装、卸载或重新加载插件。")}</div>}
       {progress && <div className="plugin-progress"><i /><span>{progress.message ?? `${progress.action}: ${progress.source}`}</span></div>}
       {message && <div className="plugin-message"><Check size={14} />{message}</div>}
       {error && <div className="settings-error" role="alert">{error}</div>}
@@ -386,19 +389,19 @@ export function PluginsPanel({ agentRunning }: PluginsPanelProps) {
       {candidate && (
         <div className="plugin-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !operation) setCandidate(null); }}>
           <section className="plugin-dialog" role="dialog" aria-modal="true" aria-labelledby="plugin-dialog-title">
-            <button className="plugin-dialog-close" type="button" disabled={Boolean(operation)} onClick={() => setCandidate(null)} aria-label="关闭"><X size={15} /></button>
+            <button className="plugin-dialog-close" type="button" disabled={Boolean(operation)} onClick={() => setCandidate(null)} aria-label={t("关闭")}><X size={15} /></button>
             <span className="plugin-dialog-icon"><ShieldAlert size={20} /></span>
-            <h3 id="plugin-dialog-title">确认安装 {candidate.name}</h3>
-            <p className="plugin-dialog-version">版本 {candidate.version} · 发布者 {candidate.publisher} · {candidate.license ?? "许可证未知"}</p>
+            <h3 id="plugin-dialog-title">{t("确认安装 {name}", { name: candidate.name })}</h3>
+            <p className="plugin-dialog-version">{t("版本")} {candidate.version} · {t("发布者")} {candidate.publisher} · {candidate.license ?? t("许可证未知")}</p>
             <p className="plugin-dialog-description">{candidate.description}</p>
-            <div className="plugin-dialog-resources"><strong>包含资源</strong><span>{candidate.resources.length > 0 ? candidate.resources.map((resource) => resourceLabels[resource]).join("、") : "包未声明资源清单，安装后由 Pi 自动发现"}</span></div>
+            <div className="plugin-dialog-resources"><strong>{t("包含资源")}</strong><span>{candidate.resources.length > 0 ? candidate.resources.map((resource) => resourceLabels[resource]).join(", ") : t("包未声明资源清单，安装后由 Pi 自动发现")}</span></div>
             <div className="plugin-security-warning">
               <AlertTriangle size={17} />
-              <span><strong>该包可以执行本地代码</strong><small>npm 安装脚本和 Pi Extension 将以你的本地用户权限运行。请只安装你信任的发布者提供的包。</small></span>
+              <span><strong>{t("该包可以执行本地代码")}</strong><small>{t("npm 安装脚本和 Pi Extension 将以你的本地用户权限运行。请只安装你信任的发布者提供的包。")}</small></span>
             </div>
-            {candidate.insecure && <div className="plugin-insecure-warning">npm 将这个版本标记为存在安全风险，不建议安装。</div>}
-            <label className="plugin-risk-check"><input type="checkbox" checked={riskAccepted} onChange={(event) => setRiskAccepted(event.target.checked)} /><span>我信任此发布者，并了解插件拥有本地代码执行权限。</span></label>
-            <footer><button className="secondary-button" type="button" disabled={Boolean(operation)} onClick={() => setCandidate(null)}>取消</button><button className="primary-button" type="button" disabled={!riskAccepted || Boolean(operation) || candidate.insecure} onClick={() => void installCandidate()}>{operation?.startsWith("install:") ? "安装并加载中…" : "安装并重新加载"}</button></footer>
+            {candidate.insecure && <div className="plugin-insecure-warning">{t("npm 将这个版本标记为存在安全风险，不建议安装。")}</div>}
+            <label className="plugin-risk-check"><input type="checkbox" checked={riskAccepted} onChange={(event) => setRiskAccepted(event.target.checked)} /><span>{t("我信任此发布者，并了解插件拥有本地代码执行权限。")}</span></label>
+            <footer><button className="secondary-button" type="button" disabled={Boolean(operation)} onClick={() => setCandidate(null)}>{t("取消")}</button><button className="primary-button" type="button" disabled={!riskAccepted || Boolean(operation) || candidate.insecure} onClick={() => void installCandidate()}>{t(operation?.startsWith("install:") ? "安装并加载中…" : "安装并重新加载")}</button></footer>
           </section>
         </div>
       )}

@@ -21,6 +21,7 @@ import { useState } from "react";
 import type { ContextUsageInfo, ProviderCatalogEntry, ProviderId, ResponseUsage } from "../contracts";
 import { normalizeVisibleActivities } from "../conversation-activity";
 import { shouldSubmitOnEnter } from "../keyboard";
+import { useI18n } from "../i18n";
 import type { ChatActivity, ChatTurn, Project } from "../types";
 import { BrandMark } from "./BrandMark";
 
@@ -65,33 +66,35 @@ function formatCost(cost: number): string {
 }
 
 function ContextIndicator({ usage }: { usage?: ContextUsageInfo }) {
+  const { t, locale } = useI18n();
   if (!usage || usage.contextWindow <= 0) return null;
   const percent = usage.percent === null ? null : Math.min(100, Math.max(0, usage.percent));
   const tone = percent !== null && percent >= 90 ? "is-critical" : percent !== null && percent >= 70 ? "is-warning" : "";
   const title = usage.tokens === null
-    ? `上下文刚完成压缩，将在模型下次响应后更新；上限 ${usage.contextWindow.toLocaleString()} tokens`
-    : `当前上下文 ${usage.tokens.toLocaleString()} / ${usage.contextWindow.toLocaleString()} tokens`;
+    ? t("上下文刚完成压缩，将在模型下次响应后更新；上限 {limit} tokens", { limit: usage.contextWindow.toLocaleString(locale) })
+    : t("当前上下文 {used} / {limit} tokens", { used: usage.tokens.toLocaleString(locale), limit: usage.contextWindow.toLocaleString(locale) });
   return (
     <span className={`context-indicator ${tone}`} title={title}>
-      <span>上下文</span>
+      <span>{t("上下文")}</span>
       <strong>{usage.tokens === null ? "?" : formatTokens(usage.tokens)} / {formatTokens(usage.contextWindow)}</strong>
-      <progress max={100} value={percent ?? 0} aria-label="上下文使用比例" />
-      <em>{percent === null ? "待更新" : `${percent.toFixed(0)}%`}</em>
+      <progress max={100} value={percent ?? 0} aria-label={t("上下文使用比例")} />
+      <em>{percent === null ? t("待更新") : `${percent.toFixed(0)}%`}</em>
     </span>
   );
 }
 
 function ResponseUsageLine({ usage }: { usage: ResponseUsage }) {
+  const { t, locale } = useI18n();
   const model = usage.responseModel || usage.model;
   const cache = usage.cacheReadTokens + usage.cacheWriteTokens;
   const requestSummary = usage.requestCount > 1
-    ? `本回答共 ${usage.requestCount} 次模型请求；token 显示最终请求，费用为全部请求合计`
-    : "本回答共 1 次模型请求";
+    ? t("本回答共 {count} 次模型请求；token 显示最终请求，费用为全部请求合计", { count: usage.requestCount })
+    : t("本回答共 1 次模型请求");
   return (
-    <footer className="response-usage" title={`最终请求：输入 ${usage.inputTokens.toLocaleString()} · 输出 ${usage.outputTokens.toLocaleString()} · 缓存 ${cache.toLocaleString()} · 总计 ${usage.totalTokens.toLocaleString()} tokens · ${requestSummary} · 费用按模型目录单价估算`}>
+    <footer className="response-usage" title={`${t("最终请求")}：${t("输入")} ${usage.inputTokens.toLocaleString(locale)} · ${t("输出")} ${usage.outputTokens.toLocaleString(locale)} · ${t("缓存")} ${cache.toLocaleString(locale)} · ${t("总计")} ${usage.totalTokens.toLocaleString(locale)} tokens · ${requestSummary} · ${t("费用按模型目录单价估算")}`}>
       <span>{usage.provider}</span><strong>{model}</strong><i />
       <span>↑ {formatTokens(usage.inputTokens)}</span><span>↓ {formatTokens(usage.outputTokens)}</span>
-      {cache > 0 && <span>缓存 {formatTokens(cache)}</span>}
+      {cache > 0 && <span>{t("缓存")} {formatTokens(cache)}</span>}
       <span>{formatCost(usage.cost)}</span>
     </footer>
   );
@@ -114,6 +117,7 @@ function ModelSelector({
   disabled: boolean;
   onChange: (provider: ProviderId, modelId: string) => void;
 }) {
+  const { t } = useI18n();
   const currentProvider = providers.find((entry) => entry.id === provider);
   const currentModel = currentProvider?.models.find((model) => model.id === modelId);
   const label = currentModel?.name ?? modelId;
@@ -127,7 +131,7 @@ function ModelSelector({
         onChange(nextProvider, nextModelId);
       }}
     >
-      <Select.Trigger className="composer-tool-button model-trigger" aria-label="选择对话模型" title={disabled ? "Agent 运行中不可切换模型" : label}>
+      <Select.Trigger className="composer-tool-button model-trigger" aria-label={t("选择对话模型")} title={disabled ? t("Agent 运行中不可切换模型") : label}>
         <Select.Value><span>{label}</span></Select.Value>
         <Select.Icon><ChevronDown size={12} /></Select.Icon>
       </Select.Trigger>
@@ -159,24 +163,25 @@ function DirectoryMenu({
   onProjectChange,
   onChooseWorkspace,
 }: Pick<NewChatViewProps, "project" | "onProjectChange" | "onChooseWorkspace"> & { compact?: boolean }) {
+  const { t } = useI18n();
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
         <button className={compact ? "composer-tool-button compact-directory-trigger" : "directory-trigger"} type="button">
           <Folder size={15} />
-          <span>{compact ? project?.name ?? "普通对话" : project ? "更换目录" : "选择目录"}</span>
+          <span>{compact ? project?.name ?? t("普通对话") : t(project ? "更换目录" : "选择目录")}</span>
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content className="dropdown-content directory-menu" align="start" sideOffset={8}>
           <DropdownMenu.Item className="dropdown-item directory-item" onSelect={onChooseWorkspace}>
             <Folder size={15} />
-            <span><strong>打开工作目录…</strong><code>由系统选择器授权目录</code></span>
+            <span><strong>{t("打开工作目录…")}</strong><code>{t("由系统选择器授权目录")}</code></span>
           </DropdownMenu.Item>
           {project && (
             <DropdownMenu.Item className="dropdown-item directory-item" onSelect={() => onProjectChange(null)}>
               <span className="directory-empty">×</span>
-              <span><strong>移除工作目录</strong><code>转为无本地文件访问的普通对话</code></span>
+              <span><strong>{t("移除工作目录")}</strong><code>{t("转为无本地文件访问的普通对话")}</code></span>
             </DropdownMenu.Item>
           )}
         </DropdownMenu.Content>
@@ -186,23 +191,25 @@ function DirectoryMenu({
 }
 
 function SendControl({ isRunning, canSend, onStop }: { isRunning: boolean; canSend: boolean; onStop: () => void }) {
+  const { t } = useI18n();
   if (isRunning) {
-    return <button className="send-button stop-button" type="button" aria-label="停止 Agent" onClick={onStop}><CircleStop size={16} /></button>;
+    return <button className="send-button stop-button" type="button" aria-label={t("停止 Agent")} onClick={onStop}><CircleStop size={16} /></button>;
   }
-  return <button className="send-button" type="submit" aria-label="发送" disabled={!canSend}><ArrowUp size={17} /></button>;
+  return <button className="send-button" type="submit" aria-label={t("发送")} disabled={!canSend}><ArrowUp size={17} /></button>;
 }
 
 function InitialComposer(props: NewChatViewProps) {
+  const { t } = useI18n();
   return (
-    <section className="new-chat-view" aria-label="新建对话">
+    <section className="new-chat-view" aria-label={t("新建对话")}>
       <div className="composer-stage">
         <header className="composer-heading">
           <span className="orbit-mark"><BrandMark compact /><i /></span>
-          <h1>{props.project ? `在 ${props.project.name} 中开始新对话` : "今天想一起做什么？"}</h1>
+          <h1>{props.project ? t("在 {name} 中开始新对话", { name: props.project.name }) : t("今天想一起做什么？")}</h1>
           <p>
             {props.project
-              ? "Pi 将以该目录为边界读取文件、执行命令并追踪变更。"
-              : "直接提问，或选择工作目录开始一个真实的 Agent 会话。"}
+              ? t("Pi 将以该目录为边界读取文件、执行命令并追踪变更。")
+              : t("直接提问，或选择工作目录开始一个真实的 Agent 会话。")}
           </p>
         </header>
 
@@ -215,11 +222,11 @@ function InitialComposer(props: NewChatViewProps) {
               event.preventDefault();
               if (props.prompt.trim() && !props.isRunning) props.onSubmit();
             }}
-            placeholder="描述你想分析、构建或修改的内容…"
-            aria-label="对话内容"
+            placeholder={t("描述你想分析、构建或修改的内容…")}
+            aria-label={t("对话内容")}
           />
           <div className="composer-toolbar">
-            <button className="composer-tool-button" type="button" aria-label="添加附件"><Paperclip size={15} /></button>
+            <button className="composer-tool-button" type="button" aria-label={t("添加附件")}><Paperclip size={15} /></button>
             <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={props.isRunning} onChange={props.onModelChange} />
             <SendControl isRunning={props.isRunning} canSend={Boolean(props.prompt.trim())} onStop={props.onStop} />
           </div>
@@ -228,12 +235,12 @@ function InitialComposer(props: NewChatViewProps) {
         <div className="conversation-context">
           <DirectoryMenu project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} />
           <span className="context-copy">
-            <strong>{props.project ? props.project.path : "普通对话"}</strong>
-            <small>{props.project ? `Pi 工具将相对 ${props.project.name} 运行` : "未关联工作目录，Pi 使用隔离的空目录"}</small>
+            <strong>{props.project ? props.project.path : t("普通对话")}</strong>
+            <small>{props.project ? t("Pi 工具将相对 {name} 运行", { name: props.project.name }) : t("未关联工作目录，Pi 使用隔离的空目录")}</small>
           </span>
         </div>
         <div className="context-hint-row">
-          <p className="context-hint">工作区内操作按权限模式执行；危险或越界行为仍会询问。</p>
+          <p className="context-hint">{t("工作区内操作按权限模式执行；危险或越界行为仍会询问。")}</p>
           <ContextIndicator usage={props.contextUsage} />
         </div>
       </div>
@@ -242,12 +249,13 @@ function InitialComposer(props: NewChatViewProps) {
 }
 
 function ThinkingActivity({ activity }: { activity: Extract<ChatActivity, { type: "thinking" }> }) {
+  const { t } = useI18n();
   return (
     <Collapsible.Root className="agent-activity thinking-activity">
       <Collapsible.Trigger className="activity-trigger">
         <BrainCircuit size={14} />
-        <span>分析过程</span>
-        <small>按需查看</small>
+        <span>{t("分析过程")}</span>
+        <small>{t("按需查看")}</small>
         <ChevronDown size={13} className="activity-chevron" />
       </Collapsible.Trigger>
       <Collapsible.Content className="thinking-content">{activity.text}</Collapsible.Content>
@@ -256,21 +264,22 @@ function ThinkingActivity({ activity }: { activity: Extract<ChatActivity, { type
 }
 
 function ToolActivity({ activity }: { activity: Extract<ChatActivity, { type: "tool" }> }) {
+  const { t } = useI18n();
   const isSubagent = activity.name === "spawn_subagent" || activity.name === "pi_desktop_subagent";
   const Icon = isSubagent ? Users : TerminalSquare;
-  const title = toolLabel(activity.name);
+  const title = t(toolLabel(activity.name));
   return (
     <Collapsible.Root className={`agent-activity tool-activity tool-activity--${activity.status}`} defaultOpen={activity.status === "error"}>
       <Collapsible.Trigger className="activity-trigger">
         <Icon size={14} />
         <span>{title}</span>
-        <small>{activity.status === "running" ? "运行中" : activity.status === "success" ? "完成" : "失败"}</small>
+        <small>{t(activity.status === "running" ? "运行中" : activity.status === "success" ? "完成" : "失败")}</small>
         {activity.status === "running" ? <i className="activity-spinner" /> : activity.status === "success" ? <CheckCircle2 size={13} /> : <XCircle size={13} />}
         <ChevronDown size={13} className="activity-chevron" />
       </Collapsible.Trigger>
       <Collapsible.Content className="tool-content">
-        <div><span>输入</span><pre>{formatData(activity.args)}</pre></div>
-        {(activity.output || activity.status !== "running") && <div><span>输出</span><pre>{activity.output || "工具未返回文本"}</pre></div>}
+        <div><span>{t("输入")}</span><pre>{formatData(activity.args)}</pre></div>
+        {(activity.output || activity.status !== "running") && <div><span>{t("输出")}</span><pre>{activity.output || t("工具未返回文本")}</pre></div>}
       </Collapsible.Content>
     </Collapsible.Root>
   );
@@ -293,18 +302,19 @@ function toolLabel(name: string) {
 }
 
 function ToolGroup({ tools }: { tools: Extract<ChatActivity, { type: "tool" }>[] }) {
+  const { t } = useI18n();
   const allCommands = tools.length > 0 && tools.every((tool) => tool.name === "bash");
   const running = tools.some((tool) => tool.status === "running");
   const failed = tools.some((tool) => tool.status === "error");
   const title = tools.length === 0
-    ? "分析过程"
+    ? t("分析过程")
     : allCommands
       ? running
-        ? tools.length > 1 ? "正在运行多个命令" : "正在运行命令"
-        : tools.length > 1 ? "运行了多个命令" : "运行了 1 个命令"
+        ? t(tools.length > 1 ? "正在运行多个命令" : "正在运行命令")
+        : t(tools.length > 1 ? "运行了多个命令" : "运行了 1 个命令")
       : running
-        ? tools.length > 1 ? "正在调用多个工具" : `正在${toolLabel(tools[0].name)}`
-        : tools.length > 1 ? "调用了多个工具" : `调用了${toolLabel(tools[0].name)}`;
+        ? tools.length > 1 ? t("正在调用多个工具") : `${t("运行中")} · ${t(toolLabel(tools[0].name))}`
+        : tools.length > 1 ? t("调用了多个工具") : `${t("完成")} · ${t(toolLabel(tools[0].name))}`;
 
   return (
     <Collapsible.Root className={`tool-group ${failed ? "has-error" : ""}`} defaultOpen={failed}>
@@ -330,10 +340,11 @@ function QuestionActivity({
   activity: Extract<ChatActivity, { type: "question" }>;
   onAnswer: NewChatViewProps["onAnswerQuestion"];
 }) {
+  const { t } = useI18n();
   const [customAnswer, setCustomAnswer] = useState("");
   return (
     <section className={`agent-activity question-activity ${activity.status === "answered" ? "is-answered" : ""}`}>
-      <header><MessageCircleQuestion size={15} /><strong>Pi 需要你的回答</strong></header>
+      <header><MessageCircleQuestion size={15} /><strong>{t("Pi 需要你的回答")}</strong></header>
       <p>{activity.question}</p>
       {activity.status === "answered" ? (
         <div className="question-answer"><Check size={13} />{activity.answer}</div>
@@ -353,8 +364,8 @@ function QuestionActivity({
             event.preventDefault();
             if (customAnswer.trim()) onAnswer(turnId, activity.id, customAnswer.trim());
           }}>
-            <input value={customAnswer} onChange={(event) => setCustomAnswer(event.target.value)} placeholder="输入其他回答…" />
-            <button type="submit" disabled={!customAnswer.trim()}>提交</button>
+            <input value={customAnswer} onChange={(event) => setCustomAnswer(event.target.value)} placeholder={t("输入其他回答…")} />
+            <button type="submit" disabled={!customAnswer.trim()}>{t("提交")}</button>
           </form>
         </>
       )}
@@ -374,6 +385,7 @@ function ActivityTimeline({
   turn: ChatTurn;
   onAnswerQuestion: NewChatViewProps["onAnswerQuestion"];
 }) {
+  const { t } = useI18n();
   const activities = Array.isArray(turn.activities) ? turn.activities : [];
   const visible = normalizeVisibleActivities(activities);
   const hasMessages = visible.some((activity) => activity.type === "message" && activity.text);
@@ -401,7 +413,7 @@ function ActivityTimeline({
 
   if (visible.length === 0) {
     if (turn.answer) return <MessageActivity text={turn.answer} />;
-    return turn.status === "running" ? <div className="agent-working"><i />Pi 正在分析任务…</div> : null;
+    return turn.status === "running" ? <div className="agent-working"><i />{t("Pi 正在分析任务…")}</div> : null;
   }
 
   return (
@@ -422,6 +434,7 @@ function ConversationTurn({ turn, onRetry, onAnswerQuestion }: {
   onRetry: (turnId: string) => void;
   onAnswerQuestion: NewChatViewProps["onAnswerQuestion"];
 }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   async function copyQuestion() {
     await navigator.clipboard.writeText(turn.question);
@@ -431,25 +444,25 @@ function ConversationTurn({ turn, onRetry, onAnswerQuestion }: {
 
   return (
     <article className="qa-pair">
-      <section className="qa-message qa-question" aria-label="用户消息">
+      <section className="qa-message qa-question" aria-label={t("用户消息")}>
         <div className="message-bubble-stack message-bubble-stack--user">
           <div className="question-content">{turn.question}</div>
           <div className="message-actions">
-            <button type="button" onClick={() => void copyQuestion()} aria-label="复制用户输入">
-              {copied ? <Check size={13} /> : <Copy size={13} />}<span>{copied ? "已复制" : "复制"}</span>
+            <button type="button" onClick={() => void copyQuestion()} aria-label={t("复制用户输入")}>
+              {copied ? <Check size={13} /> : <Copy size={13} />}<span>{t(copied ? "已复制" : "复制")}</span>
             </button>
             <button type="button" onClick={() => onRetry(turn.id)} disabled={turn.status === "running"}>
-              <RotateCcw size={13} /><span>重试</span>
+              <RotateCcw size={13} /><span>{t("重试")}</span>
             </button>
           </div>
         </div>
       </section>
-      <section className="qa-message qa-answer" aria-label="Agent 回答">
+      <section className="qa-message qa-answer" aria-label={t("Agent 回答")}>
         <div className="agent-response">
           <ActivityTimeline turn={turn} onAnswerQuestion={onAnswerQuestion} />
           {turn.usage && <ResponseUsageLine usage={turn.usage} />}
           {turn.status === "error" && <div className="agent-error"><XCircle size={14} />{turn.error}</div>}
-          {turn.status === "stopped" && <div className="agent-stopped">任务已停止</div>}
+          {turn.status === "stopped" && <div className="agent-stopped">{t("任务已停止")}</div>}
         </div>
       </section>
     </article>
@@ -457,8 +470,9 @@ function ConversationTurn({ turn, onRetry, onAnswerQuestion }: {
 }
 
 function ActiveConversation(props: NewChatViewProps) {
+  const { t } = useI18n();
   return (
-    <section className="active-conversation" aria-label="当前对话">
+    <section className="active-conversation" aria-label={t("当前对话")}>
       <div className="conversation-scroll" aria-live="polite">
         <div className="conversation-turns">
           {props.turns.map((turn) => <ConversationTurn key={turn.id} turn={turn} onRetry={props.onRetry} onAnswerQuestion={props.onAnswerQuestion} />)}
@@ -474,19 +488,19 @@ function ActiveConversation(props: NewChatViewProps) {
               event.preventDefault();
               if (props.prompt.trim() && !props.isRunning) props.onSubmit();
             }}
-            placeholder={props.isRunning ? "Agent 执行中，可先停止当前任务…" : "继续给 Pi 指令…"}
-            aria-label="继续对话"
+            placeholder={t(props.isRunning ? "Agent 执行中，可先停止当前任务…" : "继续给 Pi 指令…")}
+            aria-label={t("继续对话")}
             disabled={props.isRunning}
           />
           <div className="compact-composer-toolbar">
-            <button className="composer-tool-button" type="button" aria-label="添加附件"><Paperclip size={15} /></button>
+            <button className="composer-tool-button" type="button" aria-label={t("添加附件")}><Paperclip size={15} /></button>
             <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={props.isRunning} onChange={props.onModelChange} />
             <DirectoryMenu compact project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} />
             <SendControl isRunning={props.isRunning} canSend={Boolean(props.prompt.trim())} onStop={props.onStop} />
           </div>
         </form>
         <p className="dock-context">
-          <span className="dock-scope">{props.project ? <><Folder size={12} /><code>{props.project.path}</code></> : <>普通对话 · 隔离目录</>}</span>
+          <span className="dock-scope">{props.project ? <><Folder size={12} /><code>{props.project.path}</code></> : <>{t("普通对话 · 隔离目录")}</>}</span>
           <ContextIndicator usage={props.contextUsage} />
         </p>
       </footer>
