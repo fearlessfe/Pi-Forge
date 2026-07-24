@@ -6,6 +6,7 @@ import {
   SessionManager,
   type AgentSession,
   type AgentSessionEvent,
+  type LoadExtensionsResult,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { InMemoryCredentialStore, type Api, type CredentialStore, type Model } from "@earendil-works/pi-ai";
@@ -15,8 +16,11 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
   AgentEvent,
+  CapabilitySettings,
+  PluginRuntimeStatus,
   ProviderCatalogEntry,
   QuestionOption,
+  RuntimeTool,
   SaveModelSettings,
 } from "../src/contracts.js";
 import { captureAgentSessionEvent } from "./agent-event-adapter.js";
@@ -29,6 +33,10 @@ type PendingQuestion = {
 };
 
 type RuntimeConfig = ReturnType<SettingsStore["resolve"]>;
+
+type CapabilitySettingsReader = Pick<{ get(): CapabilitySettings }, "get">;
+
+const builtinSubagentToolName = "pi_desktop_subagent";
 
 type CompatibleProviderDefinition = {
   name: string;
@@ -123,6 +131,8 @@ export class AgentService {
   private pendingQuestions = new Map<string, PendingQuestion>();
   private running = false;
   private eventSequence = 0;
+  private appliedSubagentTool?: string;
+  private capabilityFallbackReason?: string;
 
   constructor(
     private readonly settings: Pick<SettingsStore, "resolve">,
@@ -130,6 +140,16 @@ export class AgentService {
     private readonly fallbackCwd: string,
     private readonly emit: EventSink,
     private readonly credentials: CredentialStore = new InMemoryCredentialStore(),
+    private readonly capabilities: CapabilitySettingsReader = {
+      get: () => ({
+        subagent: { kind: "builtin" },
+        memory: { kind: "none" },
+        learning: { kind: "none" },
+        subagentHistory: [],
+        memoryHistory: [],
+        learningHistory: [],
+      }),
+    },
   ) {}
 
   async getModelCatalog(): Promise<ProviderCatalogEntry[]> {
@@ -206,6 +226,82 @@ export class AgentService {
       this.activeRunId = undefined;
       this.running = false;
     }
+  }
+
+  isRunning(): boolean {
+    return this.running;
+  }
+
+  async reloadPackages(): Promise<boolean> {
+    if (this.running) throw new Error("Agent 正在执行，请等待任务完成后再重新加载插件。");
+    if (!this.session) return false;
+    await this.session.reload();
+    this.applyToolPolicy(this.session);
+    return true;
+  }
+
+  refreshCapabilities(): PluginRuntimeStatus {
+    if (this.running) throw new Error("Agent 正在执行，请等待任务完成后再切换能力提供者。");
+    if (this.session) this.applyToolPolicy(this.session);
+    return this.getPluginRuntime();
+  }
+
+  getPluginRuntime(): PluginRuntimeStatus {
+    const capabilitySettings = this.capabilities.get();
+    const configuredSubagent = capabilitySettings.subagent;
+    if (!this.session) {
+      return {
+        hasSession: false,
+        configuredSubagent,
+        effectiveSubagent: { kind: "pending" },
+        configuredMemory: capabilitySettings.memory,
+        effectiveMemory: { kind: "pending" },
+        configuredLearning: capabilitySettings.learning,
+        effectiveLearning: { kind: "pending" },
+        subagentHistory: capabilitySettings.subagentHistory,
+        memoryHistory: capabilitySettings.memoryHistory,
+        learningHistory: capabilitySettings.learningHistory,
+        tools: [],
+      };
+    }
+    const tools = this.session.getAllTools().map((tool): RuntimeTool => {
+      let sourceKind: RuntimeTool["sourceKind"] = "other";
+      if (tool.sourceInfo.source === "builtin") sourceKind = "builtin";
+      else if (tool.sourceInfo.source === "sdk") sourceKind = "desktop";
+      else if (tool.sourceInfo.scope === "project") sourceKind = "project";
+      else if (tool.sourceInfo.origin === "package") sourceKind = "package";
+      return {
+        name: tool.name,
+        description: tool.description,
+        active: this.session!.getActiveToolNames().includes(tool.name),
+        source: tool.sourceInfo.source,
+        sourceKind,
+      };
+    });
+    const pluginEffective = configuredSubagent.kind === "plugin"
+      && this.appliedSubagentTool === configuredSubagent.toolName
+      && !this.capabilityFallbackReason;
+    const loadedSources = new Set(this.session.resourceLoader.getExtensions().extensions.map((extension) => extension.sourceInfo.source));
+    const effectiveMemory = capabilitySettings.memory.kind === "plugin" && loadedSources.has(capabilitySettings.memory.source)
+      ? capabilitySettings.memory
+      : { kind: "none" as const };
+    const effectiveLearning = capabilitySettings.learning.kind === "plugin" && loadedSources.has(capabilitySettings.learning.source)
+      ? capabilitySettings.learning
+      : { kind: "none" as const };
+    return {
+      hasSession: true,
+      configuredSubagent,
+      effectiveSubagent: pluginEffective ? configuredSubagent : { kind: "builtin" },
+      configuredMemory: capabilitySettings.memory,
+      effectiveMemory,
+      configuredLearning: capabilitySettings.learning,
+      effectiveLearning,
+      subagentHistory: capabilitySettings.subagentHistory,
+      memoryHistory: capabilitySettings.memoryHistory,
+      learningHistory: capabilitySettings.learningHistory,
+      fallbackReason: this.capabilityFallbackReason,
+      tools,
+    };
   }
 
   answerQuestion(callId: string, answer: string): void {
@@ -288,6 +384,7 @@ export class AgentService {
           });
         },
       ],
+      extensionsOverride: (base) => this.filterCapabilityExtensions(base),
     });
     await resourceLoader.reload();
 
@@ -299,11 +396,11 @@ export class AgentService {
       thinkingLevel: config.thinkingLevel,
       modelRuntime: runtime.modelRuntime,
       resourceLoader,
-      tools: ["read", "grep", "find", "ls", "bash", "edit", "write", "ask_user", "spawn_subagent"],
       customTools,
       sessionManager: SessionManager.inMemory(cwd),
     });
 
+    this.applyToolPolicy(session);
     this.unsubscribe = session.subscribe((event) => this.handleSessionEvent(event));
     this.session = session;
     this.sessionKey = key;
@@ -332,7 +429,7 @@ export class AgentService {
     });
 
     const spawnSubagent = defineTool({
-      name: "spawn_subagent",
+      name: builtinSubagentToolName,
       label: "Spawn subagent",
       description: "Delegate one focused, self-contained research, review, or implementation task to a subagent.",
       promptSnippet: "Delegate independent focused work to a subagent",
@@ -396,6 +493,58 @@ export class AgentService {
     });
 
     return [askUser, spawnSubagent];
+  }
+
+  private applyToolPolicy(session: AgentSession): void {
+    const activeTools = new Set(session.getActiveToolNames());
+    for (const name of ["read", "grep", "find", "ls", "bash", "edit", "write", "ask_user"]) {
+      if (session.getToolDefinition(name)) activeTools.add(name);
+    }
+    if (this.appliedSubagentTool) activeTools.delete(this.appliedSubagentTool);
+    activeTools.delete(builtinSubagentToolName);
+    this.capabilityFallbackReason = undefined;
+
+    const configured = this.capabilities.get().subagent;
+    if (configured.kind === "plugin") {
+      const extensionTool = session.extensionRunner.getAllRegisteredTools()
+        .find((tool) => tool.definition.name === configured.toolName && tool.sourceInfo.source === configured.source);
+      const resolvedTool = session.getAllTools().find((tool) => tool.name === configured.toolName);
+      const resolvesToExtension = resolvedTool
+        && resolvedTool.sourceInfo.source !== "sdk"
+        && resolvedTool.sourceInfo.source !== "builtin"
+        && resolvedTool.sourceInfo.source === configured.source;
+      if (extensionTool && resolvesToExtension && configured.toolName !== builtinSubagentToolName) {
+        activeTools.add(configured.toolName);
+        this.appliedSubagentTool = configured.toolName;
+      } else {
+        activeTools.add(builtinSubagentToolName);
+        this.appliedSubagentTool = builtinSubagentToolName;
+        this.capabilityFallbackReason = `${configured.source} 的工具 ${configured.toolName} 未成功注册，已回退到内置 Subagent。`;
+      }
+    } else {
+      activeTools.add(builtinSubagentToolName);
+      this.appliedSubagentTool = builtinSubagentToolName;
+    }
+    session.setActiveToolsByName([...activeTools]);
+  }
+
+  private filterCapabilityExtensions(base: LoadExtensionsResult): LoadExtensionsResult {
+    const settings = this.capabilities.get();
+    const activeSources = new Set<string>();
+    if (settings.subagent.kind === "plugin") activeSources.add(settings.subagent.source);
+    if (settings.memory.kind === "plugin") activeSources.add(settings.memory.source);
+    if (settings.learning.kind === "plugin") activeSources.add(settings.learning.source);
+
+    const historicalSources = new Set<string>();
+    for (const provider of settings.subagentHistory) if (provider.kind === "plugin") historicalSources.add(provider.source);
+    for (const provider of settings.memoryHistory) if (provider.kind === "plugin") historicalSources.add(provider.source);
+    for (const provider of settings.learningHistory) if (provider.kind === "plugin") historicalSources.add(provider.source);
+    for (const source of activeSources) historicalSources.delete(source);
+
+    return {
+      ...base,
+      extensions: base.extensions.filter((extension) => !historicalSources.has(extension.sourceInfo.source)),
+    };
   }
 
   private async createModelRuntime(config: RuntimeConfig) {

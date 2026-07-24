@@ -4,7 +4,7 @@ export type Theme = "dark" | "light";
 
 export type AppView = "chat" | "settings";
 
-export type SettingsSection = "models" | "permissions" | "general" | "appearance";
+export type SettingsSection = "models" | "plugins" | "permissions" | "general" | "appearance";
 
 export type Conversation = {
   id: string;

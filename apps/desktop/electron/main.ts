@@ -1,16 +1,19 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { AgentEvent, SaveModelSettings, SendPromptInput } from "../src/contracts.js";
+import type { AgentEvent, PackageCapabilityProvider, SaveModelSettings, SendPromptInput, SubagentProvider } from "../src/contracts.js";
 import { AgentService } from "./agent-service.js";
 import { AuthService } from "./auth-service.js";
+import { CapabilityStore } from "./capability-store.js";
 import { EncryptedCredentialStore } from "./credential-store.js";
+import { PluginService } from "./plugin-service.js";
 import { SettingsStore } from "./settings-store.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
 let agentService: AgentService | undefined;
 let authService: AuthService | undefined;
+let pluginService: PluginService | undefined;
 
 app.setName("Pi Desktop");
 app.setPath("userData", process.env.PI_DESKTOP_USER_DATA
@@ -96,6 +99,8 @@ function registerIpc(
   credentials: EncryptedCredentialStore,
   agent: AgentService,
   auth: AuthService,
+  plugins: PluginService,
+  capabilities: CapabilityStore,
 ): void {
   ipcMain.handle("settings:get", () => settingsWithCredentials(settings, credentials));
   ipcMain.handle("settings:catalog", () => agent.getModelCatalog());
@@ -136,6 +141,101 @@ function registerIpc(
     const selectedPath = result.filePaths[0];
     return { name: path.basename(selectedPath), path: selectedPath };
   });
+  ipcMain.handle("plugins:search", (_event, query: unknown, offset: unknown) => {
+    return plugins.search(typeof query === "string" ? query : "", typeof offset === "number" ? offset : 0);
+  });
+  ipcMain.handle("plugins:details", (_event, name: unknown, version: unknown) => {
+    return plugins.details(
+      requireString(name, "插件包名无效。"),
+      version === undefined ? undefined : requireString(version, "插件版本无效。"),
+    );
+  });
+  ipcMain.handle("plugins:list", () => plugins.listInstalled());
+  ipcMain.handle("plugins:install", async (_event, name: unknown, version: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再安装插件。");
+    const installed = await plugins.install(
+      requireString(name, "插件包名无效。"),
+      requireString(version, "插件版本无效。"),
+    );
+    const reloaded = await agent.reloadPackages();
+    return { installed, reloaded, runtime: agent.getPluginRuntime() };
+  });
+  ipcMain.handle("plugins:remove", async (_event, source: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再卸载插件。");
+    const packageSource = requireString(source, "插件安装来源无效。");
+    const currentCapabilities = capabilities.get();
+    if (currentCapabilities.subagent.kind === "plugin" && currentCapabilities.subagent.source === packageSource) {
+      capabilities.saveSubagent({ kind: "builtin" });
+    }
+    if (currentCapabilities.memory.kind === "plugin" && currentCapabilities.memory.source === packageSource) {
+      capabilities.savePackageCapability("memory", { kind: "none" });
+    }
+    if (currentCapabilities.learning.kind === "plugin" && currentCapabilities.learning.source === packageSource) {
+      capabilities.savePackageCapability("learning", { kind: "none" });
+    }
+    const installed = await plugins.remove(packageSource);
+    const reloaded = await agent.reloadPackages();
+    return { installed, reloaded, runtime: agent.getPluginRuntime() };
+  });
+  ipcMain.handle("plugins:reload", async () => {
+    const reloaded = await agent.reloadPackages();
+    return { reloaded, runtime: agent.getPluginRuntime() };
+  });
+  ipcMain.handle("plugins:runtime", () => agent.getPluginRuntime());
+  ipcMain.handle("plugins:set-subagent-provider", (_event, value: unknown) => {
+    if (!value || typeof value !== "object") throw new Error("Subagent 能力配置无效。");
+    const input = value as Record<string, unknown>;
+    let provider: SubagentProvider;
+    if (input.kind === "builtin") provider = { kind: "builtin" };
+    else if (input.kind === "plugin" && typeof input.source === "string" && typeof input.toolName === "string") {
+      provider = { kind: "plugin", source: input.source, toolName: input.toolName };
+    } else throw new Error("Subagent 能力配置无效。");
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再切换能力提供者。");
+    if (provider.kind === "plugin" && !agent.getPluginRuntime().hasSession) {
+      throw new Error("请先创建一次 Agent 会话，再 Reload 并选择实际加载的第三方工具。");
+    }
+    const previous = capabilities.get().subagent;
+    capabilities.saveSubagent(provider);
+    return agent.reloadPackages().then(async (reloaded) => {
+      const status = agent.getPluginRuntime();
+      if (!reloaded || provider.kind !== "plugin") return status;
+      const matches = status.effectiveSubagent.kind === "plugin"
+        && status.effectiveSubagent.source === provider.source
+        && status.effectiveSubagent.toolName === provider.toolName;
+      if (matches) return status;
+      const reason = status.fallbackReason ?? `${provider.source} 没有成功提供 ${provider.toolName}。`;
+      capabilities.saveSubagent(previous);
+      await agent.reloadPackages();
+      return { ...agent.getPluginRuntime(), fallbackReason: `${reason} 已恢复上一个 Subagent 提供者。` };
+    });
+  });
+  ipcMain.handle("plugins:set-package-capability", async (_event, slotValue: unknown, value: unknown) => {
+    if (slotValue !== "memory" && slotValue !== "learning") throw new Error("能力槽无效。");
+    if (!value || typeof value !== "object") throw new Error("能力提供者配置无效。");
+    const input = value as Record<string, unknown>;
+    let provider: PackageCapabilityProvider;
+    if (input.kind === "none") provider = { kind: "none" };
+    else if (input.kind === "plugin" && typeof input.source === "string") provider = { kind: "plugin", source: input.source };
+    else throw new Error("能力提供者配置无效。");
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再切换能力提供者。");
+    if (provider.kind === "plugin" && !agent.getPluginRuntime().hasSession) {
+      throw new Error("请先创建一次 Agent 会话，再 Reload 并验证该插件后切换能力提供者。");
+    }
+    const previous = capabilities.get()[slotValue];
+    capabilities.savePackageCapability(slotValue, provider);
+    const reloaded = await agent.reloadPackages();
+    const status = agent.getPluginRuntime();
+    const effective = slotValue === "memory" ? status.effectiveMemory : status.effectiveLearning;
+    if (!reloaded || provider.kind !== "plugin") return status;
+    const matches = effective.kind === "plugin" && effective.source === provider.source;
+    if (matches) return status;
+    capabilities.savePackageCapability(slotValue, previous);
+    await agent.reloadPackages();
+    return {
+      ...agent.getPluginRuntime(),
+      fallbackReason: `${provider.source} 没有成功加载，已恢复上一个${slotValue === "memory" ? "记忆" : "自学习"}提供者。`,
+    };
+  });
   ipcMain.handle("agent:send", async (_event, value: unknown) => {
     if (!value || typeof value !== "object") throw new Error("消息格式无效。");
     const input = value as SendPromptInput;
@@ -156,6 +256,7 @@ function registerIpc(
 if (isPrimaryInstance) void app.whenReady().then(async () => {
   const userData = app.getPath("userData");
   const settings = new SettingsStore(userData);
+  const capabilities = new CapabilityStore(userData);
   const credentials = new EncryptedCredentialStore(userData);
   try {
     await migrateLegacyApiKeys(settings, credentials);
@@ -168,6 +269,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
     path.join(userData, "chat-sandbox"),
     sendAgentEvent,
     credentials,
+    capabilities,
   );
   authService = new AuthService(
     credentials,
@@ -175,7 +277,12 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
     (event) => mainWindow?.webContents.send("auth:event", event),
     (url) => shell.openExternal(url),
   );
-  registerIpc(settings, credentials, agentService, authService);
+  pluginService = new PluginService(
+    path.join(userData, "pi-agent"),
+    path.join(userData, "chat-sandbox"),
+    (event) => mainWindow?.webContents.send("plugins:event", event),
+  );
+  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities);
   mainWindow = createWindow();
 
   app.on("second-instance", () => {
@@ -195,5 +302,6 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   authService?.dispose();
+  pluginService?.dispose();
   agentService?.dispose();
 });

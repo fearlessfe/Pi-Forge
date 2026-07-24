@@ -113,6 +113,92 @@ export type SendPromptInput = {
   cwd?: string;
 };
 
+export type PluginResourceType = "extensions" | "skills" | "prompts" | "themes";
+
+export type PluginPackage = {
+  name: string;
+  version: string;
+  description: string;
+  publisher: string;
+  license?: string;
+  updatedAt?: string;
+  npmUrl?: string;
+  repositoryUrl?: string;
+  homepageUrl?: string;
+  weeklyDownloads?: number;
+  monthlyDownloads?: number;
+  score?: number;
+  insecure: boolean;
+  resources: PluginResourceType[];
+  compatibility: "desktop" | "review" | "unknown";
+};
+
+export type PluginSearchResult = {
+  packages: PluginPackage[];
+  total: number;
+  offset: number;
+};
+
+export type InstalledPlugin = {
+  source: string;
+  name: string;
+  version?: string;
+  installed: boolean;
+};
+
+export type PluginProgressEvent = {
+  type: "start" | "progress" | "complete" | "error";
+  action: "install" | "remove" | "update" | "clone" | "pull";
+  source: string;
+  message?: string;
+};
+
+export type PluginMutationResult = {
+  installed: InstalledPlugin[];
+  reloaded: boolean;
+  runtime: PluginRuntimeStatus;
+};
+
+export type SubagentProvider =
+  | { kind: "builtin" }
+  | { kind: "plugin"; source: string; toolName: string };
+
+export type PackageCapabilityProvider =
+  | { kind: "none" }
+  | { kind: "plugin"; source: string };
+
+export type CapabilitySettings = {
+  subagent: SubagentProvider;
+  memory: PackageCapabilityProvider;
+  learning: PackageCapabilityProvider;
+  subagentHistory: SubagentProvider[];
+  memoryHistory: PackageCapabilityProvider[];
+  learningHistory: PackageCapabilityProvider[];
+};
+
+export type RuntimeTool = {
+  name: string;
+  description: string;
+  active: boolean;
+  source: string;
+  sourceKind: "builtin" | "desktop" | "package" | "project" | "other";
+};
+
+export type PluginRuntimeStatus = {
+  hasSession: boolean;
+  configuredSubagent: SubagentProvider;
+  effectiveSubagent: SubagentProvider | { kind: "pending" };
+  configuredMemory: PackageCapabilityProvider;
+  effectiveMemory: PackageCapabilityProvider | { kind: "pending" };
+  configuredLearning: PackageCapabilityProvider;
+  effectiveLearning: PackageCapabilityProvider | { kind: "pending" };
+  subagentHistory: SubagentProvider[];
+  memoryHistory: PackageCapabilityProvider[];
+  learningHistory: PackageCapabilityProvider[];
+  fallbackReason?: string;
+  tools: RuntimeTool[];
+};
+
 export type PiDesktopApi = {
   settings: {
     get(): Promise<ModelSettings>;
@@ -129,6 +215,18 @@ export type PiDesktopApi = {
   };
   workspace: {
     choose(): Promise<{ name: string; path: string } | null>;
+  };
+  plugins: {
+    search(query: string, offset?: number): Promise<PluginSearchResult>;
+    details(name: string, version?: string): Promise<PluginPackage>;
+    list(): Promise<InstalledPlugin[]>;
+    install(name: string, version: string): Promise<PluginMutationResult>;
+    remove(source: string): Promise<PluginMutationResult>;
+    reload(): Promise<{ reloaded: boolean; runtime: PluginRuntimeStatus }>;
+    runtime(): Promise<PluginRuntimeStatus>;
+    setSubagentProvider(provider: SubagentProvider): Promise<PluginRuntimeStatus>;
+    setPackageCapability(slot: "memory" | "learning", provider: PackageCapabilityProvider): Promise<PluginRuntimeStatus>;
+    onEvent(listener: (event: PluginProgressEvent) => void): () => void;
   };
   agent: {
     send(input: SendPromptInput): Promise<{ runId: string }>;

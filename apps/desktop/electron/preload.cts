@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentEvent, AuthEvent, PiDesktopApi, SaveModelSettings, SendPromptInput } from "../src/contracts.js";
+import type { AgentEvent, AuthEvent, PiDesktopApi, PluginProgressEvent, SaveModelSettings, SendPromptInput } from "../src/contracts.js";
 
 const api: PiDesktopApi = {
   settings: {
@@ -21,6 +21,22 @@ const api: PiDesktopApi = {
   },
   workspace: {
     choose: () => ipcRenderer.invoke("workspace:choose"),
+  },
+  plugins: {
+    search: (query, offset) => ipcRenderer.invoke("plugins:search", query, offset),
+    details: (name, version) => ipcRenderer.invoke("plugins:details", name, version),
+    list: () => ipcRenderer.invoke("plugins:list"),
+    install: (name, version) => ipcRenderer.invoke("plugins:install", name, version),
+    remove: (source) => ipcRenderer.invoke("plugins:remove", source),
+    reload: () => ipcRenderer.invoke("plugins:reload"),
+    runtime: () => ipcRenderer.invoke("plugins:runtime"),
+    setSubagentProvider: (provider) => ipcRenderer.invoke("plugins:set-subagent-provider", provider),
+    setPackageCapability: (slot, provider) => ipcRenderer.invoke("plugins:set-package-capability", slot, provider),
+    onEvent: (listener: (event: PluginProgressEvent) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: PluginProgressEvent) => listener(payload);
+      ipcRenderer.on("plugins:event", handler);
+      return () => ipcRenderer.removeListener("plugins:event", handler);
+    },
   },
   agent: {
     send: (input: SendPromptInput) => ipcRenderer.invoke("agent:send", input),

@@ -329,7 +329,7 @@ export function App() {
               onSelectConversation={selectConversation}
               onNewChat={startNewChat}
               onOpenSettings={() => { setSettingsSection("models"); setView("settings"); }}
-              onOpenPlugins={() => setNotice({ title: "插件中心", message: "Pi 扩展由当前工作区的 .pi/extensions 自动加载。", type: "info" })}
+              onOpenPlugins={() => { setSettingsSection("plugins"); setView("settings"); }}
               onOpenPet={() => setNotice({ title: "Pi 宠物", message: "陪伴模式将在后续版本接入。", type: "info" })}
             />
             <main className="chat-main">
@@ -356,6 +356,7 @@ export function App() {
             providerCatalog={providerCatalog}
             authFlow={authFlow}
             theme={theme}
+            agentRunning={isRunning}
             onBack={() => setView("chat")}
             onSectionChange={setSettingsSection}
             onThemeChange={setTheme}

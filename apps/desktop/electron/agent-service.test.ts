@@ -129,6 +129,65 @@ describe("AgentService with a real Pi session", () => {
     }
   });
 
+  it("activates a third-party extension tool as the subagent provider", async () => {
+    const server = http.createServer((req, res) => {
+      req.resume();
+      req.on("end", () => writeSse(res, [
+        chunk({ role: "assistant" }),
+        chunk({ content: "ready" }),
+        chunk({}, "stop"),
+      ]));
+    });
+    const port = await listen(server);
+    const cwd = createDirectory("plugin-provider-workspace");
+    const agentDir = createDirectory("plugin-provider-agent");
+    const extensionDirectory = path.join(agentDir, "extensions");
+    fs.mkdirSync(extensionDirectory, { recursive: true });
+    fs.writeFileSync(path.join(extensionDirectory, "community-subagent.js"), `
+      export default function (pi) {
+        pi.registerTool({
+          name: "community_subagent",
+          label: "Community subagent",
+          description: "Delegate work through a community extension.",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+          execute: async () => ({ content: [{ type: "text", text: "community-result" }] })
+        });
+      }
+    `);
+    const configuration: SaveModelSettings = {
+      provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      modelId: "mock-model",
+      thinkingLevel: "off",
+      apiKey: "plugin-provider-key",
+    };
+    const capabilities = { get: () => ({
+      subagent: { kind: "plugin" as const, source: "auto", toolName: "community_subagent" },
+      memory: { kind: "none" as const },
+      learning: { kind: "none" as const },
+      subagentHistory: [],
+      memoryHistory: [],
+      learningHistory: [],
+    }) };
+    const service = new AgentService({ resolve: () => ({ ...configuration }) }, agentDir, cwd, () => {}, undefined, capabilities);
+
+    try {
+      await service.send("initialize plugin runtime", cwd);
+      await vi.waitFor(() => expect(service.isRunning()).toBe(false), { timeout: 8_000 });
+
+      const runtime = service.getPluginRuntime();
+      expect(runtime.effectiveSubagent).toEqual({ kind: "plugin", source: "auto", toolName: "community_subagent" });
+      expect(runtime.fallbackReason).toBeUndefined();
+      expect(runtime.tools).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: "community_subagent", active: true }),
+        expect.objectContaining({ name: "pi_desktop_subagent", active: false, sourceKind: "desktop" }),
+      ]));
+    } finally {
+      service.dispose();
+      await close(server);
+    }
+  });
+
   it("streams text, executes ask_user, captures every emitted SDK event, and preserves multi-turn history", async () => {
     const requests: ChatRequest[] = [];
     const server = http.createServer((req, res) => {
@@ -263,7 +322,7 @@ describe("AgentService with a real Pi session", () => {
                 id: "call-subagent",
                 type: "function",
                 function: {
-                  name: "spawn_subagent",
+                  name: "pi_desktop_subagent",
                   arguments: JSON.stringify({ role: "reviewer", task: "Inspect the focused change" }),
                 },
               }],
@@ -294,9 +353,9 @@ describe("AgentService with a real Pi session", () => {
       await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
 
       expect(eventsOfType(events, "message.delta").filter((event) => event.runId === runId).map((event) => event.text).join("")).toBe("parent-answer");
-      expect(events.some((event) => event.type === "tool.started" && event.name === "spawn_subagent")).toBe(true);
-      expect(events.some((event) => event.type === "tool.updated" && event.name === "spawn_subagent" && event.output.includes("child-report"))).toBe(true);
-      expect(events.some((event) => event.type === "tool.completed" && event.name === "spawn_subagent" && event.output.includes("child-report"))).toBe(true);
+      expect(events.some((event) => event.type === "tool.started" && event.name === "pi_desktop_subagent")).toBe(true);
+      expect(events.some((event) => event.type === "tool.updated" && event.name === "pi_desktop_subagent" && event.output.includes("child-report"))).toBe(true);
+      expect(events.some((event) => event.type === "tool.completed" && event.name === "pi_desktop_subagent" && event.output.includes("child-report"))).toBe(true);
       expect(requests).toHaveLength(3);
       expect(JSON.stringify(requests[1].messages)).toContain("You are the reviewer subagent");
       expect(requests[2].messages).toEqual(expect.arrayContaining([

@@ -9,6 +9,7 @@ import {
   LogOut,
   LockKeyhole,
   Palette,
+  Package,
   Settings2,
   Sparkles,
 } from "lucide-react";
@@ -22,6 +23,7 @@ import type {
 } from "../contracts";
 import type { SettingsSection, Theme } from "../types";
 import type { AuthFlowState } from "../types";
+import { PluginsPanel } from "./PluginsPanel";
 
 type SettingsViewProps = {
   activeSection: SettingsSection;
@@ -29,6 +31,7 @@ type SettingsViewProps = {
   providerCatalog: ProviderCatalogEntry[];
   authFlow: AuthFlowState | null;
   theme: Theme;
+  agentRunning: boolean;
   onBack: () => void;
   onSectionChange: (section: SettingsSection) => void;
   onThemeChange: (theme: Theme) => void;
@@ -46,6 +49,7 @@ const sections: Array<{
   items: Array<{ id: SettingsSection; label: string; icon: typeof Sparkles }>;
 }> = [
   { group: "AI", items: [{ id: "models", label: "大模型", icon: Sparkles }, { id: "permissions", label: "权限", icon: LockKeyhole }] },
+  { group: "扩展", items: [{ id: "plugins", label: "插件", icon: Package }] },
   { group: "应用", items: [{ id: "general", label: "通用", icon: Settings2 }, { id: "appearance", label: "外观", icon: Palette }] },
 ];
 
@@ -351,6 +355,7 @@ export function SettingsView(props: SettingsViewProps) {
       <SettingsNavigation activeSection={props.activeSection} onBack={props.onBack} onSectionChange={props.onSectionChange} />
       <main className="settings-content">
         {props.activeSection === "models" && <ModelsPanel settings={props.settings} providerCatalog={props.providerCatalog} authFlow={props.authFlow} onSave={props.onSave} onTest={props.onTest} onLogin={props.onLogin} onAnswerAuthPrompt={props.onAnswerAuthPrompt} onCancelAuth={props.onCancelAuth} onLogout={props.onLogout} onDismissAuth={props.onDismissAuth} />}
+        {props.activeSection === "plugins" && <PluginsPanel agentRunning={props.agentRunning} />}
         {props.activeSection === "permissions" && <PermissionsPanel />}
         {props.activeSection === "general" && <GeneralPanel />}
         {props.activeSection === "appearance" && <AppearancePanel theme={props.theme} onThemeChange={props.onThemeChange} />}
