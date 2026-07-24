@@ -7,3 +7,18 @@ export function appendMessageDelta(activities: ConversationActivity[], text: str
   }
   return [...activities.slice(0, -1), { ...last, text: last.text + text }];
 }
+
+export function normalizeVisibleActivities(activities: ConversationActivity[]): ConversationActivity[] {
+  const normalized: ConversationActivity[] = [];
+  for (const activity of activities) {
+    if (activity.type === "tool" && activity.name === "ask_user") continue;
+    const previous = normalized.at(-1);
+    if (previous?.type === "thinking" && activity.type === "thinking") {
+      const separator = previous.text && activity.text ? "\n\n" : "";
+      normalized[normalized.length - 1] = { ...previous, text: `${previous.text}${separator}${activity.text}` };
+      continue;
+    }
+    normalized.push(activity);
+  }
+  return normalized;
+}

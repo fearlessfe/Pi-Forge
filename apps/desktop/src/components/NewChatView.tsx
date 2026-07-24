@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import type { ContextUsageInfo, ProviderCatalogEntry, ProviderId, ResponseUsage } from "../contracts";
+import { normalizeVisibleActivities } from "../conversation-activity";
 import { shouldSubmitOnEnter } from "../keyboard";
 import type { ChatActivity, ChatTurn, Project } from "../types";
 import { BrandMark } from "./BrandMark";
@@ -291,8 +292,7 @@ function toolLabel(name: string) {
   return toolLabels[name] ?? name;
 }
 
-function ProcessGroup({ activities }: { activities: Exclude<ChatActivity, { type: "message" | "question" }>[] }) {
-  const tools = activities.filter((activity): activity is Extract<ChatActivity, { type: "tool" }> => activity.type === "tool");
+function ToolGroup({ tools }: { tools: Extract<ChatActivity, { type: "tool" }>[] }) {
   const allCommands = tools.length > 0 && tools.every((tool) => tool.name === "bash");
   const running = tools.some((tool) => tool.status === "running");
   const failed = tools.some((tool) => tool.status === "error");
@@ -315,9 +315,7 @@ function ProcessGroup({ activities }: { activities: Exclude<ChatActivity, { type
         <ChevronDown size={14} className="activity-chevron" />
       </Collapsible.Trigger>
       <Collapsible.Content className="tool-group-content">
-        {activities.map((activity) => activity.type === "thinking"
-          ? <ThinkingActivity key={activity.id} activity={activity} />
-          : <ToolActivity key={activity.id} activity={activity} />)}
+        {tools.map((tool) => <ToolActivity key={tool.id} activity={tool} />)}
       </Collapsible.Content>
     </Collapsible.Root>
   );
@@ -377,29 +375,29 @@ function ActivityTimeline({
   onAnswerQuestion: NewChatViewProps["onAnswerQuestion"];
 }) {
   const activities = Array.isArray(turn.activities) ? turn.activities : [];
-  const visible = activities.filter((activity) => !(activity.type === "tool" && activity.name === "ask_user"));
+  const visible = normalizeVisibleActivities(activities);
   const hasMessages = visible.some((activity) => activity.type === "message" && activity.text);
   const timeline: Array<
-    | { type: "direct"; activity: Extract<ChatActivity, { type: "message" | "question" }> }
-    | { type: "process"; key: string; activities: Exclude<ChatActivity, { type: "message" | "question" }>[] }
+    | { type: "direct"; activity: Exclude<ChatActivity, { type: "tool" }> }
+    | { type: "tools"; key: string; tools: Extract<ChatActivity, { type: "tool" }>[] }
   > = [];
-  let process: Exclude<ChatActivity, { type: "message" | "question" }>[] = [];
+  let tools: Extract<ChatActivity, { type: "tool" }>[] = [];
 
-  function flushProcess() {
-    if (process.length === 0) return;
-    timeline.push({ type: "process", key: `process-${process[0].id}`, activities: process });
-    process = [];
+  function flushTools() {
+    if (tools.length === 0) return;
+    timeline.push({ type: "tools", key: `tools-${tools[0].id}`, tools });
+    tools = [];
   }
 
   for (const activity of visible) {
-    if (activity.type === "message" || activity.type === "question") {
-      flushProcess();
-      timeline.push({ type: "direct", activity });
-    } else {
-      process.push(activity);
+    if (activity.type === "tool") {
+      tools.push(activity);
+      continue;
     }
+    flushTools();
+    timeline.push({ type: "direct", activity });
   }
-  flushProcess();
+  flushTools();
 
   if (visible.length === 0) {
     if (turn.answer) return <MessageActivity text={turn.answer} />;
@@ -409,8 +407,9 @@ function ActivityTimeline({
   return (
     <>
       {timeline.map((item) => {
-        if (item.type === "process") return <ProcessGroup key={item.key} activities={item.activities} />;
+        if (item.type === "tools") return <ToolGroup key={item.key} tools={item.tools} />;
         if (item.activity.type === "message") return <MessageActivity key={item.activity.id} text={item.activity.text} />;
+        if (item.activity.type === "thinking") return <ThinkingActivity key={item.activity.id} activity={item.activity} />;
         return <QuestionActivity key={item.activity.id} turnId={turn.id} activity={item.activity} onAnswer={onAnswerQuestion} />;
       })}
       {!hasMessages && turn.answer && <MessageActivity text={turn.answer} />}
