@@ -16,6 +16,10 @@ const api: PiDesktopApi = {
     get: () => ipcRenderer.invoke("permissions:get"),
     save: (settings) => ipcRenderer.invoke("permissions:save", settings),
   },
+  systemPrompt: {
+    get: () => ipcRenderer.invoke("system-prompt:get"),
+    save: (settings) => ipcRenderer.invoke("system-prompt:save", settings),
+  },
   auth: {
     login: (providerId) => ipcRenderer.invoke("auth:login", providerId),
     answer: (requestId, value) => ipcRenderer.invoke("auth:answer", requestId, value),

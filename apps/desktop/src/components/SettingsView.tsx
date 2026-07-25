@@ -28,6 +28,7 @@ import type {
   ProviderCatalogEntry,
   ProviderId,
   SaveModelSettings,
+  SystemPromptSettings,
   ThinkingLevel,
 } from "../contracts";
 import type { SettingsSection, Theme } from "../types";
@@ -39,6 +40,7 @@ type SettingsViewProps = {
   activeSection: SettingsSection;
   settings: ModelSettings;
   permissionRuntime: PermissionRuntime;
+  systemPrompt: SystemPromptSettings;
   providerCatalog: ProviderCatalogEntry[];
   authFlow: AuthFlowState | null;
   theme: Theme;
@@ -48,6 +50,7 @@ type SettingsViewProps = {
   onThemeChange: (theme: Theme) => void;
   onSave: (settings: SaveModelSettings) => Promise<void>;
   onSavePermissions: (settings: PermissionSettings) => Promise<void>;
+  onSaveSystemPrompt: (settings: SystemPromptSettings) => Promise<void>;
   onDiscoverModels: (settings: SaveModelSettings) => Promise<ModelCatalogEntry[]>;
   onRefreshMetadata: () => Promise<ProviderCatalogEntry[]>;
   onSaveMetadata: (providerId: ProviderId, modelId: string, metadata: ModelMetadataOverride) => Promise<ProviderCatalogEntry[]>;
@@ -714,8 +717,32 @@ function PermissionsPanel({
   );
 }
 
-function GeneralPanel() {
+function GeneralPanel({
+  systemPrompt,
+  agentRunning,
+  onSaveSystemPrompt,
+}: Pick<SettingsViewProps, "systemPrompt" | "agentRunning" | "onSaveSystemPrompt">) {
   const { language, setLanguage, t } = useI18n();
+  const [content, setContent] = useState(systemPrompt.content);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const normalizedContent = content.trim();
+  const changed = normalizedContent !== systemPrompt.content;
+
+  useEffect(() => setContent(systemPrompt.content), [systemPrompt.content]);
+
+  async function save() {
+    setSaving(true);
+    setError("");
+    try {
+      await onSaveSystemPrompt({ content });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message.replace(/^Error invoking remote method '[^']+': Error: /, "") : String(saveError));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="settings-panel compact-settings-panel">
       <header className="settings-page-header"><div><h2>{t("通用")}</h2><p>{t("调整 Pi Desktop 的会话和系统行为。")}</p></div></header>
@@ -723,6 +750,31 @@ function GeneralPanel() {
         <label className="settings-toggle-row"><span><strong>{t("语言")}</strong><small>{t("选择 Pi Desktop 的界面语言。")}</small></span><select className="native-select language-select" value={language} onChange={(event) => setLanguage(event.target.value as "zh-CN" | "en-US")}><option value="zh-CN">{t("简体中文")}</option><option value="en-US">English</option></select></label>
         <div className="settings-toggle-row"><span><strong>{t("流式过程")}</strong><small>{t("实时显示 thinking、文本增量和工具状态")}</small></span><button className="switch is-on" type="button" aria-label={t("启用流式过程")}><i /></button></div>
         <div className="settings-toggle-row"><span><strong>{t("工作区上下文")}</strong><small>{t("加载项目 AGENTS.md、skills 与 Pi extensions")}</small></span><button className="switch is-on" type="button" aria-label={t("启用工作区上下文")}><i /></button></div>
+      </section>
+      <section className="system-prompt-card" aria-labelledby="system-prompt-title">
+        <header>
+          <span><strong id="system-prompt-title">{t("系统提示词")}</strong><small>{t("追加到 Pi 默认系统提示词，用于设置全局行为与回答偏好。")}</small></span>
+          <span className="policy-badge policy-badge--allowed">{t("追加模式")}</span>
+        </header>
+        <label className="system-prompt-editor">
+          <span>{t("自定义指令")}</span>
+          <textarea
+            value={content}
+            onChange={(event) => setContent(event.target.value)}
+            placeholder={t("例如：默认使用简体中文回答；修改代码后运行相关测试。")}
+            maxLength={100_000}
+            disabled={saving}
+            spellCheck={false}
+          />
+        </label>
+        {error && <div className="settings-error" role="alert">{error}</div>}
+        <footer>
+          <small>{t(agentRunning ? "Agent 正在运行，结束当前任务后才能修改。" : "保存后会重启 Agent 会话，下一条消息立即生效。")}</small>
+          <div>
+            <button className="secondary-button" type="button" disabled={saving || !content} onClick={() => setContent("")}>{t("恢复默认")}</button>
+            <button className="primary-button" type="button" disabled={saving || agentRunning || !changed} onClick={() => void save()}>{t(saving ? "保存中…" : "保存并重启 Agent")}</button>
+          </div>
+        </footer>
       </section>
     </div>
   );
@@ -755,7 +807,7 @@ export function SettingsView(props: SettingsViewProps) {
         {props.activeSection === "model-metadata" && <ModelMetadataPanel settings={props.settings} providerCatalog={props.providerCatalog} onRefreshMetadata={props.onRefreshMetadata} onSaveMetadata={props.onSaveMetadata} onResetMetadata={props.onResetMetadata} />}
         {props.activeSection === "plugins" && <PluginsPanel agentRunning={props.agentRunning} />}
         {props.activeSection === "permissions" && <PermissionsPanel runtime={props.permissionRuntime} agentRunning={props.agentRunning} onSave={props.onSavePermissions} />}
-        {props.activeSection === "general" && <GeneralPanel />}
+        {props.activeSection === "general" && <GeneralPanel systemPrompt={props.systemPrompt} agentRunning={props.agentRunning} onSaveSystemPrompt={props.onSaveSystemPrompt} />}
         {props.activeSection === "appearance" && <AppearancePanel theme={props.theme} onThemeChange={props.onThemeChange} />}
       </main>
     </section>

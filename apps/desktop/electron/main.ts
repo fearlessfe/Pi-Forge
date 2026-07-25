@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { AgentEvent, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, SaveModelSettings, SendPromptInput, SubagentProvider } from "../src/contracts.js";
+import type { AgentEvent, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, SaveModelSettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
 import { AgentService } from "./agent-service.js";
 import { AuthService } from "./auth-service.js";
 import { CapabilityStore } from "./capability-store.js";
@@ -11,6 +11,7 @@ import { PluginService } from "./plugin-service.js";
 import { PermissionStore } from "./permission-store.js";
 import { SettingsStore } from "./settings-store.js";
 import { ModelMetadataStore } from "./model-metadata-store.js";
+import { SystemPromptStore } from "./system-prompt-store.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
@@ -104,6 +105,13 @@ function requirePermissionSettings(value: unknown): PermissionSettings {
   return value as PermissionSettings;
 }
 
+function requireSystemPromptSettings(value: unknown): SystemPromptSettings {
+  if (!value || typeof value !== "object" || typeof (value as Record<string, unknown>).content !== "string") {
+    throw new Error("系统提示词格式无效。");
+  }
+  return value as SystemPromptSettings;
+}
+
 function registerIpc(
   settings: SettingsStore,
   credentials: EncryptedCredentialStore,
@@ -112,6 +120,7 @@ function registerIpc(
   plugins: PluginService,
   capabilities: CapabilityStore,
   permissions: PermissionStore,
+  systemPrompt: SystemPromptStore,
   modelMetadata: ModelMetadataStore,
 ): void {
   ipcMain.handle("settings:get", () => settingsWithCredentials(settings, credentials));
@@ -150,6 +159,13 @@ function registerIpc(
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改权限模式。");
     permissions.save(requirePermissionSettings(value));
     return agent.getPermissionRuntime();
+  });
+  ipcMain.handle("system-prompt:get", () => systemPrompt.get());
+  ipcMain.handle("system-prompt:save", (_event, value: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改系统提示词。");
+    const saved = systemPrompt.save(requireSystemPromptSettings(value));
+    agent.reset();
+    return saved;
   });
   ipcMain.handle("auth:login", async (_event, providerId: unknown) => {
     agent.reset();
@@ -308,6 +324,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   const permissions = new PermissionStore(userData);
   const credentials = new EncryptedCredentialStore(userData);
   const modelMetadata = new ModelMetadataStore(userData);
+  const systemPrompt = new SystemPromptStore(path.join(userData, "pi-agent"));
   try {
     await migrateLegacyApiKeys(settings, credentials);
   } catch (error) {
@@ -336,7 +353,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
     chatSandbox,
     (event) => mainWindow?.webContents.send("plugins:event", event),
   );
-  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, modelMetadata);
+  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata);
   mainWindow = createWindow();
 
   app.on("second-instance", () => {

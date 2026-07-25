@@ -20,6 +20,10 @@ export type PermissionRuntime = PermissionSettings & {
   platform: string;
 };
 
+export type SystemPromptSettings = {
+  content: string;
+};
+
 export type ModelSettings = {
   provider: ProviderId;
   baseUrl: string;
@@ -301,6 +305,10 @@ export type PiDesktopApi = {
   permissions: {
     get(): Promise<PermissionRuntime>;
     save(settings: PermissionSettings): Promise<PermissionRuntime>;
+  };
+  systemPrompt: {
+    get(): Promise<SystemPromptSettings>;
+    save(settings: SystemPromptSettings): Promise<SystemPromptSettings>;
   };
   auth: {
     login(providerId: ProviderId): Promise<{ loginId: string }>;

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ConversationSidebar } from "./components/ConversationSidebar";
 import { NewChatView } from "./components/NewChatView";
 import { SettingsView } from "./components/SettingsView";
-import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, SaveModelSettings } from "./contracts";
+import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, SaveModelSettings, SystemPromptSettings } from "./contracts";
 import { appendMessageDelta } from "./conversation-activity";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { isPrimaryShortcut, shortcutLabel } from "./keyboard";
@@ -32,6 +32,8 @@ const initialPermissionRuntime: PermissionRuntime = {
   sandbox: "unavailable",
   platform: "unknown",
 };
+
+const initialSystemPromptSettings: SystemPromptSettings = { content: "" };
 
 function getInitialTheme(): Theme {
   const saved = window.localStorage.getItem("pi-theme");
@@ -189,6 +191,7 @@ export function App() {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [modelSettings, setModelSettings] = useState<ModelSettings>(initialModelSettings);
   const [permissionRuntime, setPermissionRuntime] = useState<PermissionRuntime>(initialPermissionRuntime);
+  const [systemPromptSettings, setSystemPromptSettings] = useState<SystemPromptSettings>(initialSystemPromptSettings);
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo>();
   const [authFlow, setAuthFlow] = useState<AuthFlowState | null>(null);
@@ -218,6 +221,7 @@ export function App() {
   useEffect(() => {
     void refreshModelSettings();
     void refreshPermissionRuntime();
+    void refreshSystemPromptSettings();
     void refreshProviderCatalog(t("无法读取模型目录"));
     void refreshConversationHistory();
     const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => {
@@ -252,6 +256,12 @@ export function App() {
   async function refreshPermissionRuntime() {
     await window.piDesktop?.permissions?.get().then(setPermissionRuntime).catch((error: unknown) => {
       setNotice({ title: t("无法读取权限设置"), message: eventError(error), type: "info" });
+    });
+  }
+
+  async function refreshSystemPromptSettings() {
+    await window.piDesktop?.systemPrompt?.get().then(setSystemPromptSettings).catch((error: unknown) => {
+      setNotice({ title: t("无法读取系统提示词"), message: eventError(error), type: "info" });
     });
   }
 
@@ -548,6 +558,17 @@ export function App() {
     });
   }
 
+  async function saveSystemPromptSettings(input: SystemPromptSettings) {
+    if (!window.piDesktop?.systemPrompt) throw new Error("系统提示词只能在 Electron 应用中保存。");
+    const saved = await window.piDesktop.systemPrompt.save(input);
+    setSystemPromptSettings(saved);
+    setNotice({
+      title: t("系统提示词已更新"),
+      message: t(saved.content ? "Agent 已重启，下一条消息将使用新的系统提示词。" : "已恢复默认系统提示词，Agent 已重启。"),
+      type: "success",
+    });
+  }
+
   async function discoverModels(input: SaveModelSettings) {
     if (!window.piDesktop) throw new Error("模型列表只能在 Electron 应用中获取。");
     if (typeof window.piDesktop.settings.discoverModels !== "function") {
@@ -711,6 +732,7 @@ export function App() {
             activeSection={settingsSection}
             settings={modelSettings}
             permissionRuntime={permissionRuntime}
+            systemPrompt={systemPromptSettings}
             providerCatalog={providerCatalog}
             authFlow={authFlow}
             theme={theme}
@@ -720,6 +742,7 @@ export function App() {
             onThemeChange={setTheme}
             onSave={saveModelSettings}
             onSavePermissions={savePermissionSettings}
+            onSaveSystemPrompt={saveSystemPromptSettings}
             onDiscoverModels={discoverModels}
             onRefreshMetadata={refreshModelMetadata}
             onSaveMetadata={saveModelMetadata}
