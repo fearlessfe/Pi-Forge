@@ -26,12 +26,12 @@ function nodePtyRoot(): string {
   return path.dirname(path.dirname(entry));
 }
 
-export function ensureNodePtySpawnHelperExecutable(root = nodePtyRoot()): string | undefined {
-  if (process.platform === "win32") return undefined;
+export function ensureNodePtySpawnHelperExecutable(root = nodePtyRoot(), platform = process.platform): string | undefined {
+  if (platform !== "darwin") return undefined;
   const candidates = [
     path.join(root, "build", "Release"),
     path.join(root, "build", "Debug"),
-    path.join(root, "prebuilds", `${process.platform}-${process.arch}`),
+    path.join(root, "prebuilds", `${platform}-${process.arch}`),
   ];
   const directory = candidates.find((candidate) => (
     fs.existsSync(path.join(candidate, "pty.node"))

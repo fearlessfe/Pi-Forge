@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 
-if (process.platform !== "win32") {
+// node-pty only builds spawn-helper on macOS. Linux loads pty.node directly,
+// while Windows uses ConPTY/winpty executables from its platform prebuild.
+if (process.platform === "darwin") {
   const require = createRequire(import.meta.url);
   const entry = require.resolve("node-pty");
   const root = path.dirname(path.dirname(entry));

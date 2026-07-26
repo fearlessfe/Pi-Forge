@@ -19,16 +19,21 @@ afterEach(() => {
 
 describe("TerminalService", () => {
   it("repairs a packaged node-pty spawn-helper that lost its executable bit", () => {
-    if (process.platform === "win32") return;
     const root = directory("node-pty");
-    const prebuild = path.join(root, "prebuilds", `${process.platform}-${process.arch}`);
+    const prebuild = path.join(root, "prebuilds", `darwin-${process.arch}`);
     fs.mkdirSync(prebuild, { recursive: true });
     fs.writeFileSync(path.join(prebuild, "pty.node"), "native-placeholder");
     const helper = path.join(prebuild, "spawn-helper");
     fs.writeFileSync(helper, "helper", { mode: 0o644 });
 
-    expect(ensureNodePtySpawnHelperExecutable(root)).toBe(helper);
+    expect(ensureNodePtySpawnHelperExecutable(root, "darwin")).toBe(helper);
     expect(fs.statSync(helper).mode & 0o111).not.toBe(0);
+  });
+
+  it("does not require the macOS-only spawn-helper on Linux or Windows", () => {
+    const root = directory("node-pty-without-helper");
+    expect(ensureNodePtySpawnHelperExecutable(root, "linux")).toBeUndefined();
+    expect(ensureNodePtySpawnHelperExecutable(root, "win32")).toBeUndefined();
   });
 
   it("owns PTY lifecycle, input, resize and renderer events", () => {
