@@ -1,11 +1,13 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import i18next, { type TOptions } from "i18next";
+import { I18nextProvider, useTranslation } from "react-i18next";
+import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 
 export type AppLanguage = "zh-CN" | "en-US";
 
 type Variables = Record<string, string | number>;
-type Translate = (message: string, variables?: Variables) => string;
+export type Translate = (message: string, variables?: Variables) => string;
 
-const english: Record<string, string> = {
+export const enUS: Record<string, string> = {
   "返回对话": "Back to chats",
   "设置": "Settings",
   "扩展": "Extensions",
@@ -348,6 +350,149 @@ const english: Record<string, string> = {
   "包含资源": "Included resources",
   "包未声明资源清单，安装后由 Pi 自动发现": "The package does not declare a resource list; Pi will discover resources after installation",
   "npm 将这个版本标记为存在安全风险，不建议安装。": "npm has flagged this version as a security risk; installation is not recommended.",
+  "查看 {name} 详情": "View details for {name}",
+  "查看详情": "View details",
+  "月下载": "monthly downloads",
+  "更新时间": "Updated",
+  "来源": "Source",
+  "完整性摘要": "Integrity digest",
+  "资源清单": "Resource manifest",
+  "注册表未提供完整性摘要": "No integrity digest provided by the registry",
+  "低风险": "Low risk",
+  "中风险": "Medium risk",
+  "高风险": "High risk",
+  "已阻止": "Blocked",
+  "未知发布者": "Unknown publisher",
+  "扩展资源": "Extension",
+  "技能资源": "Skill",
+  "提示词资源": "Prompt",
+  "主题资源": "Theme",
+  "旧版来源": "Legacy source",
+  "历史提供者": "Historical provider",
+  "插件中心只能在 Electron 应用中使用。": "The plugin center is available only in the Electron app.",
+  "Electron 主进程仍在运行旧版本。请完全退出并重新启动 Pi Desktop，插件运行时接口会在启动时注册。": "The Electron main process is still running an older version. Quit Pi Desktop completely and restart it to register the plugin runtime interface.",
+  "{name} 已安装，并已在当前会话中重新加载。": "{name} was installed and reloaded in the current session.",
+  "{name} 已安装，将在创建下一次 Agent 会话时启用。": "{name} was installed and will be enabled in the next agent session.",
+  "确定卸载 {name}？": "Uninstall {name}?",
+  "{name} 已卸载，当前会话已重新加载。": "{name} was uninstalled and the current session was reloaded.",
+  "{name} 已卸载。": "{name} was uninstalled.",
+  "当前 Agent 会话已重新加载插件。": "Plugins were reloaded in the current agent session.",
+  "目前没有活动会话；插件会在下次会话启动时加载。": "There is no active session. Plugins will load when the next session starts.",
+  "{name} 已在{scope}启用{reload}。": "{name} was enabled for {scope}{reload}.",
+  "{name} 已在{scope}停用{reload}。": "{name} was disabled for {scope}{reload}.",
+  "当前项目": "the current project",
+  "所有项目": "all projects",
+  "并重新加载": " and reloaded",
+  "请选择插件来源和由该 Extension 注册的工具名。": "Choose a plugin source and a tool registered by that extension.",
+  "Subagent 已切换为内置实现。": "Subagent was switched to the built-in implementation.",
+  "Subagent 已切换为插件工具 {name}。": "Subagent was switched to plugin tool {name}.",
+  "已选择内置实现；第三方提供者需要在活动会话中验证。": "The built-in implementation was selected. Third-party providers require an active session for verification.",
+  "记忆能力提供者已切换。": "The memory capability provider was changed.",
+  "自学习能力提供者已切换。": "The learning capability provider was changed.",
+  "Fork 会话": "Fork chat",
+  "从此处 Fork": "Fork from here",
+  "任务文件变更": "Task file changes",
+  "全部回退": "Revert all",
+  "全部接受": "Accept all",
+  "关闭 {name}": "Close {name}",
+  "接受": "Accept",
+  "该任务的变更将保留在工作区。": "The changes from this task will remain in the workspace.",
+  "文件变更已回退": "File changes reverted",
+  "已恢复 Agent 修改前的文件内容。": "The files were restored to their state before the agent changed them.",
+  "部分变更未回退": "Some changes were not reverted",
+  "文件变更已接受": "File changes accepted",
+  "会话 Fork 已创建": "Chat fork created",
+  "已从选定消息节点创建独立会话。": "A separate chat was created from the selected message.",
+  "已复制完整上下文到独立会话。": "The full context was copied into a separate chat.",
+  "会话标签已更新": "Chat tags updated",
+  "已清空标签": "Tags cleared",
+  "会话已导出": "Chat exported",
+  "无法 Fork 会话": "Could not fork chat",
+  "无法回退文件变更": "Could not revert file changes",
+  "无法接受文件变更": "Could not accept file changes",
+  "无法更新会话标签": "Could not update chat tags",
+  "无法更新归档状态": "Could not update archive status",
+  "无法导出会话": "Could not export chat",
+  "已归档": "Archived",
+  "导出 Markdown": "Export Markdown",
+  "导出 JSON": "Export JSON",
+  "编辑标签": "Edit tags",
+  "输入标签，用逗号分隔（最多 8 个）": "Enter tags separated by commas (up to 8)",
+  "MCP Servers": "MCP servers",
+  "连接 stdio 或 Streamable HTTP Server，并将其工具安全地提供给 Agent。": "Connect stdio or Streamable HTTP servers and make their tools safely available to the agent.",
+  "任务运行期间不能修改 MCP 配置；连接状态仍可查看。": "MCP configuration cannot be changed while a task is running; connection status remains available.",
+  "添加 Server": "Add server",
+  "添加一个用户级或可信项目级 Server。": "Add a user-level or trusted project-level server.",
+  "尚未配置 MCP Server": "No MCP servers configured",
+  "当前项目未受信任，因此不会读取或运行 .pi/mcp.json。用户级 Server 仍可使用。": "The current project is not trusted, so .pi/mcp.json will not be read or run. User-level servers remain available.",
+  "刷新": "Refresh",
+  "重连": "Reconnect",
+  "编辑": "Edit",
+  "删除": "Delete",
+  "名称": "Name",
+  "作用域": "Scope",
+  "用户": "User",
+  "传输": "Transport",
+  "命令": "Command",
+  "参数（每行一个）": "Arguments (one per line)",
+  "工作目录": "Working directory",
+  "Server URL": "Server URL",
+  "Server ID": "Server ID",
+  "超时（秒）": "Timeout (seconds)",
+  "环境变量": "Environment variables",
+  "环境变量 JSON": "Environment variables JSON",
+  "请求头": "Request headers",
+  "请求头 JSON": "Request headers JSON",
+  "私密环境变量": "Secret environment variables",
+  "私密环境变量 JSON": "Secret environment variables JSON",
+  "私密请求头": "Secret request headers",
+  "私密请求头 JSON": "Secret request headers JSON",
+  "私密字段使用操作系统安全存储加密，不写入 MCP 配置文件，也不会回显到界面。": "Secret fields are encrypted using secure operating-system storage, are not written to MCP configuration files, and are never shown in the interface.",
+  "删除此前安全保存的凭据": "Remove previously saved credentials",
+  "凭据已保存": "Credentials saved",
+  "连接日志": "Connection log",
+  "可选": "Optional",
+  "启用": "Enable",
+  "终端": "Terminal",
+  "集成终端": "Integrated terminal",
+  "打开终端": "Open terminal",
+  "关闭终端面板": "Close terminal panel",
+  "终端标签页": "Terminal tabs",
+  "新建终端": "New terminal",
+  "正在启动终端…": "Starting terminal…",
+  "没有打开的终端": "No open terminals",
+  "由你直接控制；不经过 Agent 权限与沙箱策略": "Controlled directly by you; agent permissions and sandbox policies do not apply",
+  "全局启用": "Enable globally",
+  "全局停用": "Disable globally",
+  "项目启用": "Enable for project",
+  "项目停用": "Disable for project",
+  "查看 {name} 的用途与使用方法": "See what {name} does and how to use it",
+  "查看用途": "View uses",
+  "插件用途与使用方法": "Plugin uses and setup",
+  "你可以用它来": "What you can do with it",
+  "根据插件声明的能力整理": "Based on declared plugin capabilities",
+  "怎么使用": "How to use it",
+  "已安装插件的使用步骤": "Steps for an installed plugin",
+  "安装后的使用步骤": "What to do after installation",
+  "作者提供的使用说明": "Usage notes from the publisher",
+  "以下内容保留发布者原文": "Publisher content is shown in its original language",
+  "技术信息与资源清单": "Technical information and resource manifest",
+  "许可证": "License",
+  "插件概况": "Plugin overview",
+  "下载量未知": "Download count unavailable",
+  "更新于 {date}": "Updated {date}",
+  "更新时间未知": "Update date unavailable",
+  "调用插件新增的工具或命令，扩展 Agent 可以执行的操作。": "Use new tools or commands added by the plugin to expand what the agent can do.",
+  "让 Agent 按插件内置的专业流程处理相关任务。": "Let the agent follow the plugin's specialized workflows for related tasks.",
+  "使用插件提供的预设提示词，更快启动重复性任务。": "Use included prompts to start recurring tasks faster.",
+  "使用插件附带的主题资源调整支持的界面外观。": "Use the included theme resources to change the appearance of supported interfaces.",
+  "该包未声明具体能力；安装后 Pi 会尝试自动发现可用资源。": "This package does not declare specific capabilities. Pi will try to discover its resources after installation.",
+  "确认插件已启用，然后重新加载当前 Agent 会话。": "Make sure the plugin is enabled, then reload the current agent session.",
+  "点击下方安装，Pi 会校验插件并重新加载当前 Agent 会话。": "Install it below. Pi will verify the plugin and reload the current agent session.",
+  "在对话中直接描述你的目标；Agent 会在适用时调用这个插件的能力。": "Describe your goal in the chat. The agent will use this plugin when its capabilities apply.",
+  "打开可用命令，在插件提供的 Prompt 中选择适合当前任务的一项。": "Open available commands and choose a prompt provided by the plugin for your task.",
+  "重新加载后，在支持插件主题的 Pi 界面中选择新主题。": "After reloading, select the new theme in a Pi interface that supports plugin themes.",
+  "如果能力没有立即出现，请新建一个 Agent 会话后再试。": "If the capability does not appear immediately, start a new agent session and try again.",
   "已获取 {count} 个模型": "Fetched {count} models",
   "已同步 {providers} 个提供商、{models} 个模型；用户修改保持不变。": "Synced {providers} providers and {models} models; user edits were preserved.",
   "必须是大于或等于 0 的数字。": "must be a number greater than or equal to 0.",
@@ -402,20 +547,58 @@ const english: Record<string, string> = {
   "模型目录刷新失败": "Could not refresh model catalog",
   "请在浏览器中完成登录。": "Complete sign-in in your browser.",
   "请在浏览器中输入设备码。": "Enter the device code in your browser.",
-  };
+};
+
+export const zhCN: Record<string, string> = Object.fromEntries(
+  Object.keys(enUS).map((key) => [key, key]),
+);
 
 function initialLanguage(): AppLanguage {
-  const saved = window.localStorage.getItem("pi-language");
-  return saved === "en-US" || saved === "zh-CN" ? saved : "zh-CN";
+  if (typeof window === "undefined") return "zh-CN";
+  try {
+    const saved = window.localStorage.getItem("pi-language");
+    return saved === "en-US" || saved === "zh-CN" ? saved : "zh-CN";
+  } catch {
+    return "zh-CN";
+  }
 }
 
-function interpolate(message: string, variables?: Variables): string {
-  if (!variables) return message;
-  return message.replace(/\{(\w+)\}/g, (match, name: string) => String(variables[name] ?? match));
+function normalizeLanguage(language?: string): AppLanguage {
+  return language?.toLowerCase().startsWith("en") ? "en-US" : "zh-CN";
 }
+
+export const i18n = i18next.createInstance();
+
+void i18n.init({
+  lng: initialLanguage(),
+  fallbackLng: "zh-CN",
+  supportedLngs: ["zh-CN", "en-US"],
+  resources: {
+    "zh-CN": { translation: zhCN },
+    "en-US": { translation: enUS },
+  },
+  defaultNS: "translation",
+  keySeparator: false,
+  nsSeparator: false,
+  returnNull: false,
+  returnEmptyString: false,
+  initAsync: false,
+  interpolation: {
+    escapeValue: false,
+    prefix: "{",
+    suffix: "}",
+  },
+  react: { useSuspense: false },
+  saveMissing: import.meta.env.DEV,
+  missingKeyHandler: (languages, _namespace, key) => {
+    if (languages.includes("en-US") && /[\u3400-\u9fff]/u.test(key)) {
+      console.warn(`[i18n] Missing English translation: ${key}`);
+    }
+  },
+});
 
 export function translateMessage(language: AppLanguage, message: string, variables?: Variables): string {
-  return interpolate(language === "en-US" ? english[message] ?? message : message, variables);
+  return String(i18n.getFixedT(language)(message, variables as TOptions));
 }
 
 type I18nContextValue = {
@@ -425,28 +608,34 @@ type I18nContextValue = {
   locale: string;
 };
 
-const I18nContext = createContext<I18nContextValue | null>(null);
-
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [language, setLanguage] = useState<AppLanguage>(initialLanguage);
-
   useEffect(() => {
-    window.localStorage.setItem("pi-language", language);
-    document.documentElement.lang = language;
-  }, [language]);
+    const syncLanguage = (nextLanguage: string) => {
+      const normalized = normalizeLanguage(nextLanguage);
+      try {
+        window.localStorage.setItem("pi-language", normalized);
+      } catch {
+        // The app can still switch language when persistent storage is unavailable.
+      }
+      document.documentElement.lang = normalized;
+    };
+    syncLanguage(i18n.resolvedLanguage ?? i18n.language);
+    i18n.on("languageChanged", syncLanguage);
+    return () => { i18n.off("languageChanged", syncLanguage); };
+  }, []);
 
-  const value = useMemo<I18nContextValue>(() => ({
-    language,
-    setLanguage,
-    locale: language,
-    t: (message, variables) => translateMessage(language, message, variables),
-  }), [language]);
-
-  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
+  return <I18nextProvider i18n={i18n}>{children}</I18nextProvider>;
 }
 
 export function useI18n(): I18nContextValue {
-  const context = useContext(I18nContext);
-  if (!context) throw new Error("useI18n must be used inside I18nProvider");
-  return context;
+  const { t: translate, i18n: instance } = useTranslation();
+  const language = normalizeLanguage(instance.resolvedLanguage ?? instance.language);
+  const setLanguage = useCallback((nextLanguage: AppLanguage) => {
+    void instance.changeLanguage(nextLanguage);
+  }, [instance]);
+  const t = useCallback<Translate>((message, variables) => (
+    String(translate(message, variables as TOptions))
+  ), [translate]);
+
+  return useMemo(() => ({ language, setLanguage, t, locale: language }), [language, setLanguage, t]);
 }

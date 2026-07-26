@@ -25,10 +25,12 @@
     "@radix-ui/react-dropdown-menu": "latest",
     "@radix-ui/react-select": "latest",
     "@xterm/xterm": "^6.0.0",
+    "i18next": "^26.3.6",
     "lucide-react": "latest",
     "node-pty": "^1.1.0",
     "react": "latest",
     "react-dom": "latest",
+    "react-i18next": "^17.0.11",
     "typebox": "1.1.38"
   },
   "devDependencies": {

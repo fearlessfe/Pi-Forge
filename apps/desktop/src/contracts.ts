@@ -378,6 +378,7 @@ export type PluginPackage = {
   npmUrl?: string;
   repositoryUrl?: string;
   homepageUrl?: string;
+  usage?: string;
   weeklyDownloads?: number;
   monthlyDownloads?: number;
   score?: number;

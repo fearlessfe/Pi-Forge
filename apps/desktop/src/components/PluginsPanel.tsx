@@ -2,16 +2,15 @@ import {
   AlertTriangle,
   Box,
   Check,
-  Download,
+  ChevronRight,
   PackageCheck,
   RefreshCw,
   Search,
-  ShieldAlert,
   Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useI18n } from "../i18n";
+import { useI18n, type Translate } from "../i18n";
 import type {
   InstalledPlugin,
   PackageCapabilityProvider,
@@ -28,16 +27,16 @@ type PluginsPanelProps = {
 };
 
 const resourceLabels: Record<PluginResourceType, string> = {
-  extensions: "Extension",
-  skills: "Skill",
-  prompts: "Prompt",
-  themes: "Theme",
+  extensions: "扩展资源",
+  skills: "技能资源",
+  prompts: "提示词资源",
+  themes: "主题资源",
 };
 
-function errorMessage(error: unknown): string {
+function errorMessage(error: unknown, t: Translate): string {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes("No handler registered for 'plugins:runtime'") || message.includes("plugins.runtime is not a function")) {
-    return "Electron 主进程仍在运行旧版本。请完全退出并重新启动 Pi Desktop，插件运行时接口会在启动时注册。";
+    return t("Electron 主进程仍在运行旧版本。请完全退出并重新启动 Pi Desktop，插件运行时接口会在启动时注册。");
   }
   return message.replace(/^Error invoking remote method '[^']+': Error: /, "");
 }
@@ -51,6 +50,32 @@ function compatibilityCopy(plugin: PluginPackage): string {
   if (plugin.compatibility === "desktop") return "桌面兼容";
   if (plugin.compatibility === "review") return "含 Extension，需确认 UI 兼容性";
   return "兼容性未知";
+}
+
+function capabilityCopies(plugin: PluginPackage): string[] {
+  const copies: string[] = [];
+  if (plugin.resources.includes("extensions")) copies.push("调用插件新增的工具或命令，扩展 Agent 可以执行的操作。");
+  if (plugin.resources.includes("skills")) copies.push("让 Agent 按插件内置的专业流程处理相关任务。");
+  if (plugin.resources.includes("prompts")) copies.push("使用插件提供的预设提示词，更快启动重复性任务。");
+  if (plugin.resources.includes("themes")) copies.push("使用插件附带的主题资源调整支持的界面外观。");
+  return copies.length > 0 ? copies : ["该包未声明具体能力；安装后 Pi 会尝试自动发现可用资源。"];
+}
+
+function usageCopies(plugin: PluginPackage, installed: boolean): string[] {
+  const copies = [installed
+    ? "确认插件已启用，然后重新加载当前 Agent 会话。"
+    : "点击下方安装，Pi 会校验插件并重新加载当前 Agent 会话。"];
+  if (plugin.resources.some((resource) => resource === "extensions" || resource === "skills")) {
+    copies.push("在对话中直接描述你的目标；Agent 会在适用时调用这个插件的能力。");
+  }
+  if (plugin.resources.includes("prompts")) {
+    copies.push("打开可用命令，在插件提供的 Prompt 中选择适合当前任务的一项。");
+  }
+  if (plugin.resources.includes("themes")) {
+    copies.push("重新加载后，在支持插件主题的 Pi 界面中选择新主题。");
+  }
+  copies.push("如果能力没有立即出现，请新建一个 Agent 会话后再试。");
+  return copies;
 }
 
 const riskLabels = { low: "低风险", medium: "中风险", high: "高风险", blocked: "已阻止" } as const;
@@ -129,7 +154,7 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
 
   useEffect(() => {
     if (!window.piDesktop) {
-      setError("插件中心只能在 Electron 应用中使用。");
+      setError(t("插件中心只能在 Electron 应用中使用。"));
       return;
     }
     void Promise.all([
@@ -138,7 +163,7 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
         receiveRuntime(status);
       }),
       searchPackages("", 0, false),
-    ]).catch((caught: unknown) => setError(errorMessage(caught)));
+    ]).catch((caught: unknown) => setError(errorMessage(caught, t)));
     return window.piDesktop.plugins.onEvent(setProgress);
   }, [workspaceCwd]);
 
@@ -153,7 +178,7 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
 
   async function searchPackages(searchQuery: string, offset = 0, append = false) {
     if (!window.piDesktop) {
-      setError("插件中心只能在 Electron 应用中使用。");
+      setError(t("插件中心只能在 Electron 应用中使用。"));
       return;
     }
     setLoading(true);
@@ -164,13 +189,13 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
       setTotal(result.total);
       setSubmittedQuery(searchQuery);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setLoading(false);
     }
   }
 
-  async function openInstall(plugin: PluginPackage) {
+  async function openDetails(plugin: PluginPackage) {
     if (!window.piDesktop) return;
     setOperation(`details:${plugin.name}`);
     setError(null);
@@ -185,7 +210,7 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
       });
       setRiskAccepted(false);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setOperation(null);
     }
@@ -202,10 +227,10 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
       receiveRuntime(result.runtime);
       setCandidate(null);
       setMessage(result.reloaded
-        ? `${candidate.name} 已安装，并已在当前会话中重新加载。`
-        : `${candidate.name} 已安装，将在创建下一次 Agent 会话时启用。`);
+        ? t("{name} 已安装，并已在当前会话中重新加载。", { name: candidate.name })
+        : t("{name} 已安装，将在创建下一次 Agent 会话时启用。", { name: candidate.name }));
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setOperation(null);
       setProgress(null);
@@ -214,7 +239,7 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
 
   async function removePlugin(plugin: InstalledPlugin) {
     if (!window.piDesktop) return;
-    const confirmed = window.confirm(`确定卸载 ${plugin.name}${plugin.version ? `@${plugin.version}` : ""}？`);
+    const confirmed = window.confirm(t("确定卸载 {name}？", { name: `${plugin.name}${plugin.version ? `@${plugin.version}` : ""}` }));
     if (!confirmed) return;
     setOperation(`remove:${plugin.source}`);
     setError(null);
@@ -223,9 +248,11 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
       const result = await window.piDesktop.plugins.remove(plugin.source);
       setInstalled(result.installed);
       receiveRuntime(result.runtime);
-      setMessage(result.reloaded ? `${plugin.name} 已卸载，当前会话已重新加载。` : `${plugin.name} 已卸载。`);
+      setMessage(result.reloaded
+        ? t("{name} 已卸载，当前会话已重新加载。", { name: plugin.name })
+        : t("{name} 已卸载。", { name: plugin.name }));
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setOperation(null);
       setProgress(null);
@@ -240,9 +267,9 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
     try {
       const result = await window.piDesktop.plugins.reload();
       receiveRuntime(result.runtime);
-      setMessage(result.reloaded ? "当前 Agent 会话已重新加载插件。" : "目前没有活动会话；插件会在下次会话启动时加载。");
+      setMessage(t(result.reloaded ? "当前 Agent 会话已重新加载插件。" : "目前没有活动会话；插件会在下次会话启动时加载。"));
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setOperation(null);
     }
@@ -257,9 +284,13 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
       const result = await window.piDesktop.plugins.setEnabled(plugin.source, enabled, workspaceCwd, scope);
       setInstalled(result.installed);
       receiveRuntime(result.runtime);
-      setMessage(`${plugin.name} 已在${scope === "project" ? "当前项目" : "所有项目"}${enabled ? "启用" : "停用"}${result.reloaded ? "并重新加载" : ""}。`);
+      setMessage(t(enabled ? "{name} 已在{scope}启用{reload}。" : "{name} 已在{scope}停用{reload}。", {
+        name: plugin.name,
+        scope: t(scope === "project" ? "当前项目" : "所有项目"),
+        reload: result.reloaded ? t("并重新加载") : "",
+      }));
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setOperation(null);
     }
@@ -268,7 +299,7 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
   async function saveSubagentProvider() {
     if (!window.piDesktop) return;
     if (subagentKind === "plugin" && (!subagentSource || !subagentTool.trim())) {
-      setError("请选择插件来源和由该 Extension 注册的工具名。");
+      setError(t("请选择插件来源和由该 Extension 注册的工具名。"));
       return;
     }
     setOperation("capability");
@@ -281,10 +312,10 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
       const status = await window.piDesktop.plugins.setSubagentProvider(provider);
       receiveRuntime(status);
       setMessage(status.fallbackReason ?? (status.hasSession
-        ? `Subagent 已切换为${provider.kind === "builtin" ? "内置实现" : `插件工具 ${provider.toolName}`}。`
-        : "已选择内置实现；第三方提供者需要在活动会话中验证。"));
+        ? t(provider.kind === "builtin" ? "Subagent 已切换为内置实现。" : "Subagent 已切换为插件工具 {name}。", { name: provider.kind === "plugin" ? provider.toolName : "" })
+        : t("已选择内置实现；第三方提供者需要在活动会话中验证。")));
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setOperation(null);
     }
@@ -300,9 +331,9 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
       const provider: PackageCapabilityProvider = source ? { kind: "plugin", source } : { kind: "none" };
       const status = await window.piDesktop.plugins.setPackageCapability(slot, provider);
       receiveRuntime(status);
-      setMessage(status.fallbackReason ?? `${slot === "memory" ? "记忆" : "自学习"}能力提供者已切换。`);
+      setMessage(status.fallbackReason ?? t(slot === "memory" ? "记忆能力提供者已切换。" : "自学习能力提供者已切换。"));
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, t));
     } finally {
       setOperation(null);
     }
@@ -340,17 +371,19 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
               const isLoadingDetails = operation === `details:${plugin.name}`;
               return (
                 <article className="plugin-card" key={`${plugin.name}@${plugin.version}`}>
-                  <header><span className="plugin-icon"><Box size={18} /></span><span><strong>{plugin.name}</strong><small>v{plugin.version} · {plugin.publisher}</small></span></header>
-                  <p>{plugin.description}</p>
-                  <div className="plugin-tags">
-                    {plugin.resources.length > 0 ? plugin.resources.map((resource) => <span key={resource}>{resourceLabels[resource]}</span>) : <span>Pi Package</span>}
-                    <span className={`compatibility-badge compatibility-badge--${plugin.compatibility}`}>{t(compatibilityCopy(plugin))}</span>
-                    <span className={`plugin-risk plugin-risk--${plugin.riskTier}`}>{t(riskLabels[plugin.riskTier])}</span>
-                  </div>
+                  <button className="plugin-card-details-trigger" type="button" disabled={Boolean(operation)} onClick={() => void openDetails(plugin)} aria-label={t("查看 {name} 的用途与使用方法", { name: plugin.name })}>
+                    <header><span className="plugin-icon"><Box size={18} /></span><span><strong title={plugin.name}>{plugin.name}</strong><small>v{plugin.version} · {plugin.publisher}</small></span><ChevronRight className="plugin-card-chevron" size={15} /></header>
+                    <p>{plugin.description}</p>
+                    <div className="plugin-tags">
+                      {plugin.resources.length > 0 ? plugin.resources.map((resource) => <span key={resource}>{t(resourceLabels[resource])}</span>) : <span>Pi Package</span>}
+                      <span className={`compatibility-badge compatibility-badge--${plugin.compatibility}`}>{t(compatibilityCopy(plugin))}</span>
+                      <span className={`plugin-risk plugin-risk--${plugin.riskTier}`}>{t(riskLabels[plugin.riskTier])}</span>
+                    </div>
+                  </button>
                   <footer>
                     <span>{compactNumber(plugin.weeklyDownloads, locale) ? `${compactNumber(plugin.weeklyDownloads, locale)} ${t("周下载")}` : plugin.license ?? t("许可证未知")}</span>
-                    <button className={isInstalled ? "secondary-button" : "primary-button"} type="button" disabled={isInstalled || Boolean(operation) || agentRunning} onClick={() => void openInstall(plugin)}>
-                      {isInstalled ? <><Check size={13} />{t("已安装")}</> : isLoadingDetails ? t("读取中…") : <><Download size={13} />{t("安装")}</>}
+                    <button className="secondary-button" type="button" disabled={Boolean(operation)} onClick={() => void openDetails(plugin)}>
+                      {isLoadingDetails ? t("读取中…") : <>{isInstalled ? <Check size={13} /> : <ChevronRight size={13} />}{t("查看用途")}</>}
                     </button>
                   </footer>
                 </article>
@@ -396,7 +429,7 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
                 <span className="installed-plugin-details">
                   <strong>{plugin.name}</strong>
                   <small>{plugin.version ? `v${plugin.version}` : plugin.source} · {t(plugin.verification === "verified" ? "完整性已验证" : plugin.verification === "legacy" ? "旧安装，来源未验证" : plugin.verification === "tampered" ? "完整性异常" : "文件缺失")}</small>
-                  <small>{plugin.publisher ?? "未知发布者"} · {plugin.provenance === "npm-registry" ? "npm registry" : "legacy"} · {riskLabels[plugin.riskTier]}{plugin.integrity ? ` · ${plugin.integrity.slice(0, 22)}…` : ""}</small>
+                  <small>{plugin.publisher ?? t("未知发布者")} · {plugin.provenance === "npm-registry" ? "npm registry" : t("旧版来源")} · {t(riskLabels[plugin.riskTier])}{plugin.integrity ? ` · ${plugin.integrity.slice(0, 22)}…` : ""}</small>
                 </span>
                 <span className="plugin-enable-actions">
                   <button className="secondary-button" type="button" disabled={Boolean(operation) || agentRunning || plugin.verification === "tampered" || plugin.verification === "missing"} onClick={() => void setPluginEnabled(plugin, !plugin.enabled, "user")}>{plugin.enabled ? t("全局停用") : t("全局启用")}</button>
@@ -419,19 +452,40 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
         <div className="plugin-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !operation) setCandidate(null); }}>
           <section className="plugin-dialog" role="dialog" aria-modal="true" aria-labelledby="plugin-dialog-title">
             <button className="plugin-dialog-close" type="button" disabled={Boolean(operation)} onClick={() => setCandidate(null)} aria-label={t("关闭")}><X size={15} /></button>
-            <span className="plugin-dialog-icon"><ShieldAlert size={20} /></span>
-            <h3 id="plugin-dialog-title">{t("确认安装 {name}", { name: candidate.name })}</h3>
-            <p className="plugin-dialog-version">{t("版本")} {candidate.version} · {t("发布者")} {candidate.publisher} · {candidate.license ?? t("许可证未知")}</p>
-            <p className="plugin-dialog-description">{candidate.description}</p>
-            <div className="plugin-dialog-resources"><strong>{t("包含资源")}</strong><span>{candidate.resources.length > 0 ? candidate.resources.map((resource) => resourceLabels[resource]).join(", ") : t("包未声明资源清单，安装后由 Pi 自动发现")}</span></div>
-            <div className="plugin-dialog-resources"><strong>{t("来源与完整性")}</strong><span>npm registry · {riskLabels[candidate.riskTier]} · {candidate.integrity ?? candidate.shasum ?? t("注册表未提供完整性摘要")}</span></div>
+            <header className="plugin-dialog-heading">
+              <span className="plugin-dialog-icon"><Box size={20} /></span>
+              <span><small>{t("插件用途与使用方法")}</small><h3 id="plugin-dialog-title">{candidate.name}</h3><p className="plugin-dialog-version">{t("版本")} {candidate.version} · {t("发布者")} {candidate.publisher}</p></span>
+            </header>
+            <div className="plugin-detail-badges">
+              <span className={`plugin-risk plugin-risk--${candidate.riskTier}`}>{t(riskLabels[candidate.riskTier])}</span>
+              <span>{t(compatibilityCopy(candidate))}</span>
+              {candidate.resources.map((resource) => <span key={resource}>{t(resourceLabels[resource])}</span>)}
+            </div>
+            <div className="plugin-compact-meta" aria-label={t("插件概况")}>
+              <span>{candidate.weeklyDownloads !== undefined ? `${compactNumber(candidate.weeklyDownloads, locale)} ${t("周下载")}` : t("下载量未知")}</span>
+              <span>{candidate.license ?? t("许可证未知")}</span>
+              <span>{candidate.updatedAt ? t("更新于 {date}", { date: new Date(candidate.updatedAt).toLocaleDateString(locale) }) : t("更新时间未知")}</span>
+            </div>
+
+            <section className="plugin-purpose-section">
+              <header><strong>{t("你可以用它来")}</strong><small>{t("根据插件声明的能力整理")}</small></header>
+              <p>{candidate.description}</p>
+              <ul>{capabilityCopies(candidate).map((copy) => <li key={copy}><Check size={13} /><span>{t(copy)}</span></li>)}</ul>
+            </section>
+
+            <section className="plugin-usage-section">
+              <header><strong>{t("怎么使用")}</strong><small>{t(installedNames.has(candidate.name) ? "已安装插件的使用步骤" : "安装后的使用步骤")}</small></header>
+              <ol>{usageCopies(candidate, installedNames.has(candidate.name)).map((copy, index) => <li key={copy}><em>{index + 1}</em><span>{t(copy)}</span></li>)}</ol>
+              {candidate.usage && <div className="plugin-publisher-usage"><strong>{t("作者提供的使用说明")}</strong><small>{t("以下内容保留发布者原文")}</small><pre>{candidate.usage}</pre></div>}
+            </section>
+
             <div className="plugin-security-warning">
               <AlertTriangle size={17} />
               <span><strong>{t("该包可以执行本地代码")}</strong><small>{t("npm 安装脚本和 Pi Extension 将以你的本地用户权限运行。请只安装你信任的发布者提供的包。")}</small></span>
             </div>
             {candidate.insecure && <div className="plugin-insecure-warning">{t("npm 将这个版本标记为存在安全风险，不建议安装。")}</div>}
-            <label className="plugin-risk-check"><input type="checkbox" checked={riskAccepted} onChange={(event) => setRiskAccepted(event.target.checked)} /><span>{t("我信任此发布者，并了解插件拥有本地代码执行权限。")}</span></label>
-            <footer><button className="secondary-button" type="button" disabled={Boolean(operation)} onClick={() => setCandidate(null)}>{t("取消")}</button><button className="primary-button" type="button" disabled={!riskAccepted || Boolean(operation) || candidate.insecure} onClick={() => void installCandidate()}>{t(operation?.startsWith("install:") ? "安装并加载中…" : "安装并重新加载")}</button></footer>
+            {!installedNames.has(candidate.name) && <label className="plugin-risk-check"><input type="checkbox" checked={riskAccepted} onChange={(event) => setRiskAccepted(event.target.checked)} /><span>{t("我信任此发布者，并了解插件拥有本地代码执行权限。")}</span></label>}
+            <footer><button className="secondary-button" type="button" disabled={Boolean(operation)} onClick={() => setCandidate(null)}>{t("关闭")}</button><button className="primary-button" type="button" disabled={installedNames.has(candidate.name) || !riskAccepted || Boolean(operation) || candidate.insecure} onClick={() => void installCandidate()}>{t(installedNames.has(candidate.name) ? "已安装" : operation?.startsWith("install:") ? "安装并加载中…" : "安装并重新加载")}</button></footer>
           </section>
         </div>
       )}

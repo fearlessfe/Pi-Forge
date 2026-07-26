@@ -34,6 +34,7 @@ type RegistryPackage = {
   links?: { npm?: unknown; repository?: unknown; homepage?: unknown };
   repository?: { url?: unknown } | string;
   homepage?: unknown;
+  readme?: unknown;
   downloads?: { weekly?: unknown; monthly?: unknown };
   insecure?: unknown;
   pi?: unknown;
@@ -79,6 +80,27 @@ function isPiPackage(value: RegistryPackage): boolean {
 function repositoryUrl(value: RegistryPackage): string | undefined {
   const raw = typeof value.repository === "string" ? value.repository : text(value.repository?.url);
   return text(value.links?.repository) ?? raw?.replace(/^git\+/, "").replace(/\.git$/, "");
+}
+
+function usageExcerpt(value: unknown): string | undefined {
+  const readme = text(value)?.replace(/\r\n?/g, "\n").slice(0, 50_000);
+  if (!readme) return undefined;
+  const lines = readme.split("\n");
+  const heading = lines.findIndex((line) => /^#{1,4}\s+(usage|how to use|getting started|quick start|examples?|用法|如何使用|快速开始|入门|示例)(?:\s|$)/i.test(line.trim()));
+  if (heading < 0) return undefined;
+  const level = lines[heading].match(/^#+/)?.[0].length ?? 2;
+  const end = lines.findIndex((line, index) => index > heading && new RegExp(`^#{1,${level}}\\s+`).test(line.trim()));
+  const section = lines
+    .slice(heading + 1, end > heading ? end : undefined)
+    .map((line) => line
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/<[^>]+>/g, "")
+      .trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return section ? section.slice(0, 2_400) : undefined;
 }
 
 const supportedResources: PluginResourceType[] = ["extensions", "skills", "prompts", "themes"];
@@ -143,6 +165,7 @@ function normalizePackage(
     npmUrl: text(value.links?.npm) ?? `https://www.npmjs.com/package/${name}`,
     repositoryUrl: repositoryUrl(value),
     homepageUrl: text(value.links?.homepage) ?? text(value.homepage),
+    usage: usageExcerpt(value.readme),
     weeklyDownloads: number(extras.downloads?.weekly) ?? number(value.downloads?.weekly),
     monthlyDownloads: number(extras.downloads?.monthly) ?? number(value.downloads?.monthly),
     score: number(extras.score),

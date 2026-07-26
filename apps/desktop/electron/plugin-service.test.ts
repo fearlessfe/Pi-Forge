@@ -119,6 +119,25 @@ describe("PluginService", () => {
     })]);
   });
 
+  it("extracts publisher usage guidance from the package README", async () => {
+    const service = new PluginService("/agent", "/cwd", () => {}, {
+      fetch: (async () => response({
+        name: "pi-browser",
+        version: "1.0.0",
+        description: "Control a browser from Pi",
+        keywords: ["pi-package"],
+        pi: { extensions: ["./extension.ts"] },
+        readme: "# Pi Browser\n\n## Quick start\n\nInstall the plugin, then ask Pi to open a page.\n\n```text\nOpen example.com\n```\n\n## API\n\nInternal details.",
+      })) as typeof fetch,
+      packageManager: fakePackageManager(),
+    });
+
+    const details = await service.details("pi-browser", "1.0.0");
+
+    expect(details.usage).toContain("ask Pi to open a page");
+    expect(details.usage).not.toContain("Internal details");
+  });
+
   it("rejects untagged npm packages before installation", async () => {
     const manager = fakePackageManager();
     const service = new PluginService("/agent", "/cwd", () => {}, {
