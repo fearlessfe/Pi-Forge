@@ -9,6 +9,7 @@
     "package": "pnpm --filter @pi-desktop/renderer package",
     "package:dir": "pnpm --filter @pi-desktop/renderer package:dir",
     "test": "pnpm --filter @pi-desktop/renderer test",
+    "test:coverage": "pnpm --filter @pi-desktop/renderer test:coverage",
     "typecheck": "pnpm --filter @pi-desktop/renderer typecheck"
   },
   "devDependencies": {

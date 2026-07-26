@@ -4,6 +4,12 @@
   <img src="./apps/desktop/build/icon.svg" width="112" alt="Pi Forge icon">
 </p>
 
+<p align="center">
+  <a href="https://github.com/fearlessfe/Pi-Forge/actions/workflows/ci.yml"><img src="https://github.com/fearlessfe/Pi-Forge/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://codecov.io/gh/fearlessfe/Pi-Forge"><img src="https://codecov.io/gh/fearlessfe/Pi-Forge/graph/badge.svg" alt="Coverage"></a>
+  <a href="https://github.com/fearlessfe/Pi-Forge/releases"><img src="https://img.shields.io/github/v/release/fearlessfe/Pi-Forge?display_name=tag&sort=semver" alt="Latest release"></a>
+</p>
+
 **English** | [简体中文](./README.zh-CN.md)
 
 > Build agents like software.
@@ -173,6 +179,7 @@ The renderer can read only whether credentials are configured and their type. It
 pnpm lint
 pnpm typecheck
 pnpm test
+pnpm test:coverage
 pnpm build
 pnpm package
 ```

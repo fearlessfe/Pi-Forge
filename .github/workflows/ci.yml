@@ -47,9 +47,12 @@ jobs:
         run: pnpm typecheck
 
   unit-tests:
-    name: Unit tests
+    name: Unit tests and coverage
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - name: Check out repository
@@ -73,5 +76,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run unit tests
-        run: pnpm test
+      - name: Run unit tests with coverage
+        run: pnpm test:coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: apps/desktop/coverage
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          files: apps/desktop/coverage/lcov.info
+          flags: unit
+          name: pi-forge-unit-tests
+          fail_ci_if_error: true

@@ -4,6 +4,12 @@
   <img src="./apps/desktop/build/icon.svg" width="112" alt="Pi Forge 图标">
 </p>
 
+<p align="center">
+  <a href="https://github.com/fearlessfe/Pi-Forge/actions/workflows/ci.yml"><img src="https://github.com/fearlessfe/Pi-Forge/actions/workflows/ci.yml/badge.svg" alt="CI 状态"></a>
+  <a href="https://codecov.io/gh/fearlessfe/Pi-Forge"><img src="https://codecov.io/gh/fearlessfe/Pi-Forge/graph/badge.svg" alt="测试覆盖率"></a>
+  <a href="https://github.com/fearlessfe/Pi-Forge/releases"><img src="https://img.shields.io/github/v/release/fearlessfe/Pi-Forge?display_name=tag&sort=semver" alt="最新版本"></a>
+</p>
+
 [English](./README.md) | **简体中文**
 
 > Build agents like software.
@@ -173,6 +179,7 @@ Renderer 只能读取凭据是否已配置以及凭据类型，不能读取 API 
 pnpm lint
 pnpm typecheck
 pnpm test
+pnpm test:coverage
 pnpm build
 pnpm package
 ```
