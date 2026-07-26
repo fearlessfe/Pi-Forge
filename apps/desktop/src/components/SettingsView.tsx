@@ -5,11 +5,13 @@ import {
   ChevronDown,
   CircleDollarSign,
   Database,
+  BookOpen,
   ExternalLink,
   KeyRound,
   LogIn,
   LogOut,
   LockKeyhole,
+  Cable,
   Palette,
   Package,
   RefreshCw,
@@ -27,20 +29,26 @@ import type {
   PermissionSettings,
   ProviderCatalogEntry,
   ProviderId,
+  ResourceSettings,
   SaveModelSettings,
   SystemPromptSettings,
   ThinkingLevel,
+  WorkspaceTrustStatus,
 } from "../contracts";
 import type { SettingsSection, Theme } from "../types";
 import type { AuthFlowState } from "../types";
 import { useI18n } from "../i18n";
 import { PluginsPanel } from "./PluginsPanel";
+import { SkillsPanel } from "./SkillsPanel";
+import { McpPanel } from "./McpPanel";
 
 type SettingsViewProps = {
   activeSection: SettingsSection;
   settings: ModelSettings;
   permissionRuntime: PermissionRuntime;
   systemPrompt: SystemPromptSettings;
+  resourceSettings: ResourceSettings;
+  workspaceTrust?: WorkspaceTrustStatus;
   providerCatalog: ProviderCatalogEntry[];
   authFlow: AuthFlowState | null;
   theme: Theme;
@@ -51,6 +59,8 @@ type SettingsViewProps = {
   onSave: (settings: SaveModelSettings) => Promise<void>;
   onSavePermissions: (settings: PermissionSettings) => Promise<void>;
   onSaveSystemPrompt: (settings: SystemPromptSettings) => Promise<void>;
+  onSaveResourceSettings: (settings: ResourceSettings) => Promise<void>;
+  onSetWorkspaceTrusted: (trusted: boolean) => Promise<void>;
   onDiscoverModels: (settings: SaveModelSettings) => Promise<ModelCatalogEntry[]>;
   onRefreshMetadata: () => Promise<ProviderCatalogEntry[]>;
   onSaveMetadata: (providerId: ProviderId, modelId: string, metadata: ModelMetadataOverride) => Promise<ProviderCatalogEntry[]>;
@@ -68,7 +78,7 @@ const sections: Array<{
   items: Array<{ id: SettingsSection; label: string; icon: typeof Sparkles }>;
 }> = [
   { group: "AI", items: [{ id: "models", label: "大模型", icon: Sparkles }, { id: "model-metadata", label: "模型元信息", icon: Database }, { id: "permissions", label: "权限", icon: LockKeyhole }] },
-  { group: "扩展", items: [{ id: "plugins", label: "插件", icon: Package }] },
+  { group: "扩展", items: [{ id: "plugins", label: "插件", icon: Package }, { id: "skills", label: "Skills", icon: BookOpen }, { id: "mcp", label: "MCP", icon: Cable }] },
   { group: "应用", items: [{ id: "general", label: "通用", icon: Settings2 }, { id: "appearance", label: "外观", icon: Palette }] },
 ];
 
@@ -719,13 +729,18 @@ function PermissionsPanel({
 
 function GeneralPanel({
   systemPrompt,
+  resourceSettings,
+  workspaceTrust,
   agentRunning,
   onSaveSystemPrompt,
-}: Pick<SettingsViewProps, "systemPrompt" | "agentRunning" | "onSaveSystemPrompt">) {
+  onSaveResourceSettings,
+  onSetWorkspaceTrusted,
+}: Pick<SettingsViewProps, "systemPrompt" | "resourceSettings" | "workspaceTrust" | "agentRunning" | "onSaveSystemPrompt" | "onSaveResourceSettings" | "onSetWorkspaceTrusted">) {
   const { language, setLanguage, t } = useI18n();
   const [content, setContent] = useState(systemPrompt.content);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [resourceBusy, setResourceBusy] = useState(false);
   const normalizedContent = content.trim();
   const changed = normalizedContent !== systemPrompt.content;
 
@@ -743,13 +758,38 @@ function GeneralPanel({
     }
   }
 
+  async function updateResources(workspaceContextEnabled: boolean) {
+    setResourceBusy(true);
+    setError("");
+    try {
+      await onSaveResourceSettings({ ...resourceSettings, workspaceContextEnabled });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : String(saveError));
+    } finally {
+      setResourceBusy(false);
+    }
+  }
+
+  async function updateTrust(trusted: boolean) {
+    setResourceBusy(true);
+    setError("");
+    try {
+      await onSetWorkspaceTrusted(trusted);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : String(saveError));
+    } finally {
+      setResourceBusy(false);
+    }
+  }
+
   return (
     <div className="settings-panel compact-settings-panel">
       <header className="settings-page-header"><div><h2>{t("通用")}</h2><p>{t("调整 Pi Desktop 的会话和系统行为。")}</p></div></header>
       <section className="simple-settings-card">
         <label className="settings-toggle-row"><span><strong>{t("语言")}</strong><small>{t("选择 Pi Desktop 的界面语言。")}</small></span><select className="native-select language-select" value={language} onChange={(event) => setLanguage(event.target.value as "zh-CN" | "en-US")}><option value="zh-CN">{t("简体中文")}</option><option value="en-US">English</option></select></label>
-        <div className="settings-toggle-row"><span><strong>{t("流式过程")}</strong><small>{t("实时显示 thinking、文本增量和工具状态")}</small></span><button className="switch is-on" type="button" aria-label={t("启用流式过程")}><i /></button></div>
-        <div className="settings-toggle-row"><span><strong>{t("工作区上下文")}</strong><small>{t("加载项目 AGENTS.md、skills 与 Pi extensions")}</small></span><button className="switch is-on" type="button" aria-label={t("启用工作区上下文")}><i /></button></div>
+        <div className="settings-toggle-row"><span><strong>{t("流式过程")}</strong><small>{t("实时显示 thinking、文本增量和工具状态")}</small></span><span className="policy-badge policy-badge--allowed">{t("始终开启")}</span></div>
+        <div className="settings-toggle-row"><span><strong>{t("工作区上下文")}</strong><small>{t("加载可信项目的 AGENTS.md、Skills 与 Pi Extensions")}</small></span><button className={`switch ${resourceSettings.workspaceContextEnabled ? "is-on" : ""}`} type="button" disabled={agentRunning || resourceBusy} aria-pressed={resourceSettings.workspaceContextEnabled} aria-label={t("启用工作区上下文")} onClick={() => void updateResources(!resourceSettings.workspaceContextEnabled)}><i /></button></div>
+        {workspaceTrust && workspaceTrust.hasProjectResources && <div className="settings-toggle-row"><span><strong>{t("当前项目资源")}</strong><small title={workspaceTrust.path}>{workspaceTrust.path}</small></span><button className={`switch ${workspaceTrust.trusted ? "is-on" : ""}`} type="button" disabled={agentRunning || resourceBusy || !resourceSettings.workspaceContextEnabled} aria-pressed={workspaceTrust.trusted} aria-label={t("信任当前项目")} onClick={() => void updateTrust(!workspaceTrust.trusted)}><i /></button></div>}
       </section>
       <section className="system-prompt-card" aria-labelledby="system-prompt-title">
         <header>
@@ -805,9 +845,11 @@ export function SettingsView(props: SettingsViewProps) {
       <main className="settings-content">
         {props.activeSection === "models" && <ModelsPanel settings={props.settings} providerCatalog={props.providerCatalog} authFlow={props.authFlow} onSave={props.onSave} onDiscoverModels={props.onDiscoverModels} onTest={props.onTest} onLogin={props.onLogin} onAnswerAuthPrompt={props.onAnswerAuthPrompt} onCancelAuth={props.onCancelAuth} onLogout={props.onLogout} onDismissAuth={props.onDismissAuth} />}
         {props.activeSection === "model-metadata" && <ModelMetadataPanel settings={props.settings} providerCatalog={props.providerCatalog} onRefreshMetadata={props.onRefreshMetadata} onSaveMetadata={props.onSaveMetadata} onResetMetadata={props.onResetMetadata} />}
-        {props.activeSection === "plugins" && <PluginsPanel agentRunning={props.agentRunning} />}
+        {props.activeSection === "plugins" && <PluginsPanel agentRunning={props.agentRunning} workspaceCwd={props.workspaceTrust?.path} />}
+        {props.activeSection === "skills" && <SkillsPanel cwd={props.workspaceTrust?.path} agentRunning={props.agentRunning} />}
+        {props.activeSection === "mcp" && <McpPanel cwd={props.workspaceTrust?.path} projectTrusted={Boolean(props.workspaceTrust?.trusted)} agentRunning={props.agentRunning} />}
         {props.activeSection === "permissions" && <PermissionsPanel runtime={props.permissionRuntime} agentRunning={props.agentRunning} onSave={props.onSavePermissions} />}
-        {props.activeSection === "general" && <GeneralPanel systemPrompt={props.systemPrompt} agentRunning={props.agentRunning} onSaveSystemPrompt={props.onSaveSystemPrompt} />}
+        {props.activeSection === "general" && <GeneralPanel systemPrompt={props.systemPrompt} resourceSettings={props.resourceSettings} workspaceTrust={props.workspaceTrust} agentRunning={props.agentRunning} onSaveSystemPrompt={props.onSaveSystemPrompt} onSaveResourceSettings={props.onSaveResourceSettings} onSetWorkspaceTrusted={props.onSetWorkspaceTrusted} />}
         {props.activeSection === "appearance" && <AppearancePanel theme={props.theme} onThemeChange={props.onThemeChange} />}
       </main>
     </section>

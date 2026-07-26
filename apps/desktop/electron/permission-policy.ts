@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { PermissionMode } from "../src/contracts.js";
 
-export type PermissionGrant = "sandbox-bypass";
+export type PermissionGrant = "sandbox-bypass" | `mcp:${string}`;
 
 export type PermissionDecision = {
   action: "allow" | "ask";
@@ -51,6 +51,20 @@ export function dangerousShellReason(command: string): string | undefined {
 }
 
 export function decideToolPermission(context: ToolCallContext): PermissionDecision {
+  if (context.toolName.startsWith("mcp__")) {
+    const server = context.toolName.split("__")[1] || "server";
+    const grant: PermissionGrant = `mcp:${server}`;
+    if (context.mode === "balanced" && context.runGrants.has(grant)) {
+      return { action: "allow", kind: "safe", reason: "用户已允许本次任务调用该 MCP Server。" };
+    }
+    return {
+      action: "ask",
+      kind: "shell",
+      reason: `MCP 工具将把参数发送给外部 Server“${server}”。`,
+      allowForRun: context.mode === "balanced" ? grant : undefined,
+    };
+  }
+
   const candidatePath = pathTools.has(context.toolName) && typeof context.input.path === "string"
     ? context.input.path
     : undefined;

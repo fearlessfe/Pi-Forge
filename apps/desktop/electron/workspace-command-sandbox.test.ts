@@ -17,6 +17,7 @@ describe("WorkspaceCommandSandbox", () => {
     const workspace = fs.mkdtempSync(path.join(process.cwd(), ".sandbox-workspace-"));
     const escaped = path.join(process.cwd(), `.sandbox-escape-${process.pid}`);
     cleanupPaths.push(workspace, escaped);
+    if (!await sandbox.prepare(workspace)) return;
     const operations = sandbox.createOperations();
     const onData = () => {};
 

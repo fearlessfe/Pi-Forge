@@ -4,13 +4,18 @@ import {
   type PackageManager,
   type ProgressEvent,
 } from "@earendil-works/pi-coding-agent";
+import fs from "node:fs";
+import path from "node:path";
 import type {
   InstalledPlugin,
+  PluginManifest,
   PluginPackage,
   PluginProgressEvent,
   PluginResourceType,
+  PluginRiskTier,
   PluginSearchResult,
 } from "../src/contracts.js";
+import { PluginSecurityStore } from "./plugin-security-store.js";
 
 type PackageManagerPort = Pick<
   PackageManager,
@@ -32,6 +37,7 @@ type RegistryPackage = {
   downloads?: { weekly?: unknown; monthly?: unknown };
   insecure?: unknown;
   pi?: unknown;
+  dist?: { integrity?: unknown; shasum?: unknown };
 };
 
 type RegistrySearchResponse = {
@@ -47,6 +53,7 @@ type PluginServiceOptions = {
   fetch?: typeof fetch;
   registryUrl?: string;
   packageManager?: PackageManagerPort;
+  securityStore?: PluginSecurityStore;
 };
 
 const packageNamePattern = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/i;
@@ -74,11 +81,41 @@ function repositoryUrl(value: RegistryPackage): string | undefined {
   return text(value.links?.repository) ?? raw?.replace(/^git\+/, "").replace(/\.git$/, "");
 }
 
-function resourceTypes(manifest: unknown): PluginResourceType[] {
-  if (!manifest || typeof manifest !== "object") return [];
-  const record = manifest as Record<string, unknown>;
-  return (["extensions", "skills", "prompts", "themes"] as PluginResourceType[])
-    .filter((key) => key in record);
+const supportedResources: PluginResourceType[] = ["extensions", "skills", "prompts", "themes"];
+
+function validateManifest(value: unknown): PluginManifest {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("插件 pi 资源清单格式无效。");
+  const record = value as Record<string, unknown>;
+  const manifest: PluginManifest = {};
+  for (const resource of supportedResources) {
+    if (!(resource in record)) continue;
+    const entries = record[resource];
+    if (!Array.isArray(entries)) throw new Error(`插件 ${resource} 资源清单必须是路径数组。`);
+    manifest[resource] = entries.map((entry) => {
+      if (typeof entry !== "string" || !entry.trim()) throw new Error(`插件 ${resource} 包含无效资源路径。`);
+      const normalized = entry.trim();
+      const candidate = normalized.startsWith("!") ? normalized.slice(1) : normalized;
+      if (
+        !candidate
+        || candidate.includes("\0")
+        || path.posix.isAbsolute(candidate)
+        || path.win32.isAbsolute(candidate)
+        || candidate.split(/[\\/]+/).includes("..")
+        || /^[a-z][a-z0-9+.-]*:/i.test(candidate)
+      ) throw new Error(`插件资源路径越界：${normalized}`);
+      return normalized;
+    });
+  }
+  return manifest;
+}
+
+function riskTier(resources: PluginResourceType[], insecure: boolean, hasIntegrity: boolean): PluginRiskTier {
+  if (insecure) return "blocked";
+  if (!hasIntegrity) return "high";
+  if (resources.includes("extensions") || resources.length === 0) return "high";
+  if (resources.some((resource) => resource === "skills" || resource === "prompts")) return "medium";
+  return "low";
 }
 
 function normalizePackage(
@@ -88,7 +125,11 @@ function normalizePackage(
   const name = text(value.name);
   const version = text(value.version);
   if (!name || !version) return undefined;
-  const resources = resourceTypes(value.pi);
+  const manifest = validateManifest(value.pi);
+  const resources = supportedResources.filter((resource) => resource in manifest);
+  const insecure = value.insecure === true;
+  const integrity = text(value.dist?.integrity);
+  const shasum = text(value.dist?.shasum);
   return {
     name,
     version,
@@ -105,8 +146,13 @@ function normalizePackage(
     weeklyDownloads: number(extras.downloads?.weekly) ?? number(value.downloads?.weekly),
     monthlyDownloads: number(extras.downloads?.monthly) ?? number(value.downloads?.monthly),
     score: number(extras.score),
-    insecure: value.insecure === true,
+    insecure,
     resources,
+    manifest,
+    integrity,
+    shasum,
+    provenance: "npm-registry",
+    riskTier: riskTier(resources, insecure, Boolean(integrity || shasum)),
     compatibility: resources.includes("extensions") ? "review" : resources.length > 0 ? "desktop" : "unknown",
   };
 }
@@ -122,6 +168,7 @@ export class PluginService {
   private readonly fetchImpl: typeof fetch;
   private readonly registryUrl: string;
   private readonly packageManager: PackageManagerPort;
+  private readonly securityStore: PluginSecurityStore;
   private operation: string | undefined;
 
   constructor(
@@ -132,6 +179,7 @@ export class PluginService {
   ) {
     this.fetchImpl = options.fetch ?? fetch;
     this.registryUrl = (options.registryUrl ?? "https://registry.npmjs.org").replace(/\/$/, "");
+    this.securityStore = options.securityStore ?? new PluginSecurityStore(path.dirname(agentDir));
     this.packageManager = options.packageManager ?? new DefaultPackageManager({
       cwd,
       agentDir,
@@ -171,19 +219,37 @@ export class PluginService {
     if (!isPiPackage(value)) throw new Error("该 npm 包没有声明 pi-package，已拒绝安装。");
     const normalized = normalizePackage(value);
     if (!normalized) throw new Error("插件元数据不完整，无法安装。");
+    if (normalized.name !== name) throw new Error("插件注册表返回了不匹配的包名，已拒绝安装。");
+    if (version !== "latest" && normalized.version !== version) throw new Error("插件注册表返回了不匹配的版本，已拒绝安装。");
     return normalized;
   }
 
-  listInstalled(): InstalledPlugin[] {
+  listInstalled(cwd?: string): InstalledPlugin[] {
     return this.packageManager.listConfiguredPackages()
       .filter((entry) => entry.scope === "user" && entry.source.startsWith("npm:"))
       .map((entry) => {
         const parsed = parseNpmSource(entry.source);
+        const installedPath = entry.installedPath ?? this.packageManager.getInstalledPath(entry.source, "user");
+        const security = this.securityStore.get(entry.source);
+        const verification = !installedPath
+          ? "missing" as const
+          : security?.provenance === "npm-registry"
+            ? this.verifyInstalled(installedPath, security.name, security.version, security.manifest) ? "verified" as const : "tampered" as const
+            : "legacy" as const;
         return {
           source: entry.source,
           name: parsed.name,
           version: parsed.version,
-          installed: Boolean(entry.installedPath ?? this.packageManager.getInstalledPath(entry.source, "user")),
+          installed: Boolean(installedPath),
+          enabled: this.securityStore.isEnabled(entry.source),
+          projectEnabled: cwd ? this.securityStore.isEnabled(entry.source, cwd) : undefined,
+          publisher: security?.publisher,
+          integrity: security?.integrity,
+          provenance: security?.provenance ?? "legacy",
+          riskTier: security?.riskTier ?? "high",
+          resources: security?.resources ?? [],
+          installedAt: security?.installedAt,
+          verification,
         };
       });
   }
@@ -191,7 +257,28 @@ export class PluginService {
   async install(name: string, version: string): Promise<InstalledPlugin[]> {
     return this.withOperation("安装", async () => {
       const metadata = await this.details(name, version);
-      await this.packageManager.installAndPersist(`npm:${metadata.name}@${metadata.version}`);
+      if (metadata.riskTier === "blocked") throw new Error("该版本被标记为存在安全风险，已阻止安装。");
+      const source = `npm:${metadata.name}@${metadata.version}`;
+      await this.packageManager.installAndPersist(source);
+      const installedPath = this.packageManager.getInstalledPath(source, "user")
+        ?? this.packageManager.listConfiguredPackages().find((entry) => entry.source === source)?.installedPath;
+      if (!installedPath || !this.verifyInstalled(installedPath, metadata.name, metadata.version, metadata.manifest)) {
+        await this.packageManager.removeAndPersist(source);
+        throw new Error("插件安装后的包名、版本或资源清单校验失败，已移除该插件。");
+      }
+      this.securityStore.save({
+        source,
+        name: metadata.name,
+        version: metadata.version,
+        publisher: metadata.publisher,
+        integrity: metadata.integrity,
+        shasum: metadata.shasum,
+        provenance: metadata.provenance,
+        riskTier: metadata.riskTier,
+        resources: metadata.resources,
+        manifest: metadata.manifest,
+        installedAt: new Date().toISOString(),
+      });
       return this.listInstalled();
     });
   }
@@ -202,8 +289,16 @@ export class PluginService {
     if (!installed.some((item) => item.source === source)) throw new Error("该插件未安装或安装记录已变化。");
     return this.withOperation("卸载", async () => {
       await this.packageManager.removeAndPersist(source);
+      this.securityStore.remove(source);
       return this.listInstalled();
     });
+  }
+
+  setEnabled(source: string, enabled: boolean, cwd?: string, scope: "user" | "project" = "user"): InstalledPlugin[] {
+    if (!this.listInstalled().some((item) => item.source === source)) throw new Error("该插件未安装或安装记录已变化。");
+    if (scope === "project" && !cwd) throw new Error("项目级插件开关需要工作区路径。");
+    this.securityStore.setEnabled(source, enabled, cwd, scope);
+    return this.listInstalled(cwd);
   }
 
   dispose(): void {
@@ -213,6 +308,31 @@ export class PluginService {
   private validatePackage(name: string, version: string): void {
     if (!packageNamePattern.test(name)) throw new Error("插件包名无效。");
     if (version !== "latest" && !versionPattern.test(version)) throw new Error("插件版本无效。");
+  }
+
+  private verifyInstalled(packageRoot: string, expectedName: string, expectedVersion: string, manifest: PluginManifest): boolean {
+    try {
+      const root = fs.realpathSync(packageRoot);
+      const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as Record<string, unknown>;
+      if (packageJson.name !== expectedName || packageJson.version !== expectedVersion) return false;
+      if (JSON.stringify(validateManifest(packageJson.pi)) !== JSON.stringify(manifest)) return false;
+      for (const entries of Object.values(manifest)) {
+        for (const entry of entries ?? []) {
+          if (entry.startsWith("!")) continue;
+          const firstGlob = entry.search(/[?*{[]/);
+          const stablePart = firstGlob < 0 ? entry : entry.slice(0, firstGlob);
+          const relative = stablePart.replace(/[\\/]+$/, "") || ".";
+          const resolved = path.resolve(root, relative);
+          if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) return false;
+          if (!fs.existsSync(resolved)) return false;
+          const realResolved = fs.realpathSync(resolved);
+          if (realResolved !== root && !realResolved.startsWith(`${root}${path.sep}`)) return false;
+        }
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async withOperation<T>(label: string, action: () => Promise<T>): Promise<T> {

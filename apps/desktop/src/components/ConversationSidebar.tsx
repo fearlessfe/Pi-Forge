@@ -1,12 +1,17 @@
 import * as Collapsible from "@radix-ui/react-collapsible";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
+  Archive,
+  ArchiveRestore,
   Check,
   ChevronDown,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   Folder,
+  FileJson,
+  FileText,
+  GitFork,
   MessageSquare,
   MoreHorizontal,
   Package,
@@ -15,6 +20,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Tags,
   Trash2,
   X,
 } from "lucide-react";
@@ -35,6 +41,10 @@ type ConversationSidebarProps = {
   onNewChat: () => void;
   onNewProjectChat: (project: Project) => void;
   onRenameConversation: (conversationId: string, title: string, project?: Project) => Promise<void>;
+  onForkConversation: (conversationId: string, project?: Project) => Promise<void>;
+  onExportConversation: (conversationId: string, format: "markdown" | "json") => Promise<void>;
+  onSetConversationArchived: (conversationId: string, archived: boolean) => Promise<void>;
+  onSetConversationTags: (conversationId: string, tags: string[]) => Promise<void>;
   onDeleteConversation: (conversationId: string, project?: Project) => Promise<void>;
   conversationActionsDisabled: boolean;
   onAddProject: () => void;
@@ -44,7 +54,7 @@ type ConversationSidebarProps = {
 };
 
 function matchesConversation(conversation: Conversation, query: string) {
-  return [conversation.title, conversation.subtitle].some((value) => value.toLocaleLowerCase().includes(query));
+  return [conversation.title, conversation.subtitle, conversation.searchText, ...conversation.tags].some((value) => value.toLocaleLowerCase().includes(query));
 }
 
 function ConversationRow({
@@ -54,6 +64,10 @@ function ConversationRow({
   actionsDisabled,
   onSelect,
   onRename,
+  onFork,
+  onExport,
+  onSetArchived,
+  onSetTags,
   onDelete,
 }: {
   conversation: Conversation;
@@ -62,6 +76,10 @@ function ConversationRow({
   actionsDisabled: boolean;
   onSelect: () => void;
   onRename: (title: string) => Promise<void>;
+  onFork: () => Promise<void>;
+  onExport: (format: "markdown" | "json") => Promise<void>;
+  onSetArchived: (archived: boolean) => Promise<void>;
+  onSetTags: (tags: string[]) => Promise<void>;
   onDelete: () => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -111,7 +129,7 @@ function ConversationRow({
         <MessageSquare size={14} />
         <span>
           <strong>{conversation.title}</strong>
-          <small>{conversation.subtitle}</small>
+          <small>{conversation.tags.length > 0 ? `${conversation.subtitle} · ${conversation.tags.join(" · ")}` : conversation.subtitle}</small>
         </span>
         <time>{conversation.updatedAt}</time>
       </button>
@@ -132,6 +150,24 @@ function ConversationRow({
             <DropdownMenu.Item className="dropdown-item conversation-menu-item" onSelect={() => setEditing(true)}>
               <Pencil size={13} /><span>{t("重命名")}</span>
             </DropdownMenu.Item>
+            <DropdownMenu.Item className="dropdown-item conversation-menu-item" onSelect={() => void onFork()}>
+              <GitFork size={13} /><span>{t("Fork 会话")}</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item className="dropdown-item conversation-menu-item" onSelect={() => {
+              const value = window.prompt(t("输入标签，用逗号分隔（最多 8 个）"), conversation.tags.join(", "));
+              if (value !== null) void onSetTags(value.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean));
+            }}>
+              <Tags size={13} /><span>{t("编辑标签")}</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item className="dropdown-item conversation-menu-item" onSelect={() => void onExport("markdown")}>
+              <FileText size={13} /><span>{t("导出 Markdown")}</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item className="dropdown-item conversation-menu-item" onSelect={() => void onExport("json")}>
+              <FileJson size={13} /><span>{t("导出 JSON")}</span>
+            </DropdownMenu.Item>
+            <DropdownMenu.Item className="dropdown-item conversation-menu-item" onSelect={() => void onSetArchived(!conversation.archived)}>
+              {conversation.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}<span>{t(conversation.archived ? "恢复会话" : "归档会话")}</span>
+            </DropdownMenu.Item>
             <DropdownMenu.Item className="dropdown-item conversation-menu-item is-danger" onSelect={() => {
               if (window.confirm(t("确定删除“{title}”吗？此操作不可恢复。", { title: conversation.title }))) void onDelete();
             }}>
@@ -151,6 +187,10 @@ function ProjectGroup({
   onSelectConversation,
   onNewProjectChat,
   onRenameConversation,
+  onForkConversation,
+  onExportConversation,
+  onSetConversationArchived,
+  onSetConversationTags,
   onDeleteConversation,
   conversationActionsDisabled,
 }: {
@@ -160,6 +200,10 @@ function ProjectGroup({
   onSelectConversation: (conversationId: string, project: Project) => void;
   onNewProjectChat: (project: Project) => void;
   onRenameConversation: (conversationId: string, title: string, project: Project) => Promise<void>;
+  onForkConversation: (conversationId: string, project: Project) => Promise<void>;
+  onExportConversation: (conversationId: string, format: "markdown" | "json") => Promise<void>;
+  onSetConversationArchived: (conversationId: string, archived: boolean) => Promise<void>;
+  onSetConversationTags: (conversationId: string, tags: string[]) => Promise<void>;
   onDeleteConversation: (conversationId: string, project: Project) => Promise<void>;
   conversationActionsDisabled: boolean;
 }) {
@@ -207,6 +251,10 @@ function ProjectGroup({
             actionsDisabled={conversationActionsDisabled}
             onSelect={() => onSelectConversation(conversation.id, project)}
             onRename={(title) => onRenameConversation(conversation.id, title, project)}
+            onFork={() => onForkConversation(conversation.id, project)}
+            onExport={(format) => onExportConversation(conversation.id, format)}
+            onSetArchived={(archived) => onSetConversationArchived(conversation.id, archived)}
+            onSetTags={(tags) => onSetConversationTags(conversation.id, tags)}
             onDelete={() => onDeleteConversation(conversation.id, project)}
           />
         ))}
@@ -226,6 +274,10 @@ export function ConversationSidebar({
   onNewChat,
   onNewProjectChat,
   onRenameConversation,
+  onForkConversation,
+  onExportConversation,
+  onSetConversationArchived,
+  onSetConversationTags,
   onDeleteConversation,
   conversationActionsDisabled,
   onAddProject,
@@ -250,19 +302,28 @@ export function ConversationSidebar({
     return () => window.cancelAnimationFrame(frame);
   }, [collapsed, searchRequest]);
 
+  const activeConversations = useMemo(() => conversations.filter((conversation) => !conversation.archived), [conversations]);
+  const activeProjects = useMemo(() => projects.map((project) => ({
+    ...project,
+    conversations: project.conversations.filter((conversation) => !conversation.archived),
+  })), [projects]);
+  const archivedEntries = useMemo(() => [
+    ...conversations.filter((conversation) => conversation.archived).map((conversation) => ({ conversation, project: undefined as Project | undefined })),
+    ...projects.flatMap((project) => project.conversations.filter((conversation) => conversation.archived).map((conversation) => ({ conversation, project }))),
+  ].filter(({ conversation }) => !normalizedQuery || matchesConversation(conversation, normalizedQuery)), [conversations, normalizedQuery, projects]);
   const filteredConversations = useMemo(
-    () => normalizedQuery ? conversations.filter((conversation) => matchesConversation(conversation, normalizedQuery)) : conversations,
-    [conversations, normalizedQuery],
+    () => normalizedQuery ? activeConversations.filter((conversation) => matchesConversation(conversation, normalizedQuery)) : activeConversations,
+    [activeConversations, normalizedQuery],
   );
-  const filteredProjects = useMemo(() => projects.flatMap((project) => {
+  const filteredProjects = useMemo(() => activeProjects.flatMap((project) => {
     if (!normalizedQuery) return [project];
     const projectMatches = [project.name, project.path].some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
     const matchingConversations = project.conversations.filter((conversation) => matchesConversation(conversation, normalizedQuery));
     return projectMatches || matchingConversations.length > 0
       ? [{ ...project, conversations: projectMatches ? project.conversations : matchingConversations }]
       : [];
-  }), [normalizedQuery, projects]);
-  const noSearchResults = Boolean(normalizedQuery) && filteredConversations.length === 0 && filteredProjects.length === 0;
+  }), [activeProjects, normalizedQuery]);
+  const noSearchResults = Boolean(normalizedQuery) && filteredConversations.length === 0 && filteredProjects.length === 0 && archivedEntries.length === 0;
 
   function toggleSearch() {
     if (collapsed) return;
@@ -331,6 +392,10 @@ export function ConversationSidebar({
             actionsDisabled={conversationActionsDisabled}
             onSelect={() => onSelectConversation(conversation.id)}
             onRename={(title) => onRenameConversation(conversation.id, title)}
+            onFork={() => onForkConversation(conversation.id)}
+            onExport={(format) => onExportConversation(conversation.id, format)}
+            onSetArchived={(archived) => onSetConversationArchived(conversation.id, archived)}
+            onSetTags={(tags) => onSetConversationTags(conversation.id, tags)}
             onDelete={() => onDeleteConversation(conversation.id)}
           />
         ))}
@@ -351,11 +416,30 @@ export function ConversationSidebar({
             onSelectConversation={onSelectConversation}
             onNewProjectChat={onNewProjectChat}
             onRenameConversation={onRenameConversation}
+            onForkConversation={onForkConversation}
+            onExportConversation={onExportConversation}
+            onSetConversationArchived={onSetConversationArchived}
+            onSetConversationTags={onSetConversationTags}
             onDeleteConversation={onDeleteConversation}
             conversationActionsDisabled={conversationActionsDisabled}
           />
         ))}
         {!normalizedQuery && projects.length === 0 && <p className="sidebar-empty">{t("暂无项目")}</p>}
+        {archivedEntries.length > 0 && <div className="sidebar-section-title sidebar-section-title--archive"><span>{t("已归档")}</span><Archive size={13} /></div>}
+        {archivedEntries.map(({ conversation, project }) => <ConversationRow
+          key={`archive:${conversation.id}`}
+          conversation={conversation}
+          project={project}
+          selected={selectedConversationId === conversation.id}
+          actionsDisabled={conversationActionsDisabled}
+          onSelect={() => onSelectConversation(conversation.id, project)}
+          onRename={(title) => onRenameConversation(conversation.id, title, project)}
+          onFork={() => onForkConversation(conversation.id, project)}
+          onExport={(format) => onExportConversation(conversation.id, format)}
+          onSetArchived={(archived) => onSetConversationArchived(conversation.id, archived)}
+          onSetTags={(tags) => onSetConversationTags(conversation.id, tags)}
+          onDelete={() => onDeleteConversation(conversation.id, project)}
+        />)}
         {noSearchResults && <p className="sidebar-search-empty">{t("没有找到“{query}”", { query: searchQuery.trim() })}</p>}
       </div>
 

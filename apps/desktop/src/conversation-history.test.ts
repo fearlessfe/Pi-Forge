@@ -5,6 +5,7 @@ describe("conversation history compatibility", () => {
   it("loads legacy turns without activity and usage fields", () => {
     expect(normalizeHistoryTurn({ id: "old", question: "hello", answer: "world" }, 0)).toEqual({
       id: "old",
+      sessionEntryId: "old",
       question: "hello",
       answer: "world",
       activities: [],

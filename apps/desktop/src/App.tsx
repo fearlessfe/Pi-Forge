@@ -1,9 +1,9 @@
 import { CheckCircle2, Package, Sparkles, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { ConversationSidebar } from "./components/ConversationSidebar";
 import { NewChatView } from "./components/NewChatView";
 import { SettingsView } from "./components/SettingsView";
-import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, SaveModelSettings, SystemPromptSettings } from "./contracts";
+import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, SaveModelSettings, SystemPromptSettings, TaskFileChange, WorkspaceTrustStatus } from "./contracts";
 import { appendMessageDelta } from "./conversation-activity";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { isPrimaryShortcut, shortcutLabel } from "./keyboard";
@@ -34,6 +34,8 @@ const initialPermissionRuntime: PermissionRuntime = {
 };
 
 const initialSystemPromptSettings: SystemPromptSettings = { content: "" };
+const initialResourceSettings: ResourceSettings = { workspaceContextEnabled: true, disabledSkills: [] };
+const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((module) => ({ default: module.TerminalPanel })));
 
 function getInitialTheme(): Theme {
   const saved = window.localStorage.getItem("pi-theme");
@@ -62,6 +64,10 @@ function historyConversation(item: ConversationHistoryItem, t: (message: string)
     title: item.title,
     subtitle: item.project?.name ?? t("普通对话"),
     updatedAt: historyTimestamp(item.updatedAt, locale),
+    tags: item.tags ?? [],
+    archived: item.archived ?? false,
+    searchText: item.searchText ?? "",
+    parentConversationId: item.parentConversationId,
   };
 }
 
@@ -140,6 +146,8 @@ function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[] {
       case "response.usage":
         return { ...current, usage: mergeAnswerUsage(current.usage, event.usage) };
       case "context.updated":
+      case "queue.updated":
+      case "changes.updated":
         return current;
       case "agent.event":
         // Raw SDK events are acknowledged here but intentionally stay out of the user-facing UI.
@@ -192,12 +200,18 @@ export function App() {
   const [modelSettings, setModelSettings] = useState<ModelSettings>(initialModelSettings);
   const [permissionRuntime, setPermissionRuntime] = useState<PermissionRuntime>(initialPermissionRuntime);
   const [systemPromptSettings, setSystemPromptSettings] = useState<SystemPromptSettings>(initialSystemPromptSettings);
+  const [resourceSettings, setResourceSettings] = useState<ResourceSettings>(initialResourceSettings);
+  const [workspaceTrust, setWorkspaceTrust] = useState<WorkspaceTrustStatus>();
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo>();
   const [authFlow, setAuthFlow] = useState<AuthFlowState | null>(null);
   const [prompt, setPrompt] = useState("");
+  const [commandRunning, setCommandRunning] = useState(false);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
+  const [fileChanges, setFileChanges] = useState<TaskFileChange[]>([]);
+  const [terminalOpen, setTerminalOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -222,12 +236,16 @@ export function App() {
     void refreshModelSettings();
     void refreshPermissionRuntime();
     void refreshSystemPromptSettings();
+    void refreshResourceSettings();
     void refreshProviderCatalog(t("无法读取模型目录"));
     void refreshConversationHistory();
     const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => {
       if (event.type === "context.updated") setContextUsage(event.usage);
+      if (event.type === "queue.updated") setQueuedMessages(event.queue);
+      if (event.type === "changes.updated") setFileChanges(event.changes);
       setTurns((current) => applyAgentEvent(current, event));
       if (event.type === "run.completed" || event.type === "run.error" || event.type === "run.stopped") {
+        setQueuedMessages({ steering: [], followUp: [] });
         void refreshConversationHistory();
       }
     });
@@ -265,6 +283,22 @@ export function App() {
     });
   }
 
+  async function refreshResourceSettings() {
+    await window.piDesktop?.resources?.getSettings().then(setResourceSettings).catch((error: unknown) => {
+      setNotice({ title: t("无法读取资源设置"), message: eventError(error), type: "info" });
+    });
+  }
+
+  async function refreshWorkspaceTrust(path?: string) {
+    if (!path) {
+      setWorkspaceTrust(undefined);
+      return;
+    }
+    await window.piDesktop?.workspace.trustStatus(path).then(setWorkspaceTrust).catch((error: unknown) => {
+      setNotice({ title: t("无法读取项目信任状态"), message: eventError(error), type: "info" });
+    });
+  }
+
   async function refreshProviderCatalog(errorTitle: string) {
     if (!window.piDesktop) return;
     try {
@@ -294,7 +328,7 @@ export function App() {
   }
 
   const title = useMemo(() => (view === "settings" ? t("设置") : project?.name ?? t("新建对话")), [project, t, view]);
-  const isRunning = turns.some((turn) => turn.status === "running");
+  const isRunning = commandRunning || turns.some((turn) => turn.status === "running");
   const configuredModelProviders = useMemo(() => {
     const configured = new Set(modelSettings.configuredProviders);
     const currentProvider = providerCatalog.find((provider) => provider.id === modelSettings.provider);
@@ -311,6 +345,7 @@ export function App() {
     if (isRunning) await window.piDesktop?.agent.abort();
     await window.piDesktop?.agent.reset();
     setTurns([]);
+    setFileChanges([]);
     setPrompt("");
   }
 
@@ -320,6 +355,7 @@ export function App() {
     }
     setView("chat");
     setProject(null);
+    setWorkspaceTrust(undefined);
     setSelectedConversationId(null);
     setContextUsage(undefined);
     void resetConversation();
@@ -331,6 +367,7 @@ export function App() {
     }
     setView("chat");
     setProject(projects.find((entry) => entry.id === nextProject.id) ?? nextProject);
+    void refreshWorkspaceTrust(nextProject.path);
     setSelectedConversationId(null);
     setContextUsage(undefined);
     void resetConversation();
@@ -361,6 +398,57 @@ export function App() {
     }
   }
 
+  async function forkConversation(conversationId: string, scopeProject?: Project, entryId?: string) {
+    if (!window.piDesktop?.agent.forkConversation) return;
+    try {
+      const fork = await window.piDesktop.agent.forkConversation(conversationId, entryId);
+      await refreshConversationHistory();
+      const forkProject = fork.project ? { ...fork.project, conversations: [] } : scopeProject;
+      await openConversation(fork.id, forkProject);
+      setNotice({ title: t("会话 Fork 已创建"), message: entryId ? t("已从选定消息节点创建独立会话。") : t("已复制完整上下文到独立会话。"), type: "success" });
+    } catch (error) {
+      setNotice({ title: t("无法 Fork 会话"), message: eventError(error), type: "info" });
+    }
+  }
+
+  async function exportConversation(conversationId: string, format: "markdown" | "json") {
+    if (!window.piDesktop?.agent.exportConversation) return;
+    try {
+      const exported = await window.piDesktop.agent.exportConversation(conversationId, format);
+      const url = URL.createObjectURL(new Blob([exported.content], { type: exported.mimeType }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = exported.filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setNotice({ title: t("会话已导出"), message: exported.filename, type: "success" });
+    } catch (error) {
+      setNotice({ title: t("无法导出会话"), message: eventError(error), type: "info" });
+    }
+  }
+
+  async function setConversationArchived(conversationId: string, archived: boolean) {
+    if (!window.piDesktop?.agent.setConversationArchived) return;
+    try {
+      await window.piDesktop.agent.setConversationArchived(conversationId, archived);
+      await refreshConversationHistory();
+      setNotice({ title: t(archived ? "会话已归档" : "会话已恢复"), message: t(archived ? "可在侧栏的已归档区域找到。" : "会话已回到原分组。"), type: "success" });
+    } catch (error) {
+      setNotice({ title: t("无法更新归档状态"), message: eventError(error), type: "info" });
+    }
+  }
+
+  async function setConversationTags(conversationId: string, tags: string[]) {
+    if (!window.piDesktop?.agent.setConversationTags) return;
+    try {
+      await window.piDesktop.agent.setConversationTags(conversationId, tags);
+      await refreshConversationHistory();
+      setNotice({ title: t("会话标签已更新"), message: tags.join("、") || t("已清空标签"), type: "success" });
+    } catch (error) {
+      setNotice({ title: t("无法更新会话标签"), message: eventError(error), type: "info" });
+    }
+  }
+
   async function deleteConversation(conversationId: string, scopeProject?: Project) {
     if (!window.piDesktop?.agent.deleteConversation) {
       setNotice({ title: t("无法删除会话"), message: t("请完全退出并重新启动新版 Pi Desktop。"), type: "info" });
@@ -387,6 +475,7 @@ export function App() {
       if (selectedConversationId === conversationId) {
         setSelectedConversationId(null);
         setTurns([]);
+        setFileChanges([]);
         setPrompt("");
         setContextUsage(undefined);
         if (!scopeProject) setProject(null);
@@ -411,7 +500,9 @@ export function App() {
     setView("chat");
     setSelectedConversationId(conversationId);
     setProject(nextProject ? projects.find((entry) => entry.id === nextProject.id) ?? nextProject : null);
+    void refreshWorkspaceTrust(nextProject?.path);
     setPrompt("");
+    setFileChanges([]);
     const cachedTurns = conversationTurns[conversationId];
     if (cachedTurns) {
       setTurns(cachedTurns);
@@ -439,6 +530,15 @@ export function App() {
   async function chooseWorkspace() {
     const selected = await window.piDesktop?.workspace.choose();
     if (!selected) return;
+    let trust = selected;
+    if (selected.hasProjectResources && !selected.trusted) {
+      const resourceSummary = selected.resourcePaths.map((entry) => `• ${entry}`).join("\n");
+      const approved = window.confirm(t("是否信任项目“{name}”？\n\n信任后 Pi Desktop 会加载以下项目资源，它们可能包含可执行代码或 Agent 指令：\n\n{resources}", {
+        name: selected.name,
+        resources: resourceSummary,
+      }));
+      if (approved) trust = { ...selected, ...await window.piDesktop!.workspace.setTrusted(selected.path, true) };
+    }
     const nextProject = {
       id: selected.path,
       name: selected.name,
@@ -449,6 +549,10 @@ export function App() {
       ? current
       : [...current, nextProject]);
     setProject(nextProject);
+    setWorkspaceTrust(trust);
+    if (trust.hasProjectResources && !trust.trusted) {
+      setNotice({ title: t("项目以受限模式打开"), message: t("项目资源未加载；可在“设置 → 通用”中信任该项目。"), type: "info" });
+    }
   }
 
   function ensureConversation(question: string): string {
@@ -460,6 +564,9 @@ export function App() {
       title: normalizedTitle.length > 34 ? `${normalizedTitle.slice(0, 34)}…` : normalizedTitle,
       subtitle: project ? project.name : t("普通对话"),
       updatedAt: t("刚刚"),
+      tags: [],
+      archived: false,
+      searchText: question,
     };
     setSelectedConversationId(conversationId);
     if (project) {
@@ -479,6 +586,22 @@ export function App() {
 
   async function sendQuestion(question: string) {
     if (!question.trim() || isRunning) return;
+    if (question.trimStart().startsWith("/") && window.piDesktop?.resources?.executeExtensionCommand) {
+      setCommandRunning(true);
+      try {
+        const result = await window.piDesktop.resources.executeExtensionCommand({ prompt: question.trim(), cwd: project?.path, conversationId: selectedConversationId ?? undefined });
+        if (result.handled) {
+          setPrompt("");
+          setNotice({ title: t("命令已执行"), message: question.trim(), type: "success" });
+          return;
+        }
+      } catch (error) {
+        setNotice({ title: t("命令执行失败"), message: eventError(error), type: "info" });
+        return;
+      } finally {
+        setCommandRunning(false);
+      }
+    }
     const wasNewConversation = !selectedConversationId;
     const conversationId = ensureConversation(question);
     const id = `${Date.now()}-${turns.length}`;
@@ -517,6 +640,30 @@ export function App() {
   }
 
   function submitPrompt() {
+    const command = prompt.trim();
+    if (command === "/new") {
+      startNewChat();
+      return;
+    }
+    if (command === "/settings") {
+      setPrompt("");
+      setSettingsSection("general");
+      setView("settings");
+      return;
+    }
+    if (command === "/plugins") {
+      setPrompt("");
+      setSettingsSection("plugins");
+      setView("settings");
+      return;
+    }
+    if (command === "/reload") {
+      setPrompt("");
+      void window.piDesktop?.plugins.reload().then(() => {
+        setNotice({ title: t("资源已重新加载"), message: t("Skills、Prompts 与 Extensions 已刷新。"), type: "success" });
+      }).catch((error: unknown) => setNotice({ title: t("重新加载失败"), message: eventError(error), type: "info" }));
+      return;
+    }
     void sendQuestion(prompt);
   }
 
@@ -527,6 +674,45 @@ export function App() {
 
   async function stopAgent() {
     await window.piDesktop?.agent.abort();
+  }
+
+  async function queuePrompt(mode: "steer" | "followUp") {
+    if (!prompt.trim() || !window.piDesktop?.agent.queue) return;
+    try {
+      setQueuedMessages(await window.piDesktop.agent.queue(prompt, mode));
+      setPrompt("");
+    } catch (error) {
+      setNotice({ title: t("消息排队失败"), message: eventError(error), type: "info" });
+    }
+  }
+
+  async function clearQueuedPrompts() {
+    if (!window.piDesktop?.agent.clearQueue) return;
+    setQueuedMessages(await window.piDesktop.agent.clearQueue());
+  }
+
+  async function acceptFileChanges(changeIds?: string[]) {
+    if (!window.piDesktop?.agent.acceptChanges) return;
+    try {
+      setFileChanges(await window.piDesktop.agent.acceptChanges(changeIds));
+      setNotice({ title: t("文件变更已接受"), message: t("该任务的变更将保留在工作区。"), type: "success" });
+    } catch (error) {
+      setNotice({ title: t("无法接受文件变更"), message: eventError(error), type: "info" });
+    }
+  }
+
+  async function revertFileChanges(changeIds?: string[]) {
+    if (!window.piDesktop?.agent.revertChanges) return;
+    try {
+      const changes = await window.piDesktop.agent.revertChanges(changeIds);
+      setFileChanges(changes);
+      const conflicts = changes.filter((change) => change.status === "conflict");
+      setNotice(conflicts.length
+        ? { title: t("部分变更未回退"), message: conflicts.map((change) => `${change.relativePath}: ${change.error}`).join("\n"), type: "info" }
+        : { title: t("文件变更已回退"), message: t("已恢复 Agent 修改前的文件内容。"), type: "success" });
+    } catch (error) {
+      setNotice({ title: t("无法回退文件变更"), message: eventError(error), type: "info" });
+    }
   }
 
   async function answerQuestion(turnId: string, callId: string, answer: string) {
@@ -565,6 +751,28 @@ export function App() {
     setNotice({
       title: t("系统提示词已更新"),
       message: t(saved.content ? "Agent 已重启，下一条消息将使用新的系统提示词。" : "已恢复默认系统提示词，Agent 已重启。"),
+      type: "success",
+    });
+  }
+
+  async function saveResourceSettings(input: ResourceSettings) {
+    if (!window.piDesktop?.resources) throw new Error("资源设置只能在 Electron 应用中保存。");
+    const saved = await window.piDesktop.resources.saveSettings(input);
+    setResourceSettings(saved);
+    setNotice({
+      title: t("工作区上下文已更新"),
+      message: t(saved.workspaceContextEnabled ? "已允许可信项目加载本地资源。" : "项目 AGENTS、Skills 与 Extensions 已停用。"),
+      type: "success",
+    });
+  }
+
+  async function setCurrentWorkspaceTrusted(trusted: boolean) {
+    if (!project || !window.piDesktop?.workspace) return;
+    const status = await window.piDesktop.workspace.setTrusted(project.path, trusted);
+    setWorkspaceTrust(status);
+    setNotice({
+      title: t(trusted ? "项目已信任" : "项目信任已撤销"),
+      message: t(trusted ? "下一条消息将加载该项目的本地资源。" : "该项目的本地资源已停止加载。"),
       type: "success",
     });
   }
@@ -699,6 +907,10 @@ export function App() {
               onNewChat={startNewChat}
               onNewProjectChat={startProjectChat}
               onRenameConversation={renameConversation}
+              onForkConversation={forkConversation}
+              onExportConversation={exportConversation}
+              onSetConversationArchived={setConversationArchived}
+              onSetConversationTags={setConversationTags}
               onDeleteConversation={deleteConversation}
               conversationActionsDisabled={isRunning}
               onAddProject={() => void chooseWorkspace()}
@@ -716,15 +928,24 @@ export function App() {
                 contextUsage={displayedContextUsage}
                 prompt={prompt}
                 isRunning={isRunning}
+                queuedMessages={queuedMessages}
+                fileChanges={fileChanges}
                 onPromptChange={setPrompt}
                 onProjectChange={setProject}
                 onChooseWorkspace={() => void chooseWorkspace()}
+                onOpenTerminal={() => setTerminalOpen(true)}
                 onModelChange={(providerId, modelId) => void selectChatModel(providerId, modelId)}
                 onSubmit={submitPrompt}
                 onStop={() => void stopAgent()}
+                onQueue={(mode) => void queuePrompt(mode)}
+                onClearQueue={() => void clearQueuedPrompts()}
+                onAcceptChanges={(changeIds) => void acceptFileChanges(changeIds)}
+                onRevertChanges={(changeIds) => void revertFileChanges(changeIds)}
                 onRetry={retryTurn}
+                onForkTurn={(entryId) => selectedConversationId ? void forkConversation(selectedConversationId, project ?? undefined, entryId) : undefined}
                 onAnswerQuestion={(turnId, callId, answer) => void answerQuestion(turnId, callId, answer)}
               />
+              {terminalOpen && <Suspense fallback={<div className="terminal-panel terminal-loading">{t("正在启动终端…")}</div>}><TerminalPanel cwd={project?.path} onClose={() => setTerminalOpen(false)} /></Suspense>}
             </main>
           </div>
         ) : (
@@ -733,6 +954,8 @@ export function App() {
             settings={modelSettings}
             permissionRuntime={permissionRuntime}
             systemPrompt={systemPromptSettings}
+            resourceSettings={resourceSettings}
+            workspaceTrust={workspaceTrust}
             providerCatalog={providerCatalog}
             authFlow={authFlow}
             theme={theme}
@@ -743,6 +966,8 @@ export function App() {
             onSave={saveModelSettings}
             onSavePermissions={savePermissionSettings}
             onSaveSystemPrompt={saveSystemPromptSettings}
+            onSaveResourceSettings={saveResourceSettings}
+            onSetWorkspaceTrusted={setCurrentWorkspaceTrusted}
             onDiscoverModels={discoverModels}
             onRefreshMetadata={refreshModelMetadata}
             onSaveMetadata={saveModelMetadata}

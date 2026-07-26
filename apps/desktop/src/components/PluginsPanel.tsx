@@ -24,6 +24,7 @@ import type {
 
 type PluginsPanelProps = {
   agentRunning: boolean;
+  workspaceCwd?: string;
 };
 
 const resourceLabels: Record<PluginResourceType, string> = {
@@ -52,6 +53,8 @@ function compatibilityCopy(plugin: PluginPackage): string {
   return "兼容性未知";
 }
 
+const riskLabels = { low: "低风险", medium: "中风险", high: "高风险", blocked: "已阻止" } as const;
+
 function PackageCapabilityCard({
   title,
   description,
@@ -75,7 +78,7 @@ function PackageCapabilityCard({
 }) {
   const { t } = useI18n();
   const sources = [...new Set([
-    ...installed.map((plugin) => plugin.source),
+    ...installed.filter((plugin) => plugin.enabled && plugin.projectEnabled !== false && plugin.verification !== "tampered").map((plugin) => plugin.source),
     ...history.flatMap((provider) => provider.kind === "plugin" ? [provider.source] : []),
   ])];
   return (
@@ -87,7 +90,7 @@ function PackageCapabilityCard({
   );
 }
 
-export function PluginsPanel({ agentRunning }: PluginsPanelProps) {
+export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) {
   const { t, locale } = useI18n();
   const [tab, setTab] = useState<"discover" | "installed">("discover");
   const [query, setQuery] = useState("");
@@ -130,14 +133,14 @@ export function PluginsPanel({ agentRunning }: PluginsPanelProps) {
       return;
     }
     void Promise.all([
-      window.piDesktop.plugins.list().then(setInstalled),
+      window.piDesktop.plugins.list(workspaceCwd).then(setInstalled),
       window.piDesktop.plugins.runtime().then((status) => {
         receiveRuntime(status);
       }),
       searchPackages("", 0, false),
     ]).catch((caught: unknown) => setError(errorMessage(caught)));
     return window.piDesktop.plugins.onEvent(setProgress);
-  }, []);
+  }, [workspaceCwd]);
 
   function receiveRuntime(status: PluginRuntimeStatus) {
     setRuntime(status);
@@ -245,6 +248,23 @@ export function PluginsPanel({ agentRunning }: PluginsPanelProps) {
     }
   }
 
+  async function setPluginEnabled(plugin: InstalledPlugin, enabled: boolean, scope: "user" | "project") {
+    if (!window.piDesktop) return;
+    setOperation(`enable:${plugin.source}:${scope}`);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await window.piDesktop.plugins.setEnabled(plugin.source, enabled, workspaceCwd, scope);
+      setInstalled(result.installed);
+      receiveRuntime(result.runtime);
+      setMessage(`${plugin.name} 已在${scope === "project" ? "当前项目" : "所有项目"}${enabled ? "启用" : "停用"}${result.reloaded ? "并重新加载" : ""}。`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setOperation(null);
+    }
+  }
+
   async function saveSubagentProvider() {
     if (!window.piDesktop) return;
     if (subagentKind === "plugin" && (!subagentSource || !subagentTool.trim())) {
@@ -325,6 +345,7 @@ export function PluginsPanel({ agentRunning }: PluginsPanelProps) {
                   <div className="plugin-tags">
                     {plugin.resources.length > 0 ? plugin.resources.map((resource) => <span key={resource}>{resourceLabels[resource]}</span>) : <span>Pi Package</span>}
                     <span className={`compatibility-badge compatibility-badge--${plugin.compatibility}`}>{t(compatibilityCopy(plugin))}</span>
+                    <span className={`plugin-risk plugin-risk--${plugin.riskTier}`}>{t(riskLabels[plugin.riskTier])}</span>
                   </div>
                   <footer>
                     <span>{compactNumber(plugin.weeklyDownloads, locale) ? `${compactNumber(plugin.weeklyDownloads, locale)} ${t("周下载")}` : plugin.license ?? t("许可证未知")}</span>
@@ -372,7 +393,15 @@ export function PluginsPanel({ agentRunning }: PluginsPanelProps) {
             {installed.map((plugin) => (
               <article className="installed-plugin" key={plugin.source}>
                 <span className="plugin-icon"><PackageCheck size={18} /></span>
-                <span><strong>{plugin.name}</strong><small>{plugin.version ? `v${plugin.version}` : plugin.source} · {t(plugin.installed ? "已就绪" : "文件缺失")}</small></span>
+                <span className="installed-plugin-details">
+                  <strong>{plugin.name}</strong>
+                  <small>{plugin.version ? `v${plugin.version}` : plugin.source} · {t(plugin.verification === "verified" ? "完整性已验证" : plugin.verification === "legacy" ? "旧安装，来源未验证" : plugin.verification === "tampered" ? "完整性异常" : "文件缺失")}</small>
+                  <small>{plugin.publisher ?? "未知发布者"} · {plugin.provenance === "npm-registry" ? "npm registry" : "legacy"} · {riskLabels[plugin.riskTier]}{plugin.integrity ? ` · ${plugin.integrity.slice(0, 22)}…` : ""}</small>
+                </span>
+                <span className="plugin-enable-actions">
+                  <button className="secondary-button" type="button" disabled={Boolean(operation) || agentRunning || plugin.verification === "tampered" || plugin.verification === "missing"} onClick={() => void setPluginEnabled(plugin, !plugin.enabled, "user")}>{plugin.enabled ? t("全局停用") : t("全局启用")}</button>
+                  {workspaceCwd && <button className="secondary-button" type="button" disabled={Boolean(operation) || agentRunning || !plugin.enabled} onClick={() => void setPluginEnabled(plugin, plugin.projectEnabled === false, "project")}>{plugin.projectEnabled === false ? t("项目启用") : t("项目停用")}</button>}
+                </span>
                 <button className="secondary-button danger-button" type="button" disabled={Boolean(operation) || agentRunning} onClick={() => void removePlugin(plugin)}><Trash2 size={13} />{t("卸载")}</button>
               </article>
             ))}
@@ -395,6 +424,7 @@ export function PluginsPanel({ agentRunning }: PluginsPanelProps) {
             <p className="plugin-dialog-version">{t("版本")} {candidate.version} · {t("发布者")} {candidate.publisher} · {candidate.license ?? t("许可证未知")}</p>
             <p className="plugin-dialog-description">{candidate.description}</p>
             <div className="plugin-dialog-resources"><strong>{t("包含资源")}</strong><span>{candidate.resources.length > 0 ? candidate.resources.map((resource) => resourceLabels[resource]).join(", ") : t("包未声明资源清单，安装后由 Pi 自动发现")}</span></div>
+            <div className="plugin-dialog-resources"><strong>{t("来源与完整性")}</strong><span>npm registry · {riskLabels[candidate.riskTier]} · {candidate.integrity ?? candidate.shasum ?? t("注册表未提供完整性摘要")}</span></div>
             <div className="plugin-security-warning">
               <AlertTriangle size={17} />
               <span><strong>{t("该包可以执行本地代码")}</strong><small>{t("npm 安装脚本和 Pi Extension 将以你的本地用户权限运行。请只安装你信任的发布者提供的包。")}</small></span>

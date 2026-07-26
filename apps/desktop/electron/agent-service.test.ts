@@ -383,6 +383,69 @@ describe("AgentService with a real Pi session", () => {
     }
   });
 
+  it("supports full-text metadata, archive, tags, exports, and selected-turn forks", async () => {
+    const cwd = createDirectory("conversation-features-workspace");
+    const agentDir = createDirectory("conversation-features-agent");
+    const sessionDir = createDirectory("conversation-features-sessions");
+    const manager = SessionManager.create(cwd, sessionDir, { id: "conversation-features" });
+    const firstTurnId = manager.appendMessage({ role: "user", content: "find the hidden phrase", timestamp: 1 } satisfies UserMessage);
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "needle-in-the-history" }],
+      api: "openai-completions",
+      provider: "openai-compatible",
+      model: "mock-model",
+      usage: usage(1, 1, 0),
+      stopReason: "stop",
+      timestamp: 2,
+    } satisfies AssistantMessage);
+    manager.appendMessage({ role: "user", content: "second question", timestamp: 3 } satisfies UserMessage);
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "second answer" }],
+      api: "openai-completions",
+      provider: "openai-compatible",
+      model: "mock-model",
+      usage: usage(1, 1, 0),
+      stopReason: "stop",
+      timestamp: 4,
+    } satisfies AssistantMessage);
+    const service = new AgentService(
+      { resolve: () => ({ provider: "openai-compatible", baseUrl: "http://127.0.0.1:11434/v1", modelId: "mock-model", thinkingLevel: "off" }) },
+      agentDir,
+      cwd,
+      () => {},
+      undefined,
+      undefined,
+      sessionDir,
+    );
+
+    try {
+      await service.setConversationTags("conversation-features", ["research", "important"]);
+      await service.setConversationArchived("conversation-features", true);
+      const items = await service.listConversations();
+      expect(items[0]).toEqual(expect.objectContaining({
+        tags: ["research", "important"],
+        archived: true,
+        searchText: expect.stringContaining("needle-in-the-history"),
+      }));
+
+      const markdown = await service.exportConversation("conversation-features", "markdown");
+      expect(markdown).toMatchObject({ mimeType: "text/markdown", filename: expect.stringMatching(/\.md$/) });
+      expect(markdown.content).toContain("needle-in-the-history");
+      const json = await service.exportConversation("conversation-features", "json");
+      expect(JSON.parse(json.content)).toEqual(expect.objectContaining({ id: "conversation-features", archived: true }));
+
+      const fork = await service.forkConversation("conversation-features", firstTurnId);
+      expect(fork).toEqual(expect.objectContaining({ parentConversationId: "conversation-features", archived: false, tags: ["research", "important"] }));
+      const forkDetail = await service.loadConversation(fork.id);
+      expect(forkDetail.turns).toHaveLength(1);
+      expect(forkDetail.turns[0]).toMatchObject({ question: "find the hidden phrase", answer: "needle-in-the-history" });
+    } finally {
+      service.dispose();
+    }
+  });
+
   it("activates a third-party extension tool as the subagent provider", async () => {
     const server = http.createServer((req, res) => {
       req.resume();
@@ -436,6 +499,8 @@ describe("AgentService with a real Pi session", () => {
         expect.objectContaining({ name: "community_subagent", active: true }),
         expect.objectContaining({ name: "pi_desktop_subagent", active: false, sourceKind: "desktop" }),
       ]));
+      await expect(service.reloadPackages()).resolves.toBe(true);
+      expect(service.getPluginRuntime().effectiveSubagent).toEqual({ kind: "plugin", source: "auto", toolName: "community_subagent" });
     } finally {
       service.dispose();
       await close(server);
@@ -621,6 +686,102 @@ describe("AgentService with a real Pi session", () => {
       expect(requests[2].messages).toEqual(expect.arrayContaining([
         expect.objectContaining({ role: "tool", content: expect.stringContaining("child-report") }),
       ]));
+    } finally {
+      service.dispose();
+      await close(server);
+    }
+  });
+
+  it("captures task file diffs and only reverts files that still match the Agent result", async () => {
+    let requestCount = 0;
+    const server = http.createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        requestCount += 1;
+        if (requestCount === 1) {
+          writeSse(res, [chunk({ role: "assistant" }), chunk({ tool_calls: [{ index: 0, id: "call-write", type: "function", function: { name: "write", arguments: JSON.stringify({ path: "created.txt", content: "created by agent\n" }) } }] }), chunk({}, "tool_calls")]);
+        } else if (requestCount === 2) {
+          writeSse(res, [chunk({ role: "assistant" }), chunk({ tool_calls: [{ index: 0, id: "call-edit", type: "function", function: { name: "edit", arguments: JSON.stringify({ path: "existing.txt", edits: [{ oldText: "before\n", newText: "after\n" }] }) } }] }), chunk({}, "tool_calls")]);
+        } else {
+          writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "files updated" }), chunk({}, "stop")]);
+        }
+      });
+    });
+    const port = await listen(server);
+    const cwd = createDirectory("changes-workspace");
+    fs.writeFileSync(path.join(cwd, "existing.txt"), "before\n");
+    const configuration: SaveModelSettings = {
+      provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      modelId: "mock-model",
+      thinkingLevel: "off",
+      apiKey: "changes-key",
+    };
+    const events: AgentEvent[] = [];
+    const service = new AgentService({ resolve: () => ({ ...configuration }) }, createDirectory("changes-agent"), cwd, (event) => events.push(event));
+
+    try {
+      const runId = await service.send("update both files", cwd);
+      await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
+      const changes = service.listChanges(runId);
+      expect(changes).toEqual(expect.arrayContaining([
+        expect.objectContaining({ relativePath: "created.txt", kind: "created", status: "pending", revertible: true, patch: expect.stringContaining("created by agent") }),
+        expect.objectContaining({ relativePath: "existing.txt", kind: "modified", status: "pending", revertible: true, patch: expect.stringContaining("after") }),
+      ]));
+      expect(eventsOfType(events, "changes.updated").at(-1)?.changes).toHaveLength(2);
+
+      const created = changes.find((change) => change.kind === "created")!;
+      expect(service.revertChanges([created.id]).find((change) => change.id === created.id)?.status).toBe("reverted");
+      expect(fs.existsSync(path.join(cwd, "created.txt"))).toBe(false);
+
+      const modified = changes.find((change) => change.kind === "modified")!;
+      fs.writeFileSync(path.join(cwd, "existing.txt"), "third-party change\n");
+      const conflicted = service.revertChanges([modified.id]).find((change) => change.id === modified.id)!;
+      expect(conflicted).toMatchObject({ status: "conflict", error: expect.stringContaining("避免覆盖") });
+      expect(fs.readFileSync(path.join(cwd, "existing.txt"), "utf8")).toBe("third-party change\n");
+      expect(service.acceptChanges([modified.id]).find((change) => change.id === modified.id)?.status).toBe("accepted");
+    } finally {
+      service.dispose();
+      await close(server);
+    }
+  });
+
+  it("queues steering and follow-up messages during a run and clears them explicitly", async () => {
+    let requestStarted!: () => void;
+    let finishRequest!: () => void;
+    const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+    const server = http.createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        requestStarted();
+        finishRequest = () => writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "finished" }), chunk({}, "stop")]);
+      });
+    });
+    const port = await listen(server);
+    const cwd = createDirectory("queue-workspace");
+    const configuration: SaveModelSettings = {
+      provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      modelId: "mock-model",
+      thinkingLevel: "off",
+      apiKey: "queue-key",
+    };
+    const events: AgentEvent[] = [];
+    const service = new AgentService({ resolve: () => ({ ...configuration }) }, createDirectory("queue-agent"), cwd, (event) => events.push(event));
+
+    try {
+      const runId = await service.send("start a long task", cwd);
+      await started;
+      await expect(service.queueMessage("change direction", "steer")).resolves.toEqual({ steering: ["change direction"], followUp: [] });
+      await expect(service.queueMessage("summarize afterward", "followUp")).resolves.toEqual({ steering: ["change direction"], followUp: ["summarize afterward"] });
+      expect(eventsOfType(events, "queue.updated")).toEqual(expect.arrayContaining([
+        expect.objectContaining({ runId, queue: { steering: ["change direction"], followUp: [] } }),
+        expect.objectContaining({ runId, queue: { steering: ["change direction"], followUp: ["summarize afterward"] } }),
+      ]));
+      expect(service.clearQueue()).toEqual({ steering: [], followUp: [] });
+      expect(eventsOfType(events, "queue.updated").at(-1)).toMatchObject({ runId, queue: { steering: [], followUp: [] } });
+      finishRequest();
+      await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
     } finally {
       service.dispose();
       await close(server);

@@ -76,6 +76,7 @@ export function normalizeHistoryTurn(value: unknown, index: number): ChatTurn {
   const turn = value && typeof value === "object" ? value as Record<string, unknown> : {};
   return {
     id: typeof turn.id === "string" ? turn.id : `history-${index}`,
+    sessionEntryId: typeof turn.id === "string" ? turn.id : undefined,
     question: typeof turn.question === "string" ? turn.question : "",
     answer: typeof turn.answer === "string" ? turn.answer : "",
     activities: Array.isArray(turn.activities)

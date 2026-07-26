@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentEvent, AuthEvent, ModelMetadataOverride, PiDesktopApi, PluginProgressEvent, SaveModelSettings, SendPromptInput } from "../src/contracts.js";
+import type { AgentEvent, AuthEvent, ModelMetadataOverride, PiDesktopApi, PluginProgressEvent, SaveModelSettings, SendPromptInput, TerminalEvent } from "../src/contracts.js";
 
 const api: PiDesktopApi = {
   settings: {
@@ -33,14 +33,44 @@ const api: PiDesktopApi = {
   },
   workspace: {
     choose: () => ipcRenderer.invoke("workspace:choose"),
+    trustStatus: (path) => ipcRenderer.invoke("workspace:trust-status", path),
+    setTrusted: (path, trusted) => ipcRenderer.invoke("workspace:set-trusted", path, trusted),
+  },
+  resources: {
+    getSettings: () => ipcRenderer.invoke("resources:get-settings"),
+    saveSettings: (settings) => ipcRenderer.invoke("resources:save-settings", settings),
+    inventory: (cwd) => ipcRenderer.invoke("resources:inventory", cwd),
+    setSkillEnabled: (name, enabled, cwd) => ipcRenderer.invoke("resources:set-skill-enabled", name, enabled, cwd),
+    executeExtensionCommand: (input) => ipcRenderer.invoke("resources:execute-extension-command", input),
+  },
+  mcp: {
+    overview: (cwd) => ipcRenderer.invoke("mcp:overview", cwd),
+    save: (server) => ipcRenderer.invoke("mcp:save", server),
+    remove: (key, cwd) => ipcRenderer.invoke("mcp:remove", key, cwd),
+    connect: (key, cwd) => ipcRenderer.invoke("mcp:connect", key, cwd),
+    disconnect: (key, cwd) => ipcRenderer.invoke("mcp:disconnect", key, cwd),
+    reconnect: (key, cwd) => ipcRenderer.invoke("mcp:reconnect", key, cwd),
+  },
+  terminal: {
+    create: (cwd, cols, rows) => ipcRenderer.invoke("terminal:create", cwd, cols, rows),
+    list: () => ipcRenderer.invoke("terminal:list"),
+    write: (id, data) => ipcRenderer.invoke("terminal:write", id, data),
+    resize: (id, cols, rows) => ipcRenderer.invoke("terminal:resize", id, cols, rows),
+    kill: (id) => ipcRenderer.invoke("terminal:kill", id),
+    onEvent: (listener: (event: TerminalEvent) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: TerminalEvent) => listener(payload);
+      ipcRenderer.on("terminal:event", handler);
+      return () => ipcRenderer.removeListener("terminal:event", handler);
+    },
   },
   plugins: {
     search: (query, offset) => ipcRenderer.invoke("plugins:search", query, offset),
     details: (name, version) => ipcRenderer.invoke("plugins:details", name, version),
-    list: () => ipcRenderer.invoke("plugins:list"),
+    list: (cwd) => ipcRenderer.invoke("plugins:list", cwd),
     install: (name, version) => ipcRenderer.invoke("plugins:install", name, version),
     remove: (source) => ipcRenderer.invoke("plugins:remove", source),
     reload: () => ipcRenderer.invoke("plugins:reload"),
+    setEnabled: (source, enabled, cwd, scope) => ipcRenderer.invoke("plugins:set-enabled", source, enabled, cwd, scope),
     runtime: () => ipcRenderer.invoke("plugins:runtime"),
     setSubagentProvider: (provider) => ipcRenderer.invoke("plugins:set-subagent-provider", provider),
     setPackageCapability: (slot, provider) => ipcRenderer.invoke("plugins:set-package-capability", slot, provider),
@@ -55,8 +85,17 @@ const api: PiDesktopApi = {
     listConversations: () => ipcRenderer.invoke("agent:list-conversations"),
     loadConversation: (conversationId) => ipcRenderer.invoke("agent:load-conversation", conversationId),
     renameConversation: (conversationId, title) => ipcRenderer.invoke("agent:rename-conversation", conversationId, title),
+    forkConversation: (conversationId, entryId) => ipcRenderer.invoke("agent:fork-conversation", conversationId, entryId),
+    exportConversation: (conversationId, format) => ipcRenderer.invoke("agent:export-conversation", conversationId, format),
+    setConversationArchived: (conversationId, archived) => ipcRenderer.invoke("agent:set-conversation-archived", conversationId, archived),
+    setConversationTags: (conversationId, tags) => ipcRenderer.invoke("agent:set-conversation-tags", conversationId, tags),
     deleteConversation: (conversationId) => ipcRenderer.invoke("agent:delete-conversation", conversationId),
     abort: () => ipcRenderer.invoke("agent:abort"),
+    queue: (prompt, mode) => ipcRenderer.invoke("agent:queue", prompt, mode),
+    clearQueue: () => ipcRenderer.invoke("agent:clear-queue"),
+    listChanges: (runId) => ipcRenderer.invoke("agent:list-changes", runId),
+    acceptChanges: (changeIds) => ipcRenderer.invoke("agent:accept-changes", changeIds),
+    revertChanges: (changeIds) => ipcRenderer.invoke("agent:revert-changes", changeIds),
     reset: () => ipcRenderer.invoke("agent:reset"),
     answerQuestion: (callId: string, answer: string) => ipcRenderer.invoke("agent:answer-question", callId, answer),
     onEvent: (listener: (event: AgentEvent) => void) => {

@@ -4,13 +4,17 @@ export type Theme = "dark" | "light";
 
 export type AppView = "chat" | "settings";
 
-export type SettingsSection = "models" | "model-metadata" | "plugins" | "permissions" | "general" | "appearance";
+export type SettingsSection = "models" | "model-metadata" | "plugins" | "skills" | "mcp" | "permissions" | "general" | "appearance";
 
 export type Conversation = {
   id: string;
   title: string;
   subtitle: string;
   updatedAt: string;
+  tags: string[];
+  archived: boolean;
+  searchText: string;
+  parentConversationId?: string;
 };
 
 export type Project = {
@@ -36,6 +40,7 @@ export type AuthFlowState = {
 
 export type ChatTurn = {
   id: string;
+  sessionEntryId?: string;
   runId?: string;
   question: string;
   answer: string;

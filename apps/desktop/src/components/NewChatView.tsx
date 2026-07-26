@@ -9,16 +9,19 @@ import {
   ChevronDown,
   CircleStop,
   Copy,
+  FileDiff,
   Folder,
+  GitFork,
   MessageCircleQuestion,
-  Paperclip,
   RotateCcw,
   TerminalSquare,
+  ShieldCheck,
+  Undo2,
   Users,
   XCircle,
 } from "lucide-react";
-import { useState } from "react";
-import type { ContextUsageInfo, ProviderCatalogEntry, ProviderId, ResponseUsage } from "../contracts";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import type { CommandInfo, ContextUsageInfo, ProviderCatalogEntry, ProviderId, QueuedMessages, ResponseUsage, TaskFileChange } from "../contracts";
 import { normalizeVisibleActivities } from "../conversation-activity";
 import { shouldSubmitOnEnter } from "../keyboard";
 import { useI18n } from "../i18n";
@@ -34,15 +37,89 @@ type NewChatViewProps = {
   contextUsage?: ContextUsageInfo;
   prompt: string;
   isRunning: boolean;
+  queuedMessages: QueuedMessages;
+  fileChanges: TaskFileChange[];
   onPromptChange: (value: string) => void;
   onProjectChange: (project: Project | null) => void;
   onChooseWorkspace: () => void;
+  onOpenTerminal: () => void;
   onModelChange: (provider: ProviderId, modelId: string) => void;
   onSubmit: () => void;
   onStop: () => void;
+  onQueue: (mode: "steer" | "followUp") => void;
+  onClearQueue: () => void;
+  onAcceptChanges: (changeIds?: string[]) => void;
+  onRevertChanges: (changeIds?: string[]) => void;
   onRetry: (turnId: string) => void;
+  onForkTurn: (entryId: string) => void;
   onAnswerQuestion: (turnId: string, callId: string, answer: string) => void;
 };
+
+const desktopCommands: CommandInfo[] = [
+  { name: "/new", description: "开始新对话", source: "desktop", sourceLabel: "Pi Desktop" },
+  { name: "/settings", description: "打开设置", source: "desktop", sourceLabel: "Pi Desktop" },
+  { name: "/plugins", description: "打开插件管理", source: "desktop", sourceLabel: "Pi Desktop" },
+  { name: "/reload", description: "重新加载 Skills、Prompts 与 Extensions", source: "desktop", sourceLabel: "Pi Desktop" },
+];
+
+function useCommandPalette(props: NewChatViewProps) {
+  const [commands, setCommands] = useState<CommandInfo[]>(desktopCommands);
+  const [selected, setSelected] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    void window.piDesktop?.resources?.inventory(props.project?.path).then((inventory) => {
+      if (active) setCommands([...desktopCommands, ...inventory.commands]);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [props.project?.path]);
+
+  const matches = useMemo(() => {
+    const value = props.prompt.trimStart();
+    if (!value.startsWith("/") || value.includes("\n")) return [];
+    const commandPrefix = value.split(/\s/, 1)[0].toLocaleLowerCase();
+    return commands.filter((command) => command.name.toLocaleLowerCase().includes(commandPrefix)
+      || command.description.toLocaleLowerCase().includes(commandPrefix.slice(1))).slice(0, 8);
+  }, [commands, props.prompt]);
+
+  useEffect(() => setSelected(0), [props.prompt]);
+
+  function select(command: CommandInfo) {
+    props.onPromptChange(`${command.name} `);
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
+    if (matches.length === 0) return false;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      setSelected((current) => (current + (event.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length);
+      return true;
+    }
+    if (event.key === "Tab" || (event.key === "Enter" && props.prompt.trim() !== matches[selected]?.name)) {
+      event.preventDefault();
+      select(matches[selected]);
+      return true;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      props.onPromptChange("");
+      return true;
+    }
+    return false;
+  }
+
+  return { matches, selected, select, onKeyDown };
+}
+
+function CommandPalette({ matches, selected, onSelect }: { matches: CommandInfo[]; selected: number; onSelect: (command: CommandInfo) => void }) {
+  const { t } = useI18n();
+  if (matches.length === 0) return null;
+  return <div className="command-palette" role="listbox" aria-label={t("可用命令")}>
+    {matches.map((command, index) => <button className={index === selected ? "is-selected" : ""} type="button" role="option" aria-selected={index === selected} key={`${command.sourceLabel}:${command.name}`} onMouseDown={(event) => event.preventDefault()} onClick={() => onSelect(command)}>
+      <code>{command.name}</code><span><strong>{t(command.description)}</strong><small>{command.source} · {command.sourceLabel}{command.argumentHint ? ` · ${command.argumentHint}` : ""}</small></span>
+    </button>)}
+  </div>;
+}
 
 function formatData(value: unknown): string {
   if (typeof value === "string") return value;
@@ -200,6 +277,7 @@ function SendControl({ isRunning, canSend, onStop }: { isRunning: boolean; canSe
 
 function InitialComposer(props: NewChatViewProps) {
   const { t } = useI18n();
+  const palette = useCommandPalette(props);
   return (
     <section className="new-chat-view" aria-label={t("新建对话")}>
       <div className="composer-stage">
@@ -218,6 +296,7 @@ function InitialComposer(props: NewChatViewProps) {
             value={props.prompt}
             onChange={(event) => props.onPromptChange(event.target.value)}
             onKeyDown={(event) => {
+              if (palette.onKeyDown(event)) return;
               if (!shouldSubmitOnEnter(event.nativeEvent)) return;
               event.preventDefault();
               if (props.prompt.trim() && !props.isRunning) props.onSubmit();
@@ -225,8 +304,8 @@ function InitialComposer(props: NewChatViewProps) {
             placeholder={t("描述你想分析、构建或修改的内容…")}
             aria-label={t("对话内容")}
           />
+          <CommandPalette matches={palette.matches} selected={palette.selected} onSelect={palette.select} />
           <div className="composer-toolbar">
-            <button className="composer-tool-button" type="button" aria-label={t("添加附件")}><Paperclip size={15} /></button>
             <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={props.isRunning} onChange={props.onModelChange} />
             <SendControl isRunning={props.isRunning} canSend={Boolean(props.prompt.trim())} onStop={props.onStop} />
           </div>
@@ -238,6 +317,7 @@ function InitialComposer(props: NewChatViewProps) {
             <strong>{props.project ? props.project.path : t("普通对话")}</strong>
             <small>{props.project ? t("Pi 工具将相对 {name} 运行", { name: props.project.name }) : t("未关联工作目录，Pi 使用隔离的空目录")}</small>
           </span>
+          <button className="terminal-launch-button" type="button" onClick={props.onOpenTerminal}><TerminalSquare size={14} />{t("终端")}</button>
         </div>
         <div className="context-hint-row">
           <p className="context-hint">{t("工作区内操作按权限模式执行；危险或越界行为仍会询问。")}</p>
@@ -429,9 +509,10 @@ function ActivityTimeline({
   );
 }
 
-function ConversationTurn({ turn, onRetry, onAnswerQuestion }: {
+function ConversationTurn({ turn, onRetry, onForkTurn, onAnswerQuestion }: {
   turn: ChatTurn;
   onRetry: (turnId: string) => void;
+  onForkTurn: NewChatViewProps["onForkTurn"];
   onAnswerQuestion: NewChatViewProps["onAnswerQuestion"];
 }) {
   const { t } = useI18n();
@@ -454,6 +535,9 @@ function ConversationTurn({ turn, onRetry, onAnswerQuestion }: {
             <button type="button" onClick={() => onRetry(turn.id)} disabled={turn.status === "running"}>
               <RotateCcw size={13} /><span>{t("重试")}</span>
             </button>
+            {turn.sessionEntryId && <button type="button" onClick={() => onForkTurn(turn.sessionEntryId!)} disabled={turn.status === "running"}>
+              <GitFork size={13} /><span>{t("从此处 Fork")}</span>
+            </button>}
           </div>
         </div>
       </section>
@@ -469,33 +553,63 @@ function ConversationTurn({ turn, onRetry, onAnswerQuestion }: {
   );
 }
 
+function FileChangesPanel({ changes, running, onAccept, onRevert }: {
+  changes: TaskFileChange[];
+  running: boolean;
+  onAccept: (changeIds?: string[]) => void;
+  onRevert: (changeIds?: string[]) => void;
+}) {
+  const { t } = useI18n();
+  const pending = changes.filter((change) => change.status === "pending");
+  if (changes.length === 0) return null;
+  return <Collapsible.Root className="file-changes-panel">
+    <header>
+      <Collapsible.Trigger className="file-changes-trigger"><FileDiff size={14} /><strong>{t("任务文件变更")}</strong><span>{changes.length}</span><ChevronDown size={13} /></Collapsible.Trigger>
+      {pending.length > 0 && <div><button type="button" onClick={() => onAccept(pending.map((change) => change.id))}><ShieldCheck size={12} />{t("全部接受")}</button><button type="button" disabled={running || pending.some((change) => !change.revertible)} onClick={() => onRevert(pending.map((change) => change.id))}><Undo2 size={12} />{t("全部回退")}</button></div>}
+    </header>
+    <Collapsible.Content className="file-changes-content">
+      {changes.map((change) => <details key={change.id} className={`file-change is-${change.status}`}>
+        <summary><code>{change.relativePath}</code><span>{t(change.kind === "created" ? "新建" : "修改")}</span><em>{t(change.status)}</em></summary>
+        <pre>{change.patch.split("\n").map((line, index) => <span className={line.startsWith("+") && !line.startsWith("+++") ? "is-added" : line.startsWith("-") && !line.startsWith("---") ? "is-removed" : ""} key={`${index}:${line}`}>{line || " "}</span>)}</pre>
+        {change.error && <p>{change.error}</p>}
+        {change.status === "pending" && <footer><button type="button" onClick={() => onAccept([change.id])}>{t("接受")}</button><button type="button" disabled={running || !change.revertible} onClick={() => onRevert([change.id])}>{t(change.revertible ? "回退" : "无法自动回退")}</button></footer>}
+      </details>)}
+    </Collapsible.Content>
+  </Collapsible.Root>;
+}
+
 function ActiveConversation(props: NewChatViewProps) {
   const { t } = useI18n();
+  const palette = useCommandPalette(props);
   return (
     <section className="active-conversation" aria-label={t("当前对话")}>
       <div className="conversation-scroll" aria-live="polite">
         <div className="conversation-turns">
-          {props.turns.map((turn) => <ConversationTurn key={turn.id} turn={turn} onRetry={props.onRetry} onAnswerQuestion={props.onAnswerQuestion} />)}
+          {props.turns.map((turn) => <ConversationTurn key={turn.id} turn={turn} onRetry={props.onRetry} onForkTurn={props.onForkTurn} onAnswerQuestion={props.onAnswerQuestion} />)}
         </div>
       </div>
       <footer className="conversation-dock">
-        <form className="compact-composer" onSubmit={(event) => { event.preventDefault(); props.onSubmit(); }}>
+        <FileChangesPanel changes={props.fileChanges} running={props.isRunning} onAccept={props.onAcceptChanges} onRevert={props.onRevertChanges} />
+        {(props.queuedMessages.steering.length > 0 || props.queuedMessages.followUp.length > 0) && <div className="queued-messages"><span>{t("已排队 {count} 条消息", { count: props.queuedMessages.steering.length + props.queuedMessages.followUp.length })}</span>{props.queuedMessages.steering.map((message) => <em key={`steer:${message}`}>{t("立即调整")} · {message}</em>)}{props.queuedMessages.followUp.map((message) => <em key={`follow:${message}`}>{t("稍后继续")} · {message}</em>)}<button type="button" onClick={props.onClearQueue}>{t("清空队列")}</button></div>}
+        <form className="compact-composer" onSubmit={(event) => { event.preventDefault(); props.isRunning ? props.onQueue("followUp") : props.onSubmit(); }}>
           <textarea
             value={props.prompt}
             onChange={(event) => props.onPromptChange(event.target.value)}
             onKeyDown={(event) => {
+              if (palette.onKeyDown(event)) return;
               if (!shouldSubmitOnEnter(event.nativeEvent)) return;
               event.preventDefault();
-              if (props.prompt.trim() && !props.isRunning) props.onSubmit();
+              if (props.prompt.trim()) props.isRunning ? props.onQueue("followUp") : props.onSubmit();
             }}
-            placeholder={t(props.isRunning ? "Agent 执行中，可先停止当前任务…" : "继续给 Pi 指令…")}
+            placeholder={t(props.isRunning ? "输入调整指令，选择立即介入或稍后继续…" : "继续给 Pi 指令…")}
             aria-label={t("继续对话")}
-            disabled={props.isRunning}
           />
+          <CommandPalette matches={palette.matches} selected={palette.selected} onSelect={palette.select} />
           <div className="compact-composer-toolbar">
-            <button className="composer-tool-button" type="button" aria-label={t("添加附件")}><Paperclip size={15} /></button>
             <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={props.isRunning} onChange={props.onModelChange} />
             <DirectoryMenu compact project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} />
+            <button className="composer-tool-button terminal-tool-button" type="button" onClick={props.onOpenTerminal} aria-label={t("打开终端")} title={t("打开终端")}><TerminalSquare size={14} /></button>
+            {props.isRunning && <><button className="queue-button" type="button" disabled={!props.prompt.trim()} onClick={() => props.onQueue("steer")}>{t("立即调整")}</button><button className="queue-button" type="submit" disabled={!props.prompt.trim()}>{t("稍后继续")}</button></>}
             <SendControl isRunning={props.isRunning} canSend={Boolean(props.prompt.trim())} onStop={props.onStop} />
           </div>
         </form>

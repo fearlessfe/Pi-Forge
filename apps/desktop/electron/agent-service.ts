@@ -3,7 +3,9 @@ import {
   createBashTool,
   DefaultResourceLoader,
   defineTool,
+  generateUnifiedPatch,
   ModelRuntime,
+  SettingsManager,
   SessionManager,
   type AgentSession,
   type AgentSessionEvent,
@@ -12,10 +14,10 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { InMemoryCredentialStore, type Api, type AssistantMessage, type CredentialStore, type Model, type ToolResultMessage } from "@earendil-works/pi-ai";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   AgentEvent,
   CapabilitySettings,
@@ -29,11 +31,15 @@ import type {
   ProviderCatalogEntry,
   QuestionOption,
   ResponseUsage,
+  ResourceSettings,
+  ResourceInventory,
+  WorkspaceTrustStatus,
   RuntimeTool,
   SaveModelSettings,
+  TaskFileChange,
 } from "../src/contracts.js";
 import { captureAgentSessionEvent } from "./agent-event-adapter.js";
-import { decideToolPermission, type PermissionGrant } from "./permission-policy.js";
+import { decideToolPermission, isInsideWorkspace, type PermissionGrant } from "./permission-policy.js";
 import { defaultPermissionSettings } from "./permission-store.js";
 import { SettingsStore } from "./settings-store.js";
 import { WorkspaceCommandSandbox } from "./workspace-command-sandbox.js";
@@ -45,6 +51,7 @@ import {
   type ProtocolModelMetadata,
 } from "./model-metadata-catalog.js";
 import { ModelMetadataStore } from "./model-metadata-store.js";
+import type { McpService } from "./mcp-service.js";
 
 type EventSink = (event: AgentEvent) => void;
 
@@ -52,10 +59,29 @@ type PendingQuestion = {
   resolve: (answer: string) => void;
 };
 
+type PendingFileMutation = {
+  cwd: string;
+  path: string;
+  existed: boolean;
+  before?: Buffer;
+  beforeHash?: string;
+};
+
+type ConversationMetadata = {
+  tags: string[];
+  archived: boolean;
+};
+
 type RuntimeConfig = ReturnType<SettingsStore["resolve"]>;
 
 type CapabilitySettingsReader = Pick<{ get(): CapabilitySettings }, "get">;
 type PermissionSettingsReader = Pick<{ get(): PermissionSettings }, "get">;
+type ResourceSettingsReader = Pick<{
+  getSettings(): ResourceSettings;
+  isProjectTrusted(cwd: string): boolean;
+  getTrustStatus(cwd: string): WorkspaceTrustStatus;
+}, "getSettings" | "isProjectTrusted" | "getTrustStatus">;
+type PluginSecurityReader = Pick<{ isEnabled(source: string, cwd?: string): boolean }, "isEnabled">;
 
 type DiscoveredModelsFile = {
   version: 1 | 2;
@@ -78,6 +104,7 @@ const officialMetadataSources: Record<string, string> = {
 };
 
 const builtinSubagentToolName = "pi_desktop_subagent";
+const maxDiffSnapshotBytes = 5 * 1024 * 1024;
 
 type CompatibleProviderDefinition = {
   name: string;
@@ -225,6 +252,11 @@ export class AgentService {
   private appliedSubagentTool?: string;
   private capabilityFallbackReason?: string;
   private sessionDisplayContextWindow = 0;
+  private readonly pendingFileMutations = new Map<string, PendingFileMutation>();
+  private readonly fileChanges = new Map<string, TaskFileChange>();
+  private readonly changeSnapshots = new Map<string, Buffer | undefined>();
+  private lastChangeRunId?: string;
+  private sessionCwd?: string;
 
   constructor(
     private readonly settings: Pick<SettingsStore, "resolve">,
@@ -246,6 +278,13 @@ export class AgentService {
     private readonly permissions: PermissionSettingsReader = { get: () => defaultPermissionSettings },
     private readonly commandSandbox: WorkspaceCommandSandbox = new WorkspaceCommandSandbox(),
     private readonly modelMetadata: ModelMetadataStore = new ModelMetadataStore(path.dirname(agentDir)),
+    private readonly resources: ResourceSettingsReader = {
+      getSettings: () => ({ workspaceContextEnabled: true, disabledSkills: [] }),
+      isProjectTrusted: () => false,
+      getTrustStatus: (cwd) => ({ path: cwd, trusted: false, hasProjectResources: false, resourcePaths: [] }),
+    },
+    private readonly mcp?: McpService,
+    private readonly pluginSecurity?: PluginSecurityReader,
   ) {}
 
   async getModelCatalog(allowNetwork = true): Promise<ProviderCatalogEntry[]> {
@@ -380,6 +419,8 @@ export class AgentService {
     this.running = true;
     this.eventSequence = 0;
     this.runPermissionGrants.clear();
+    this.lastChangeRunId = runId;
+    this.emit({ type: "changes.updated", runId, changes: [] });
     this.emit({ type: "run.started", runId });
     this.emitContextUsage(runId, session);
 
@@ -402,11 +443,34 @@ export class AgentService {
     return runId;
   }
 
+  async executeExtensionCommand(prompt: string, cwd?: string, conversationId?: string): Promise<boolean> {
+    if (this.running) throw new Error("Agent 正在执行，请先停止当前任务或等待完成。");
+    const normalized = prompt.trim();
+    if (!normalized.startsWith("/")) return false;
+    const commandName = normalized.slice(1).split(/\s/, 1)[0];
+    const resolvedCwd = this.resolveCwd(cwd);
+    const session = await this.ensureSession(resolvedCwd, this.settings.resolve(), conversationId);
+    const exists = session.resourceLoader.getExtensions().extensions.some((extension) => extension.commands.has(commandName));
+    if (!exists) return false;
+    this.running = true;
+    try {
+      await session.prompt(normalized);
+      return true;
+    } finally {
+      this.running = false;
+    }
+  }
+
   async listConversations(): Promise<ConversationHistoryItem[]> {
     const sessions = await SessionManager.listAll(this.sessionDir);
+    const idsByPath = new Map(sessions.map((session) => [path.resolve(session.path), session.id]));
     return sessions
       .sort((left, right) => right.modified.getTime() - left.modified.getTime())
-      .map((session) => this.historyItem(session));
+      .map((session) => this.historyItem(
+        session,
+        this.conversationMetadata(SessionManager.open(session.path, this.sessionDir, session.cwd || this.fallbackCwd)),
+        session.parentSessionPath ? idsByPath.get(path.resolve(session.parentSessionPath)) : undefined,
+      ));
   }
 
   async loadConversation(conversationId: string): Promise<ConversationHistoryDetail> {
@@ -494,7 +558,81 @@ export class AgentService {
         contextUsage = { tokens, contextWindow, percent: tokens === null ? null : (tokens / contextWindow) * 100 };
       }
     }
-    return { ...this.historyItem(info), turns, contextUsage };
+    const sessionsByPath = new Map(sessions.map((session) => [path.resolve(session.path), session.id]));
+    return {
+      ...this.historyItem(
+        info,
+        this.conversationMetadata(manager),
+        info.parentSessionPath ? sessionsByPath.get(path.resolve(info.parentSessionPath)) : undefined,
+      ),
+      turns,
+      contextUsage,
+    };
+  }
+
+  async forkConversation(conversationId: string, entryId?: string): Promise<ConversationHistoryItem> {
+    if (this.running) throw new Error("Agent 正在执行，请等待任务完成后再 Fork 会话。");
+    const { info, sessions } = await this.findConversation(conversationId);
+    const source = SessionManager.open(info.path, this.sessionDir, info.cwd || this.fallbackCwd);
+    const sourceMetadata = this.conversationMetadata(source);
+    let fork: SessionManager;
+    if (entryId) {
+      if (!source.getEntry(entryId)) throw new Error("选择的会话节点不存在，请重新打开会话后再试。");
+      const branch = source.getBranch();
+      const selectedIndex = branch.findIndex((entry) => entry.id === entryId);
+      let forkLeafId = entryId;
+      for (let index = selectedIndex + 1; index < branch.length; index += 1) {
+        const entry = branch[index];
+        if (entry.type === "message" && (entry.message as unknown as { role?: string }).role === "user") break;
+        if (entry.type !== "session_info" && !(entry.type === "custom" && entry.customType === "pi-desktop:conversation-metadata")) forkLeafId = entry.id;
+      }
+      const forkPath = source.createBranchedSession(forkLeafId);
+      if (!forkPath) throw new Error("无法为临时会话创建 Fork。");
+      fork = SessionManager.open(forkPath, this.sessionDir, info.cwd || this.fallbackCwd);
+    } else {
+      fork = SessionManager.forkFrom(info.path, info.cwd || this.fallbackCwd, this.sessionDir);
+    }
+    fork.appendSessionInfo(`Fork · ${info.name?.trim() || info.firstMessage.trim() || "未命名对话"}`.slice(0, 60));
+    fork.appendCustomEntry("pi-desktop:conversation-metadata", { tags: sourceMetadata.tags, archived: false });
+    const forkInfo = (await SessionManager.listAll(this.sessionDir)).find((session) => session.id === fork.getSessionId());
+    if (!forkInfo) throw new Error("Fork 已创建，但无法重新读取会话索引。");
+    const idsByPath = new Map([...sessions, forkInfo].map((session) => [path.resolve(session.path), session.id]));
+    return this.historyItem(forkInfo, this.conversationMetadata(fork), forkInfo.parentSessionPath ? idsByPath.get(path.resolve(forkInfo.parentSessionPath)) : conversationId);
+  }
+
+  async exportConversation(conversationId: string, format: "markdown" | "json"): Promise<{ filename: string; mimeType: "text/markdown" | "application/json"; content: string }> {
+    const detail = await this.loadConversation(conversationId);
+    const safeName = detail.title.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ").trim().slice(0, 80) || "conversation";
+    if (format === "json") {
+      return {
+        filename: `${safeName}.json`,
+        mimeType: "application/json",
+        content: JSON.stringify(detail, null, 2),
+      };
+    }
+    const lines = [
+      `# ${detail.title}`,
+      "",
+      `- Created: ${detail.createdAt}`,
+      `- Updated: ${detail.updatedAt}`,
+      `- Workspace: ${detail.cwd}`,
+      ...(detail.tags.length > 0 ? [`- Tags: ${detail.tags.join(", ")}`] : []),
+      "",
+    ];
+    for (const turn of detail.turns) {
+      lines.push("## User", "", turn.question, "", "## Pi", "", turn.answer || "_(No text response)_", "");
+    }
+    return { filename: `${safeName}.md`, mimeType: "text/markdown", content: lines.join("\n") };
+  }
+
+  async setConversationArchived(conversationId: string, archived: boolean): Promise<void> {
+    await this.updateConversationMetadata(conversationId, { archived });
+  }
+
+  async setConversationTags(conversationId: string, tags: string[]): Promise<void> {
+    const normalized = [...new Set(tags.map((tag) => tag.trim().replace(/\s+/g, " ")).filter(Boolean))];
+    if (normalized.length > 8 || normalized.some((tag) => tag.length > 24)) throw new Error("会话最多设置 8 个标签，每个标签不超过 24 个字符。");
+    await this.updateConversationMetadata(conversationId, { tags: normalized });
   }
 
   async renameConversation(conversationId: string, title: string): Promise<void> {
@@ -533,6 +671,86 @@ export class AgentService {
     }
   }
 
+  async queueMessage(prompt: string, mode: "steer" | "followUp"): Promise<{ steering: string[]; followUp: string[] }> {
+    if (!this.running || !this.session) throw new Error("当前没有正在运行的 Agent 任务。");
+    const normalized = prompt.trim();
+    if (!normalized) throw new Error("排队消息不能为空。");
+    if (mode === "steer") await this.session.steer(normalized);
+    else await this.session.followUp(normalized);
+    return this.currentQueue();
+  }
+
+  clearQueue(): { steering: string[]; followUp: string[] } {
+    if (!this.session) return { steering: [], followUp: [] };
+    this.session.clearQueue();
+    const queue = this.currentQueue();
+    if (this.activeRunId) this.emit({ type: "queue.updated", runId: this.activeRunId, queue });
+    return queue;
+  }
+
+  listChanges(runId = this.lastChangeRunId): TaskFileChange[] {
+    if (!runId) return [];
+    return [...this.fileChanges.values()].filter((change) => change.runId === runId).map((change) => ({ ...change }));
+  }
+
+  acceptChanges(changeIds?: string[]): TaskFileChange[] {
+    const selected = this.selectedChanges(changeIds);
+    const runs = new Set<string>();
+    for (const change of selected) {
+      if (change.status !== "pending" && change.status !== "conflict") continue;
+      change.status = "accepted";
+      change.error = undefined;
+      this.changeSnapshots.delete(change.id);
+      runs.add(change.runId);
+    }
+    this.emitChangedRuns(runs);
+    return this.listChanges(selected[0]?.runId);
+  }
+
+  revertChanges(changeIds?: string[]): TaskFileChange[] {
+    const selected = this.selectedChanges(changeIds).reverse();
+    const runs = new Set<string>();
+    for (const change of selected) {
+      if (change.status !== "pending") continue;
+      runs.add(change.runId);
+      if (!change.revertible) {
+        change.status = "conflict";
+        change.error = "该文件超过安全快照上限，无法自动回退。";
+        continue;
+      }
+      try {
+        const currentHash = fs.existsSync(change.path) && fs.statSync(change.path).isFile() ? this.hashFile(change.path) : undefined;
+        if (currentHash !== change.afterHash) {
+          change.status = "conflict";
+          change.error = "文件在 Agent 修改后又发生了变化，已停止回退以避免覆盖新内容。";
+          continue;
+        }
+        if (change.kind === "created") {
+          fs.unlinkSync(change.path);
+        } else {
+          const before = this.changeSnapshots.get(change.id);
+          if (!before) throw new Error("回退快照不可用。");
+          fs.writeFileSync(change.path, before);
+        }
+        change.status = "reverted";
+        change.error = undefined;
+        this.changeSnapshots.delete(change.id);
+      } catch (error) {
+        change.status = "conflict";
+        change.error = errorMessage(error);
+      }
+    }
+    this.emitChangedRuns(runs);
+    return this.listChanges(selected[0]?.runId);
+  }
+
+  private currentQueue(): { steering: string[]; followUp: string[] } {
+    return {
+      steering: [...(this.session?.getSteeringMessages() ?? [])],
+      followUp: [...(this.session?.getFollowUpMessages() ?? [])],
+    };
+  }
+
   isRunning(): boolean {
     return this.running;
   }
@@ -542,6 +760,86 @@ export class AgentService {
       ...this.permissions.get(),
       sandbox: this.commandSandbox.isAvailable() ? "available" : "unavailable",
       platform: process.platform,
+    };
+  }
+
+  async getResourceInventory(cwd?: string): Promise<ResourceInventory> {
+    const resolvedCwd = this.resolveCwd(cwd);
+    const resourceSettings = this.resources.getSettings();
+    const projectContextEnabled = resourceSettings.workspaceContextEnabled && this.resources.isProjectTrusted(resolvedCwd);
+    const loader = new DefaultResourceLoader({
+      cwd: resolvedCwd,
+      agentDir: this.agentDir,
+      settingsManager: SettingsManager.create(resolvedCwd, this.agentDir, { projectTrusted: projectContextEnabled }),
+      noContextFiles: !projectContextEnabled,
+      extensionsOverride: (base) => this.filterCapabilityExtensions(base, resolvedCwd),
+      skillsOverride: (base) => ({
+        ...base,
+        skills: base.skills.filter((skill) => this.isPluginSourceEnabled(skill.sourceInfo.source, resolvedCwd)),
+      }),
+      promptsOverride: (base) => ({
+        ...base,
+        prompts: base.prompts.filter((prompt) => this.isPluginSourceEnabled(prompt.sourceInfo.source, resolvedCwd)),
+      }),
+      themesOverride: (base) => ({
+        ...base,
+        themes: base.themes.filter((theme) => this.isPluginSourceEnabled(theme.sourceInfo?.source ?? "local", resolvedCwd)),
+      }),
+    });
+    await loader.reload();
+    const skillResult = loader.getSkills();
+    const commands: ResourceInventory["commands"] = [];
+    const commandNames = new Set<string>();
+    for (const extension of loader.getExtensions().extensions) {
+      for (const command of extension.commands.values()) {
+        if (commandNames.has(command.name)) continue;
+        commandNames.add(command.name);
+        commands.push({
+          name: `/${command.name}`,
+          description: command.description ?? "Extension command",
+          source: "extension",
+          sourceLabel: command.sourceInfo.source,
+        });
+      }
+    }
+    for (const prompt of loader.getPrompts().prompts) {
+      commands.push({
+        name: `/${prompt.name}`,
+        description: prompt.description,
+        source: "prompt",
+        sourceLabel: prompt.sourceInfo.source,
+        argumentHint: prompt.argumentHint,
+      });
+    }
+    for (const skill of skillResult.skills) {
+      if (resourceSettings.disabledSkills.includes(skill.name)) continue;
+      commands.push({
+        name: `/skill:${skill.name}`,
+        description: skill.description,
+        source: "skill",
+        sourceLabel: skill.sourceInfo.source,
+      });
+    }
+    return {
+      cwd: resolvedCwd,
+      settings: resourceSettings,
+      trust: this.resources.getTrustStatus(resolvedCwd),
+      skills: skillResult.skills.map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        filePath: skill.filePath,
+        scope: skill.sourceInfo.scope,
+        source: skill.sourceInfo.source,
+        sourceKind: skill.sourceInfo.origin === "package" ? "package" : "local",
+        enabled: !resourceSettings.disabledSkills.includes(skill.name),
+        modelInvocable: !skill.disableModelInvocation,
+      })),
+      diagnostics: [
+        ...skillResult.diagnostics,
+        ...loader.getPrompts().diagnostics,
+        ...loader.getExtensions().errors.map((error) => ({ type: "error" as const, message: error.error, path: error.path })),
+      ].map((diagnostic) => ({ type: diagnostic.type, message: diagnostic.message, path: diagnostic.path })),
+      commands: commands.sort((left, right) => left.name.localeCompare(right.name)),
     };
   }
 
@@ -711,7 +1009,7 @@ export class AgentService {
     fs.renameSync(temporaryPath, filePath);
   }
 
-  private historyItem(session: SessionInfo): ConversationHistoryItem {
+  private historyItem(session: SessionInfo, metadata: ConversationMetadata = { tags: [], archived: false }, parentConversationId?: string): ConversationHistoryItem {
     const isProject = Boolean(session.cwd) && path.resolve(session.cwd) !== path.resolve(this.fallbackCwd);
     const title = session.name?.trim() || session.firstMessage.trim().replace(/\s+/g, " ") || "未命名对话";
     return {
@@ -720,8 +1018,38 @@ export class AgentService {
       cwd: session.cwd || this.fallbackCwd,
       createdAt: session.created.toISOString(),
       updatedAt: session.modified.toISOString(),
+      tags: metadata.tags,
+      archived: metadata.archived,
+      searchText: session.allMessagesText.slice(0, 200_000),
+      parentConversationId,
       project: isProject ? { id: session.cwd, name: path.basename(session.cwd), path: session.cwd } : undefined,
     };
+  }
+
+  private conversationMetadata(manager: SessionManager): ConversationMetadata {
+    const metadata = manager.getEntries().filter((entry) => entry.type === "custom" && entry.customType === "pi-desktop:conversation-metadata").at(-1);
+    if (!metadata || metadata.type !== "custom" || !metadata.data || typeof metadata.data !== "object") return { tags: [], archived: false };
+    const data = metadata.data as Record<string, unknown>;
+    return {
+      tags: Array.isArray(data.tags) ? data.tags.filter((tag): tag is string => typeof tag === "string").slice(0, 8) : [],
+      archived: data.archived === true,
+    };
+  }
+
+  private async findConversation(conversationId: string): Promise<{ info: SessionInfo; sessions: SessionInfo[] }> {
+    const sessions = await SessionManager.listAll(this.sessionDir);
+    const info = sessions.find((session) => session.id === conversationId);
+    if (!info) throw new Error("找不到该会话，文件可能已被移动或删除。");
+    return { info, sessions };
+  }
+
+  private async updateConversationMetadata(conversationId: string, patch: Partial<ConversationMetadata>): Promise<void> {
+    if (this.running) throw new Error("Agent 正在执行，请等待任务完成后再修改会话。");
+    const { info } = await this.findConversation(conversationId);
+    const manager = this.session?.sessionManager.getSessionId() === conversationId
+      ? this.session.sessionManager
+      : SessionManager.open(info.path, this.sessionDir, info.cwd || this.fallbackCwd);
+    manager.appendCustomEntry("pi-desktop:conversation-metadata", { ...this.conversationMetadata(manager), ...patch });
   }
 
   private messageText(content: unknown): string {
@@ -750,9 +1078,13 @@ export class AgentService {
     this.disposeSession();
 
     const runtime = await this.createModelRuntime(config);
+    const resourceSettings = this.resources.getSettings();
+    const projectContextEnabled = resourceSettings.workspaceContextEnabled && this.resources.isProjectTrusted(cwd);
     const resourceLoader = new DefaultResourceLoader({
       cwd,
       agentDir: this.agentDir,
+      settingsManager: SettingsManager.create(cwd, this.agentDir, { projectTrusted: projectContextEnabled }),
+      noContextFiles: !projectContextEnabled,
       extensionFactories: [
         (pi) => {
           const sandboxedBash = createBashTool(cwd, { operations: this.commandSandbox.createOperations() });
@@ -794,11 +1126,26 @@ export class AgentService {
           });
         },
       ],
-      extensionsOverride: (base) => this.filterCapabilityExtensions(base),
+      extensionsOverride: (base) => this.filterCapabilityExtensions(base, cwd),
+      skillsOverride: (base) => ({
+        ...base,
+        skills: base.skills.filter((skill) => (
+          !resourceSettings.disabledSkills.includes(skill.name)
+          && this.isPluginSourceEnabled(skill.sourceInfo.source, cwd)
+        )),
+      }),
+      promptsOverride: (base) => ({
+        ...base,
+        prompts: base.prompts.filter((prompt) => this.isPluginSourceEnabled(prompt.sourceInfo.source, cwd)),
+      }),
+      themesOverride: (base) => ({
+        ...base,
+        themes: base.themes.filter((theme) => this.isPluginSourceEnabled(theme.sourceInfo?.source ?? "local", cwd)),
+      }),
     });
     await resourceLoader.reload();
 
-    const customTools = this.createCustomTools(cwd, runtime);
+    const customTools = await this.createCustomTools(cwd, runtime);
     const { session } = await createAgentSession({
       cwd,
       agentDir: this.agentDir,
@@ -814,14 +1161,15 @@ export class AgentService {
     this.unsubscribe = session.subscribe((event) => this.handleSessionEvent(event));
     this.session = session;
     this.sessionKey = key;
+    this.sessionCwd = cwd;
     this.sessionDisplayContextWindow = runtime.displayContextWindow;
     return session;
   }
 
-  private createCustomTools(
+  private async createCustomTools(
     cwd: string,
     runtime: Awaited<ReturnType<AgentService["createModelRuntime"]>>,
-  ): ToolDefinition[] {
+  ): Promise<ToolDefinition[]> {
     const askUser = defineTool({
       name: "ask_user",
       label: "Ask user",
@@ -851,6 +1199,8 @@ export class AgentService {
         const childLoader = new DefaultResourceLoader({
           cwd,
           agentDir: this.agentDir,
+          settingsManager: SettingsManager.create(cwd, this.agentDir, { projectTrusted: this.resources.isProjectTrusted(cwd) }),
+          noContextFiles: !this.resources.isProjectTrusted(cwd),
           extensionFactories: [(pi) => {
             pi.on("tool_call", (event) => {
               const input = event.input as Record<string, unknown>;
@@ -868,6 +1218,19 @@ export class AgentService {
               return undefined;
             });
           }],
+          extensionsOverride: (base) => this.filterCapabilityExtensions(base, cwd),
+          skillsOverride: (base) => ({
+            ...base,
+            skills: base.skills.filter((skill) => this.isPluginSourceEnabled(skill.sourceInfo.source, cwd)),
+          }),
+          promptsOverride: (base) => ({
+            ...base,
+            prompts: base.prompts.filter((prompt) => this.isPluginSourceEnabled(prompt.sourceInfo.source, cwd)),
+          }),
+          themesOverride: (base) => ({
+            ...base,
+            themes: base.themes.filter((theme) => this.isPluginSourceEnabled(theme.sourceInfo?.source ?? "local", cwd)),
+          }),
         });
         await childLoader.reload();
         const child = await createAgentSession({
@@ -911,7 +1274,26 @@ export class AgentService {
       },
     });
 
-    return [askUser, spawnSubagent];
+    const mcpTools = this.mcp ? await this.mcp.tools(cwd) : [];
+    const adaptedMcpTools = mcpTools.map((descriptor) => defineTool({
+      name: descriptor.name,
+      label: `MCP · ${descriptor.remoteName}`,
+      description: descriptor.description,
+      promptSnippet: `Call ${descriptor.remoteName} on its configured MCP Server`,
+      promptGuidelines: ["Use MCP tools only when their external capability is needed and send the minimum necessary data."],
+      parameters: descriptor.inputSchema as TSchema,
+      executionMode: "parallel",
+      execute: async (_toolCallId, params, signal) => {
+        if (!this.mcp) throw new Error("MCP 服务不可用。");
+        const result = await this.mcp.callTool(descriptor, params as Record<string, unknown>, signal);
+        return {
+          content: [{ type: "text", text: result.text }],
+          details: result.details,
+        };
+      },
+    }));
+
+    return [askUser, spawnSubagent, ...adaptedMcpTools];
   }
 
   private applyToolPolicy(session: AgentSession): void {
@@ -948,7 +1330,7 @@ export class AgentService {
     session.setActiveToolsByName([...activeTools]);
   }
 
-  private filterCapabilityExtensions(base: LoadExtensionsResult): LoadExtensionsResult {
+  private filterCapabilityExtensions(base: LoadExtensionsResult, cwd?: string): LoadExtensionsResult {
     const settings = this.capabilities.get();
     const activeSources = new Set<string>();
     if (settings.subagent.kind === "plugin") activeSources.add(settings.subagent.source);
@@ -963,8 +1345,15 @@ export class AgentService {
 
     return {
       ...base,
-      extensions: base.extensions.filter((extension) => !historicalSources.has(extension.sourceInfo.source)),
+      extensions: base.extensions.filter((extension) => (
+        !historicalSources.has(extension.sourceInfo.source)
+        && this.isPluginSourceEnabled(extension.sourceInfo.source, cwd)
+      )),
     };
+  }
+
+  private isPluginSourceEnabled(source: string, cwd?: string): boolean {
+    return !source.startsWith("npm:") || !this.pluginSecurity || this.pluginSecurity.isEnabled(source, cwd);
   }
 
   private async createModelRuntime(config: RuntimeConfig) {
@@ -1077,11 +1466,15 @@ export class AgentService {
       this.emitContextUsage(runId);
     } else if (event.type === "compaction_end") {
       this.emitContextUsage(runId);
+    } else if (event.type === "queue_update") {
+      this.emit({ type: "queue.updated", runId, queue: { steering: [...event.steering], followUp: [...event.followUp] } });
     } else if (event.type === "tool_execution_start") {
+      this.captureFileMutationStart(event.toolCallId, event.toolName, event.args);
       this.emit({ type: "tool.started", runId, callId: event.toolCallId, name: event.toolName, args: event.args });
     } else if (event.type === "tool_execution_update") {
       this.emit({ type: "tool.updated", runId, callId: event.toolCallId, name: event.toolName, output: resultText(event.partialResult) });
     } else if (event.type === "tool_execution_end") {
+      this.captureFileMutationEnd(runId, event.toolCallId, event.toolName, event.result, event.isError);
       this.emit({
         type: "tool.completed",
         runId,
@@ -1090,6 +1483,87 @@ export class AgentService {
         output: resultText(event.result),
         isError: event.isError,
       });
+    }
+  }
+
+  private captureFileMutationStart(callId: string, toolName: string, args: unknown): void {
+    if ((toolName !== "edit" && toolName !== "write") || !this.sessionCwd || !args || typeof args !== "object") return;
+    const candidate = (args as Record<string, unknown>).path;
+    if (typeof candidate !== "string" || !candidate || !isInsideWorkspace(this.sessionCwd, candidate)) return;
+    const absolutePath = path.resolve(this.sessionCwd, candidate);
+    const existed = fs.existsSync(absolutePath) && fs.statSync(absolutePath).isFile();
+    let before: Buffer | undefined;
+    let beforeHash: string | undefined;
+    if (existed) {
+      const size = fs.statSync(absolutePath).size;
+      if (size <= maxDiffSnapshotBytes) before = fs.readFileSync(absolutePath);
+      beforeHash = before ? this.hashBuffer(before) : this.hashFile(absolutePath);
+    }
+    this.pendingFileMutations.set(callId, { cwd: this.sessionCwd, path: absolutePath, existed, before, beforeHash });
+  }
+
+  private captureFileMutationEnd(runId: string, callId: string, toolName: string, result: unknown, isError: boolean): void {
+    const pending = this.pendingFileMutations.get(callId);
+    this.pendingFileMutations.delete(callId);
+    if (!pending || isError || (toolName !== "edit" && toolName !== "write") || !fs.existsSync(pending.path) || !fs.statSync(pending.path).isFile()) return;
+    const size = fs.statSync(pending.path).size;
+    const after = size <= maxDiffSnapshotBytes ? fs.readFileSync(pending.path) : undefined;
+    const afterHash = after ? this.hashBuffer(after) : this.hashFile(pending.path);
+    if (pending.beforeHash === afterHash) return;
+    const relativePath = path.relative(pending.cwd, pending.path) || path.basename(pending.path);
+    let patch = "";
+    if (after && (!pending.existed || pending.before) && !after.includes(0) && !pending.before?.includes(0)) {
+      patch = generateUnifiedPatch(relativePath, pending.before?.toString("utf8") ?? "", after.toString("utf8"));
+    } else if (result && typeof result === "object") {
+      const details = (result as { details?: { patch?: unknown } }).details;
+      if (typeof details?.patch === "string") patch = details.patch;
+    }
+    if (!patch) patch = `Binary or large file changed: ${relativePath}`;
+    const change: TaskFileChange = {
+      id: randomUUID(),
+      runId,
+      callId,
+      path: pending.path,
+      relativePath,
+      kind: pending.existed ? "modified" : "created",
+      patch,
+      beforeHash: pending.beforeHash,
+      afterHash,
+      status: "pending",
+      revertible: !pending.existed || Boolean(pending.before),
+    };
+    this.fileChanges.set(change.id, change);
+    this.changeSnapshots.set(change.id, pending.before);
+    this.lastChangeRunId = runId;
+    this.emit({ type: "changes.updated", runId, changes: this.listChanges(runId) });
+  }
+
+  private selectedChanges(changeIds?: string[]): TaskFileChange[] {
+    const ids = changeIds ? new Set(changeIds) : undefined;
+    return [...this.fileChanges.values()].filter((change) => !ids || ids.has(change.id));
+  }
+
+  private emitChangedRuns(runIds: ReadonlySet<string>): void {
+    for (const runId of runIds) this.emit({ type: "changes.updated", runId, changes: this.listChanges(runId) });
+  }
+
+  private hashBuffer(value: Buffer): string {
+    return createHash("sha256").update(value).digest("hex");
+  }
+
+  private hashFile(filePath: string): string {
+    const hash = createHash("sha256");
+    const descriptor = fs.openSync(filePath, "r");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    try {
+      let bytesRead = 0;
+      do {
+        bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+        if (bytesRead) hash.update(buffer.subarray(0, bytesRead));
+      } while (bytesRead);
+      return hash.digest("hex");
+    } finally {
+      fs.closeSync(descriptor);
     }
   }
 
@@ -1142,6 +1616,8 @@ export class AgentService {
     this.session?.dispose();
     this.session = undefined;
     this.sessionKey = undefined;
+    this.sessionCwd = undefined;
+    this.pendingFileMutations.clear();
     this.sessionDisplayContextWindow = 0;
     this.sandboxedBashActive = false;
     this.activeRunId = undefined;

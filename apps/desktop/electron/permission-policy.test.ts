@@ -69,4 +69,13 @@ describe("permission policy", () => {
       })).toEqual(expect.objectContaining({ action: "ask", kind: "dangerous-shell" }));
     }
   });
+
+  it("asks before MCP calls and supports a balanced per-server run grant", () => {
+    const cwd = temporaryDirectory("mcp");
+    const base = { toolName: "mcp__search_api__web_search", input: { query: "private context" }, cwd, sandboxAvailable: true };
+    const first = decideToolPermission({ ...base, mode: "balanced", runGrants: new Set() });
+    expect(first).toMatchObject({ action: "ask", allowForRun: "mcp:search_api" });
+    expect(decideToolPermission({ ...base, mode: "balanced", runGrants: new Set(["mcp:search_api"]) })).toMatchObject({ action: "allow" });
+    expect(decideToolPermission({ ...base, mode: "strict", runGrants: new Set(["mcp:search_api"]) })).toMatchObject({ action: "ask", allowForRun: undefined });
+  });
 });

@@ -24,6 +24,133 @@ export type SystemPromptSettings = {
   content: string;
 };
 
+export type ResourceSettings = {
+  workspaceContextEnabled: boolean;
+  disabledSkills: string[];
+};
+
+export type WorkspaceTrustStatus = {
+  path: string;
+  trusted: boolean;
+  hasProjectResources: boolean;
+  resourcePaths: string[];
+};
+
+export type ResourceDiagnosticInfo = {
+  type: "warning" | "error" | "collision";
+  message: string;
+  path?: string;
+};
+
+export type SkillResourceInfo = {
+  name: string;
+  description: string;
+  filePath: string;
+  scope: "user" | "project" | "temporary";
+  source: string;
+  sourceKind: "package" | "local";
+  enabled: boolean;
+  modelInvocable: boolean;
+};
+
+export type CommandInfo = {
+  name: string;
+  description: string;
+  source: "extension" | "prompt" | "skill" | "desktop";
+  sourceLabel: string;
+  argumentHint?: string;
+};
+
+export type ResourceInventory = {
+  cwd: string;
+  settings: ResourceSettings;
+  trust: WorkspaceTrustStatus;
+  skills: SkillResourceInfo[];
+  diagnostics: ResourceDiagnosticInfo[];
+  commands: CommandInfo[];
+};
+
+export type McpServerScope = "user" | "project";
+
+export type McpStdioTransport = {
+  type: "stdio";
+  command: string;
+  args: string[];
+  cwd?: string;
+  environment: Record<string, string>;
+};
+
+export type McpHttpTransport = {
+  type: "streamable-http";
+  url: string;
+  headers: Record<string, string>;
+};
+
+export type McpServerConfig = {
+  key: string;
+  id: string;
+  name: string;
+  scope: McpServerScope;
+  enabled: boolean;
+  timeoutMs: number;
+  transport: McpStdioTransport | McpHttpTransport;
+  hasCredentials: boolean;
+  projectPath?: string;
+};
+
+export type SaveMcpServerInput = Omit<McpServerConfig, "key" | "hasCredentials" | "projectPath"> & {
+  previousKey?: string;
+  projectPath?: string;
+  secretEnvironment?: Record<string, string>;
+  secretHeaders?: Record<string, string>;
+  clearCredentials?: boolean;
+};
+
+export type McpToolInfo = {
+  name: string;
+  remoteName: string;
+  description: string;
+};
+
+export type McpServerRuntime = {
+  key: string;
+  state: "disabled" | "disconnected" | "connecting" | "connected" | "error";
+  serverName?: string;
+  serverVersion?: string;
+  error?: string;
+  tools: McpToolInfo[];
+  updatedAt: string;
+};
+
+export type McpLogEntry = {
+  id: string;
+  serverKey: string;
+  timestamp: string;
+  level: "info" | "error";
+  message: string;
+};
+
+export type McpOverview = {
+  servers: McpServerConfig[];
+  runtimes: McpServerRuntime[];
+  logs: McpLogEntry[];
+};
+
+export type TerminalSessionInfo = {
+  id: string;
+  cwd: string;
+  shell: string;
+  title: string;
+  status: "running" | "exited";
+  cols: number;
+  rows: number;
+  exitCode?: number;
+};
+
+export type TerminalEvent =
+  | { type: "terminal.data"; id: string; data: string }
+  | { type: "terminal.exit"; id: string; exitCode: number; signal?: number };
+
 export type ModelSettings = {
   provider: ProviderId;
   baseUrl: string;
@@ -110,6 +237,26 @@ export type ContextUsageInfo = {
   percent: number | null;
 };
 
+export type QueuedMessages = {
+  steering: string[];
+  followUp: string[];
+};
+
+export type TaskFileChange = {
+  id: string;
+  runId: string;
+  callId: string;
+  path: string;
+  relativePath: string;
+  kind: "created" | "modified";
+  patch: string;
+  beforeHash?: string;
+  afterHash: string;
+  status: "pending" | "accepted" | "reverted" | "conflict";
+  revertible: boolean;
+  error?: string;
+};
+
 export type ResponseUsage = {
   provider: string;
   model: string;
@@ -172,6 +319,8 @@ export type AgentEvent =
   | { type: "question.requested"; runId: string; callId: string; question: string; options: QuestionOption[] }
   | { type: "response.usage"; runId: string; usage: ResponseUsage }
   | { type: "context.updated"; runId: string; usage: ContextUsageInfo }
+  | { type: "queue.updated"; runId: string; queue: QueuedMessages }
+  | { type: "changes.updated"; runId: string; changes: TaskFileChange[] }
   | { type: "agent.event"; runId: string; event: AgentTraceEvent }
   | { type: "run.completed"; runId: string }
   | { type: "run.stopped"; runId: string }
@@ -189,6 +338,10 @@ export type ConversationHistoryItem = {
   cwd: string;
   createdAt: string;
   updatedAt: string;
+  tags: string[];
+  archived: boolean;
+  searchText: string;
+  parentConversationId?: string;
   project?: { id: string; name: string; path: string };
 };
 
@@ -205,7 +358,15 @@ export type ConversationHistoryDetail = ConversationHistoryItem & {
   contextUsage?: ContextUsageInfo;
 };
 
+export type ConversationExport = {
+  filename: string;
+  mimeType: "text/markdown" | "application/json";
+  content: string;
+};
+
 export type PluginResourceType = "extensions" | "skills" | "prompts" | "themes";
+export type PluginRiskTier = "low" | "medium" | "high" | "blocked";
+export type PluginManifest = Partial<Record<PluginResourceType, string[]>>;
 
 export type PluginPackage = {
   name: string;
@@ -222,6 +383,11 @@ export type PluginPackage = {
   score?: number;
   insecure: boolean;
   resources: PluginResourceType[];
+  manifest: PluginManifest;
+  integrity?: string;
+  shasum?: string;
+  provenance: "npm-registry";
+  riskTier: PluginRiskTier;
   compatibility: "desktop" | "review" | "unknown";
 };
 
@@ -236,6 +402,15 @@ export type InstalledPlugin = {
   name: string;
   version?: string;
   installed: boolean;
+  enabled: boolean;
+  projectEnabled?: boolean;
+  publisher?: string;
+  integrity?: string;
+  provenance?: "npm-registry" | "legacy";
+  riskTier: PluginRiskTier;
+  resources: PluginResourceType[];
+  installedAt?: string;
+  verification: "verified" | "legacy" | "missing" | "tampered";
 };
 
 export type PluginProgressEvent = {
@@ -318,15 +493,41 @@ export type PiDesktopApi = {
     onEvent(listener: (event: AuthEvent) => void): () => void;
   };
   workspace: {
-    choose(): Promise<{ name: string; path: string } | null>;
+    choose(): Promise<({ name: string; path: string } & WorkspaceTrustStatus) | null>;
+    trustStatus(path: string): Promise<WorkspaceTrustStatus>;
+    setTrusted(path: string, trusted: boolean): Promise<WorkspaceTrustStatus>;
+  };
+  resources: {
+    getSettings(): Promise<ResourceSettings>;
+    saveSettings(settings: ResourceSettings): Promise<ResourceSettings>;
+    inventory(cwd?: string): Promise<ResourceInventory>;
+    setSkillEnabled(name: string, enabled: boolean, cwd?: string): Promise<ResourceInventory>;
+    executeExtensionCommand(input: SendPromptInput): Promise<{ handled: boolean }>;
+  };
+  mcp: {
+    overview(cwd?: string): Promise<McpOverview>;
+    save(server: SaveMcpServerInput): Promise<McpOverview>;
+    remove(key: string, cwd?: string): Promise<McpOverview>;
+    connect(key: string, cwd?: string): Promise<McpOverview>;
+    disconnect(key: string, cwd?: string): Promise<McpOverview>;
+    reconnect(key: string, cwd?: string): Promise<McpOverview>;
+  };
+  terminal: {
+    create(cwd?: string, cols?: number, rows?: number): Promise<TerminalSessionInfo>;
+    list(): Promise<TerminalSessionInfo[]>;
+    write(id: string, data: string): Promise<void>;
+    resize(id: string, cols: number, rows: number): Promise<void>;
+    kill(id: string): Promise<void>;
+    onEvent(listener: (event: TerminalEvent) => void): () => void;
   };
   plugins: {
     search(query: string, offset?: number): Promise<PluginSearchResult>;
     details(name: string, version?: string): Promise<PluginPackage>;
-    list(): Promise<InstalledPlugin[]>;
+    list(cwd?: string): Promise<InstalledPlugin[]>;
     install(name: string, version: string): Promise<PluginMutationResult>;
     remove(source: string): Promise<PluginMutationResult>;
     reload(): Promise<{ reloaded: boolean; runtime: PluginRuntimeStatus }>;
+    setEnabled(source: string, enabled: boolean, cwd?: string, scope?: "user" | "project"): Promise<PluginMutationResult>;
     runtime(): Promise<PluginRuntimeStatus>;
     setSubagentProvider(provider: SubagentProvider): Promise<PluginRuntimeStatus>;
     setPackageCapability(slot: "memory" | "learning", provider: PackageCapabilityProvider): Promise<PluginRuntimeStatus>;
@@ -337,8 +538,17 @@ export type PiDesktopApi = {
     listConversations(): Promise<ConversationHistoryItem[]>;
     loadConversation(conversationId: string): Promise<ConversationHistoryDetail>;
     renameConversation(conversationId: string, title: string): Promise<void>;
+    forkConversation(conversationId: string, entryId?: string): Promise<ConversationHistoryItem>;
+    exportConversation(conversationId: string, format: "markdown" | "json"): Promise<ConversationExport>;
+    setConversationArchived(conversationId: string, archived: boolean): Promise<void>;
+    setConversationTags(conversationId: string, tags: string[]): Promise<void>;
     deleteConversation(conversationId: string): Promise<void>;
     abort(): Promise<void>;
+    queue(prompt: string, mode: "steer" | "followUp"): Promise<QueuedMessages>;
+    clearQueue(): Promise<QueuedMessages>;
+    listChanges(runId?: string): Promise<TaskFileChange[]>;
+    acceptChanges(changeIds?: string[]): Promise<TaskFileChange[]>;
+    revertChanges(changeIds?: string[]): Promise<TaskFileChange[]>;
     reset(): Promise<void>;
     answerQuestion(callId: string, answer: string): Promise<void>;
     onEvent(listener: (event: AgentEvent) => void): () => void;

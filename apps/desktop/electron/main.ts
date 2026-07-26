@@ -2,22 +2,29 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { AgentEvent, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, SaveModelSettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
+import type { AgentEvent, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ResourceSettings, SaveMcpServerInput, SaveModelSettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
 import { AgentService } from "./agent-service.js";
 import { AuthService } from "./auth-service.js";
 import { CapabilityStore } from "./capability-store.js";
 import { EncryptedCredentialStore } from "./credential-store.js";
 import { PluginService } from "./plugin-service.js";
+import { PluginSecurityStore } from "./plugin-security-store.js";
 import { PermissionStore } from "./permission-store.js";
 import { SettingsStore } from "./settings-store.js";
 import { ModelMetadataStore } from "./model-metadata-store.js";
 import { SystemPromptStore } from "./system-prompt-store.js";
+import { ResourceStore } from "./resource-store.js";
+import { McpStore } from "./mcp-store.js";
+import { McpService } from "./mcp-service.js";
+import { TerminalService } from "./terminal-service.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
 let agentService: AgentService | undefined;
 let authService: AuthService | undefined;
 let pluginService: PluginService | undefined;
+let mcpService: McpService | undefined;
+let terminalService: TerminalService | undefined;
 
 app.setName("Pi Desktop");
 app.setPath("userData", process.env.PI_DESKTOP_USER_DATA
@@ -112,6 +119,22 @@ function requireSystemPromptSettings(value: unknown): SystemPromptSettings {
   return value as SystemPromptSettings;
 }
 
+function requireResourceSettings(value: unknown): ResourceSettings {
+  if (!value || typeof value !== "object" || typeof (value as Record<string, unknown>).workspaceContextEnabled !== "boolean") {
+    throw new Error("资源设置格式无效。");
+  }
+  return value as ResourceSettings;
+}
+
+function requireMcpServerInput(value: unknown): SaveMcpServerInput {
+  if (!value || typeof value !== "object") throw new Error("MCP Server 配置格式无效。");
+  const input = value as Record<string, unknown>;
+  if (typeof input.id !== "string" || typeof input.name !== "string" || typeof input.enabled !== "boolean" || typeof input.timeoutMs !== "number" || !input.transport || typeof input.transport !== "object") {
+    throw new Error("MCP Server 配置字段无效。");
+  }
+  return value as SaveMcpServerInput;
+}
+
 function registerIpc(
   settings: SettingsStore,
   credentials: EncryptedCredentialStore,
@@ -122,6 +145,9 @@ function registerIpc(
   permissions: PermissionStore,
   systemPrompt: SystemPromptStore,
   modelMetadata: ModelMetadataStore,
+  resources: ResourceStore,
+  mcp: McpService,
+  terminal: TerminalService,
 ): void {
   ipcMain.handle("settings:get", () => settingsWithCredentials(settings, credentials));
   ipcMain.handle("settings:catalog", () => agent.getModelCatalog());
@@ -189,8 +215,72 @@ function registerIpc(
     });
     if (result.canceled || !result.filePaths[0]) return null;
     const selectedPath = result.filePaths[0];
-    return { name: path.basename(selectedPath), path: selectedPath };
+    return { name: path.basename(selectedPath), ...resources.getTrustStatus(selectedPath) };
   });
+  ipcMain.handle("workspace:trust-status", (_event, value: unknown) => resources.getTrustStatus(requireString(value, "工作区路径无效。")));
+  ipcMain.handle("workspace:set-trusted", (_event, value: unknown, trusted: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改项目信任状态。");
+    if (typeof trusted !== "boolean") throw new Error("项目信任状态无效。");
+    const status = resources.setProjectTrusted(requireString(value, "工作区路径无效。"), trusted);
+    agent.reset();
+    return status;
+  });
+  ipcMain.handle("resources:get-settings", () => resources.getSettings());
+  ipcMain.handle("resources:save-settings", (_event, value: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改资源设置。");
+    const saved = resources.saveSettings(requireResourceSettings(value));
+    agent.reset();
+    return saved;
+  });
+  ipcMain.handle("resources:inventory", (_event, cwd: unknown) => agent.getResourceInventory(cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
+  ipcMain.handle("resources:set-skill-enabled", async (_event, name: unknown, enabled: unknown, cwd: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改 Skill。");
+    const skillName = requireString(name, "Skill 名称无效。");
+    if (typeof enabled !== "boolean") throw new Error("Skill 状态无效。");
+    const current = resources.getSettings();
+    const disabledSkills = enabled
+      ? current.disabledSkills.filter((entry) => entry !== skillName)
+      : [...new Set([...current.disabledSkills, skillName])];
+    resources.saveSettings({ ...current, disabledSkills });
+    agent.reset();
+    return agent.getResourceInventory(cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。"));
+  });
+  ipcMain.handle("resources:execute-extension-command", async (_event, value: unknown) => {
+    if (!value || typeof value !== "object") throw new Error("命令格式无效。");
+    const input = value as SendPromptInput;
+    if (typeof input.prompt !== "string" || (input.cwd !== undefined && typeof input.cwd !== "string") || (input.conversationId !== undefined && typeof input.conversationId !== "string")) {
+      throw new Error("命令字段无效。");
+    }
+    return { handled: await agent.executeExtensionCommand(input.prompt, input.cwd, input.conversationId) };
+  });
+  ipcMain.handle("mcp:overview", (_event, cwd: unknown) => mcp.overview(cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
+  ipcMain.handle("mcp:save", (_event, value: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改 MCP 配置。");
+    const overview = mcp.save(requireMcpServerInput(value));
+    agent.reset();
+    return overview;
+  });
+  ipcMain.handle("mcp:remove", async (_event, key: unknown, cwd: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再删除 MCP Server。");
+    const overview = await mcp.remove(requireString(key, "MCP Server 无效。"), cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。"));
+    agent.reset();
+    return overview;
+  });
+  ipcMain.handle("mcp:connect", (_event, key: unknown, cwd: unknown) => mcp.connect(requireString(key, "MCP Server 无效。"), cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
+  ipcMain.handle("mcp:disconnect", (_event, key: unknown, cwd: unknown) => mcp.disconnect(requireString(key, "MCP Server 无效。"), cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
+  ipcMain.handle("mcp:reconnect", (_event, key: unknown, cwd: unknown) => mcp.reconnect(requireString(key, "MCP Server 无效。"), cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
+  ipcMain.handle("terminal:create", (_event, cwd: unknown, cols: unknown, rows: unknown) => terminal.create(
+    cwd === undefined ? undefined : requireString(cwd, "终端工作目录无效。"),
+    typeof cols === "number" ? cols : undefined,
+    typeof rows === "number" ? rows : undefined,
+  ));
+  ipcMain.handle("terminal:list", () => terminal.list());
+  ipcMain.handle("terminal:write", (_event, id: unknown, data: unknown) => terminal.write(requireString(id, "终端会话无效。"), typeof data === "string" ? data : ""));
+  ipcMain.handle("terminal:resize", (_event, id: unknown, cols: unknown, rows: unknown) => {
+    if (typeof cols !== "number" || typeof rows !== "number") throw new Error("终端尺寸无效。");
+    terminal.resize(requireString(id, "终端会话无效。"), cols, rows);
+  });
+  ipcMain.handle("terminal:kill", (_event, id: unknown) => terminal.kill(requireString(id, "终端会话无效。")));
   ipcMain.handle("plugins:search", (_event, query: unknown, offset: unknown) => {
     return plugins.search(typeof query === "string" ? query : "", typeof offset === "number" ? offset : 0);
   });
@@ -200,7 +290,7 @@ function registerIpc(
       version === undefined ? undefined : requireString(version, "插件版本无效。"),
     );
   });
-  ipcMain.handle("plugins:list", () => plugins.listInstalled());
+  ipcMain.handle("plugins:list", (_event, cwd: unknown) => plugins.listInstalled(cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
   ipcMain.handle("plugins:install", async (_event, name: unknown, version: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再安装插件。");
     const installed = await plugins.install(
@@ -230,6 +320,22 @@ function registerIpc(
   ipcMain.handle("plugins:reload", async () => {
     const reloaded = await agent.reloadPackages();
     return { reloaded, runtime: agent.getPluginRuntime() };
+  });
+  ipcMain.handle("plugins:set-enabled", async (_event, source: unknown, enabled: unknown, cwd: unknown, scope: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再切换插件状态。");
+    if (typeof enabled !== "boolean") throw new Error("插件启停状态无效。");
+    if (scope !== undefined && scope !== "user" && scope !== "project") throw new Error("插件启停范围无效。");
+    const packageSource = requireString(source, "插件安装来源无效。");
+    const projectPath = cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。");
+    const installed = plugins.setEnabled(packageSource, enabled, projectPath, scope === "project" ? "project" : "user");
+    if (!enabled) {
+      const currentCapabilities = capabilities.get();
+      if (currentCapabilities.subagent.kind === "plugin" && currentCapabilities.subagent.source === packageSource) capabilities.saveSubagent({ kind: "builtin" });
+      if (currentCapabilities.memory.kind === "plugin" && currentCapabilities.memory.source === packageSource) capabilities.savePackageCapability("memory", { kind: "none" });
+      if (currentCapabilities.learning.kind === "plugin" && currentCapabilities.learning.source === packageSource) capabilities.savePackageCapability("learning", { kind: "none" });
+    }
+    const reloaded = await agent.reloadPackages();
+    return { installed, reloaded, runtime: agent.getPluginRuntime() };
   });
   ipcMain.handle("plugins:runtime", () => agent.getPluginRuntime());
   ipcMain.handle("plugins:set-subagent-provider", (_event, value: unknown) => {
@@ -304,10 +410,41 @@ function registerIpc(
   ipcMain.handle("agent:rename-conversation", (_event, conversationId: unknown, title: unknown) => (
     agent.renameConversation(requireString(conversationId, "会话 ID 无效。"), requireString(title, "会话名称无效。"))
   ));
+  ipcMain.handle("agent:fork-conversation", (_event, conversationId: unknown, entryId: unknown) => agent.forkConversation(
+    requireString(conversationId, "会话 ID 无效。"),
+    entryId === undefined ? undefined : requireString(entryId, "会话节点无效。"),
+  ));
+  ipcMain.handle("agent:export-conversation", (_event, conversationId: unknown, format: unknown) => {
+    if (format !== "markdown" && format !== "json") throw new Error("会话导出格式无效。");
+    return agent.exportConversation(requireString(conversationId, "会话 ID 无效。"), format);
+  });
+  ipcMain.handle("agent:set-conversation-archived", (_event, conversationId: unknown, archived: unknown) => {
+    if (typeof archived !== "boolean") throw new Error("会话归档状态无效。");
+    return agent.setConversationArchived(requireString(conversationId, "会话 ID 无效。"), archived);
+  });
+  ipcMain.handle("agent:set-conversation-tags", (_event, conversationId: unknown, tags: unknown) => {
+    if (!Array.isArray(tags) || tags.some((tag) => typeof tag !== "string")) throw new Error("会话标签无效。");
+    return agent.setConversationTags(requireString(conversationId, "会话 ID 无效。"), tags as string[]);
+  });
   ipcMain.handle("agent:delete-conversation", (_event, conversationId: unknown) => (
     agent.deleteConversation(requireString(conversationId, "会话 ID 无效。"))
   ));
   ipcMain.handle("agent:abort", () => agent.abort());
+  ipcMain.handle("agent:queue", (_event, prompt: unknown, mode: unknown) => {
+    if (mode !== "steer" && mode !== "followUp") throw new Error("消息排队模式无效。");
+    return agent.queueMessage(requireString(prompt, "排队消息无效。"), mode);
+  });
+  ipcMain.handle("agent:clear-queue", () => agent.clearQueue());
+  ipcMain.handle("agent:list-changes", (_event, runId: unknown) => agent.listChanges(runId === undefined ? undefined : requireString(runId, "任务 ID 无效。")));
+  ipcMain.handle("agent:accept-changes", (_event, changeIds: unknown) => {
+    if (changeIds !== undefined && (!Array.isArray(changeIds) || changeIds.some((entry) => typeof entry !== "string"))) throw new Error("文件变更 ID 无效。");
+    return agent.acceptChanges(changeIds as string[] | undefined);
+  });
+  ipcMain.handle("agent:revert-changes", (_event, changeIds: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再回退文件变更。");
+    if (changeIds !== undefined && (!Array.isArray(changeIds) || changeIds.some((entry) => typeof entry !== "string"))) throw new Error("文件变更 ID 无效。");
+    return agent.revertChanges(changeIds as string[] | undefined);
+  });
   ipcMain.handle("agent:answer-question", (_event, callId: unknown, answer: unknown) => {
     if (typeof callId !== "string" || typeof answer !== "string") throw new Error("回答格式无效。");
     agent.answerQuestion(callId, answer);
@@ -324,6 +461,11 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   const permissions = new PermissionStore(userData);
   const credentials = new EncryptedCredentialStore(userData);
   const modelMetadata = new ModelMetadataStore(userData);
+  const resources = new ResourceStore(userData);
+  const pluginSecurity = new PluginSecurityStore(userData);
+  const mcpStore = new McpStore(userData);
+  mcpService = new McpService(mcpStore, resources);
+  terminalService = new TerminalService(chatSandbox, (event) => mainWindow?.webContents.send("terminal:event", event));
   const systemPrompt = new SystemPromptStore(path.join(userData, "pi-agent"));
   try {
     await migrateLegacyApiKeys(settings, credentials);
@@ -341,6 +483,9 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
     permissions,
     undefined,
     modelMetadata,
+    resources,
+    mcpService,
+    pluginSecurity,
   );
   authService = new AuthService(
     credentials,
@@ -352,8 +497,9 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
     path.join(userData, "pi-agent"),
     chatSandbox,
     (event) => mainWindow?.webContents.send("plugins:event", event),
+    { securityStore: pluginSecurity },
   );
-  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata);
+  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata, resources, mcpService, terminalService);
   mainWindow = createWindow();
 
   app.on("second-instance", () => {
@@ -375,4 +521,6 @@ app.on("before-quit", () => {
   authService?.dispose();
   pluginService?.dispose();
   agentService?.dispose();
+  void mcpService?.dispose();
+  terminalService?.dispose();
 });
