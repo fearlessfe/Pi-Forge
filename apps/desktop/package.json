@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Open-source desktop foundation for building custom enterprise agents.",
   "author": "Pi Forge contributors",
+  "desktopName": "pi-forge.desktop",
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "engines": {
@@ -57,6 +58,7 @@
   "build": {
     "appId": "dev.piforge.desktop",
     "productName": "Pi Forge",
+    "executableName": "pi-forge",
     "artifactName": "Pi-Forge-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "release"
@@ -87,6 +89,7 @@
     "linux": {
       "category": "Development",
       "icon": "build/icon.png",
+      "syncDesktopName": true,
       "target": [
         "AppImage",
         "deb"

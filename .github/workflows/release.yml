@@ -128,7 +128,29 @@ jobs:
       - name: Build installer
         working-directory: apps/desktop
         shell: bash
-        run: pnpm exec electron-builder ${{ matrix.builder_flag }} --publish never --config.extraMetadata.version="$APP_VERSION"
+        run: |
+          package_attempt=1
+          max_package_attempts=3
+
+          while true; do
+            if pnpm exec electron-builder ${{ matrix.builder_flag }} --publish never --config.extraMetadata.version="$APP_VERSION"; then
+              break
+            fi
+
+            if [[ "$RUNNER_OS" != "macOS" || "$package_attempt" -ge "$max_package_attempts" ]]; then
+              exit 1
+            fi
+
+            echo "::warning::macOS packaging attempt $package_attempt failed; detaching stale Pi Forge volumes before retrying."
+            for release_volume in "/Volumes/Pi Forge $APP_VERSION"*; do
+              if [[ -e "$release_volume" ]]; then
+                hdiutil detach -force "$release_volume" || true
+              fi
+            done
+
+            package_attempt=$((package_attempt + 1))
+            sleep 10
+          done
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
