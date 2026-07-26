@@ -2,6 +2,7 @@ import { CheckCircle2, Package, Sparkles, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { ConversationSidebar } from "./components/ConversationSidebar";
 import { NewChatView } from "./components/NewChatView";
+import { PluginCenterView } from "./components/PluginCenterView";
 import { SettingsView } from "./components/SettingsView";
 import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, SaveModelSettings, SystemPromptSettings, TaskFileChange, WorkspaceTrustStatus } from "./contracts";
 import { appendMessageDelta } from "./conversation-activity";
@@ -327,7 +328,11 @@ export function App() {
     }
   }
 
-  const title = useMemo(() => (view === "settings" ? t("设置") : project?.name ?? t("新建对话")), [project, t, view]);
+  const title = useMemo(() => {
+    if (view === "settings") return t("设置");
+    if (view === "plugins") return t("插件中心");
+    return project?.name ?? t("新建对话");
+  }, [project, t, view]);
   const isRunning = commandRunning || turns.some((turn) => turn.status === "running");
   const configuredModelProviders = useMemo(() => {
     const configured = new Set(modelSettings.configuredProviders);
@@ -491,7 +496,10 @@ export function App() {
   }
 
   async function openConversation(conversationId: string, nextProject?: Project) {
-    if (conversationId === selectedConversationId) return;
+    if (conversationId === selectedConversationId) {
+      setView("chat");
+      return;
+    }
     if (selectedConversationId) {
       setConversationContexts((current) => ({ ...current, [selectedConversationId]: contextUsage }));
     }
@@ -653,8 +661,7 @@ export function App() {
     }
     if (command === "/plugins") {
       setPrompt("");
-      setSettingsSection("plugins");
-      setView("settings");
+      setView("plugins");
       return;
     }
     if (command === "/reload") {
@@ -894,9 +901,10 @@ export function App() {
           <span className="window-shortcut" title={t("搜索对话或项目")}>{shortcutLabel("K")}</span>
         </header>
 
-        {view === "chat" ? (
+        {view !== "settings" ? (
           <div className={`chat-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
             <ConversationSidebar
+              activePrimary={view}
               collapsed={sidebarCollapsed}
               conversations={conversations}
               projects={projects}
@@ -915,38 +923,42 @@ export function App() {
               conversationActionsDisabled={isRunning}
               onAddProject={() => void chooseWorkspace()}
               onOpenSettings={() => { setSettingsSection("models"); setView("settings"); }}
-              onOpenPlugins={() => { setSettingsSection("plugins"); setView("settings"); }}
+              onOpenPlugins={() => setView("plugins")}
               onOpenPet={() => setNotice({ title: t("Pi 宠物"), message: t("陪伴模式将在后续版本接入。"), type: "info" })}
             />
-            <main className="chat-main">
-              <NewChatView
-                project={project}
-                turns={turns}
-                modelId={modelSettings.modelId}
-                modelProvider={modelSettings.provider}
-                modelProviders={configuredModelProviders}
-                contextUsage={displayedContextUsage}
-                prompt={prompt}
-                isRunning={isRunning}
-                queuedMessages={queuedMessages}
-                fileChanges={fileChanges}
-                onPromptChange={setPrompt}
-                onProjectChange={setProject}
-                onChooseWorkspace={() => void chooseWorkspace()}
-                onOpenTerminal={() => setTerminalOpen(true)}
-                onModelChange={(providerId, modelId) => void selectChatModel(providerId, modelId)}
-                onSubmit={submitPrompt}
-                onStop={() => void stopAgent()}
-                onQueue={(mode) => void queuePrompt(mode)}
-                onClearQueue={() => void clearQueuedPrompts()}
-                onAcceptChanges={(changeIds) => void acceptFileChanges(changeIds)}
-                onRevertChanges={(changeIds) => void revertFileChanges(changeIds)}
-                onRetry={retryTurn}
-                onForkTurn={(entryId) => selectedConversationId ? void forkConversation(selectedConversationId, project ?? undefined, entryId) : undefined}
-                onAnswerQuestion={(turnId, callId, answer) => void answerQuestion(turnId, callId, answer)}
-              />
-              {terminalOpen && <Suspense fallback={<div className="terminal-panel terminal-loading">{t("正在启动终端…")}</div>}><TerminalPanel cwd={project?.path} onClose={() => setTerminalOpen(false)} /></Suspense>}
-            </main>
+            {view === "chat" ? (
+              <main className="chat-main">
+                <NewChatView
+                  project={project}
+                  turns={turns}
+                  modelId={modelSettings.modelId}
+                  modelProvider={modelSettings.provider}
+                  modelProviders={configuredModelProviders}
+                  contextUsage={displayedContextUsage}
+                  prompt={prompt}
+                  isRunning={isRunning}
+                  queuedMessages={queuedMessages}
+                  fileChanges={fileChanges}
+                  onPromptChange={setPrompt}
+                  onProjectChange={setProject}
+                  onChooseWorkspace={() => void chooseWorkspace()}
+                  onOpenTerminal={() => setTerminalOpen(true)}
+                  onModelChange={(providerId, modelId) => void selectChatModel(providerId, modelId)}
+                  onSubmit={submitPrompt}
+                  onStop={() => void stopAgent()}
+                  onQueue={(mode) => void queuePrompt(mode)}
+                  onClearQueue={() => void clearQueuedPrompts()}
+                  onAcceptChanges={(changeIds) => void acceptFileChanges(changeIds)}
+                  onRevertChanges={(changeIds) => void revertFileChanges(changeIds)}
+                  onRetry={retryTurn}
+                  onForkTurn={(entryId) => selectedConversationId ? void forkConversation(selectedConversationId, project ?? undefined, entryId) : undefined}
+                  onAnswerQuestion={(turnId, callId, answer) => void answerQuestion(turnId, callId, answer)}
+                />
+                {terminalOpen && <Suspense fallback={<div className="terminal-panel terminal-loading">{t("正在启动终端…")}</div>}><TerminalPanel cwd={project?.path} onClose={() => setTerminalOpen(false)} /></Suspense>}
+              </main>
+            ) : (
+              <PluginCenterView agentRunning={isRunning} workspaceCwd={workspaceTrust?.path} />
+            )}
           </div>
         ) : (
           <SettingsView

@@ -13,7 +13,6 @@ import {
   LockKeyhole,
   Cable,
   Palette,
-  Package,
   RefreshCw,
   RotateCcw,
   Search,
@@ -38,7 +37,6 @@ import type {
 import type { SettingsSection, Theme } from "../types";
 import type { AuthFlowState } from "../types";
 import { useI18n } from "../i18n";
-import { PluginsPanel } from "./PluginsPanel";
 import { SkillsPanel } from "./SkillsPanel";
 import { McpPanel } from "./McpPanel";
 
@@ -78,7 +76,7 @@ const sections: Array<{
   items: Array<{ id: SettingsSection; label: string; icon: typeof Sparkles }>;
 }> = [
   { group: "AI", items: [{ id: "models", label: "大模型", icon: Sparkles }, { id: "model-metadata", label: "模型元信息", icon: Database }, { id: "permissions", label: "权限", icon: LockKeyhole }] },
-  { group: "扩展", items: [{ id: "plugins", label: "插件", icon: Package }, { id: "skills", label: "Skills", icon: BookOpen }, { id: "mcp", label: "MCP", icon: Cable }] },
+  { group: "扩展", items: [{ id: "skills", label: "Skills", icon: BookOpen }, { id: "mcp", label: "MCP", icon: Cable }] },
   { group: "应用", items: [{ id: "general", label: "通用", icon: Settings2 }, { id: "appearance", label: "外观", icon: Palette }] },
 ];
 
@@ -219,6 +217,7 @@ function ModelsPanel({
   const [authBusy, setAuthBusy] = useState(false);
   const [authAnswer, setAuthAnswer] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [expandedProvider, setExpandedProvider] = useState<ProviderId | null>(settings.provider);
 
   useEffect(() => setForm(editableSettings(settings)), [settings]);
   const provider = useMemo(
@@ -370,17 +369,19 @@ function ModelsPanel({
             {configuredProviders.map((entry) => {
               const entryCredential = settings.credentials.find((item) => item.providerId === entry.id);
               const selected = form.provider === entry.id;
+              const expanded = expandedProvider === entry.id;
               return (
                 <article className={`configured-provider ${selected ? "is-selected" : ""}`} key={entry.id}>
-                  <button className="configured-provider-trigger" type="button" onClick={() => {
+                  <button className="configured-provider-trigger" type="button" aria-expanded={expanded} onClick={() => {
                     if (!selected) changeProvider(entry.id);
+                    setExpandedProvider((current) => current === entry.id ? null : entry.id);
                   }}>
                     <span className="provider-logo">{entry.name[0]}</span>
                     <span><strong>{entry.name}</strong><small>{t(entryCredential?.type === "oauth" ? "OAuth 已登录" : entryCredential?.type === "api_key" ? "API Key 已配置" : "兼容端点已配置")}</small></span>
                     <span className="configured-provider-count">{entry.models.length} {t("个模型")}</span>
-                    {selected ? <ChevronDown size={14} /> : <span className="configured-provider-chevron">›</span>}
+                    {expanded ? <ChevronDown size={14} /> : <span className="configured-provider-chevron">›</span>}
                   </button>
-                  {selected && (
+                  {expanded && (
                     <div className="configured-model-list">
                       <header><strong>{t("支持的模型")}</strong><small>{t("选择模型后点击页面右上角“保存设置”生效")}</small></header>
                       {entry.models.length === 0 ? (
@@ -845,7 +846,6 @@ export function SettingsView(props: SettingsViewProps) {
       <main className="settings-content">
         {props.activeSection === "models" && <ModelsPanel settings={props.settings} providerCatalog={props.providerCatalog} authFlow={props.authFlow} onSave={props.onSave} onDiscoverModels={props.onDiscoverModels} onTest={props.onTest} onLogin={props.onLogin} onAnswerAuthPrompt={props.onAnswerAuthPrompt} onCancelAuth={props.onCancelAuth} onLogout={props.onLogout} onDismissAuth={props.onDismissAuth} />}
         {props.activeSection === "model-metadata" && <ModelMetadataPanel settings={props.settings} providerCatalog={props.providerCatalog} onRefreshMetadata={props.onRefreshMetadata} onSaveMetadata={props.onSaveMetadata} onResetMetadata={props.onResetMetadata} />}
-        {props.activeSection === "plugins" && <PluginsPanel agentRunning={props.agentRunning} workspaceCwd={props.workspaceTrust?.path} />}
         {props.activeSection === "skills" && <SkillsPanel cwd={props.workspaceTrust?.path} agentRunning={props.agentRunning} />}
         {props.activeSection === "mcp" && <McpPanel cwd={props.workspaceTrust?.path} projectTrusted={Boolean(props.workspaceTrust?.trusted)} agentRunning={props.agentRunning} />}
         {props.activeSection === "permissions" && <PermissionsPanel runtime={props.permissionRuntime} agentRunning={props.agentRunning} onSave={props.onSavePermissions} />}

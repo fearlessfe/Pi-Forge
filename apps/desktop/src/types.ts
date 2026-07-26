@@ -2,9 +2,9 @@ import type { AuthPrompt, ConversationActivity, ProviderId, ResponseUsage } from
 
 export type Theme = "dark" | "light";
 
-export type AppView = "chat" | "settings";
+export type AppView = "chat" | "plugins" | "settings";
 
-export type SettingsSection = "models" | "model-metadata" | "plugins" | "skills" | "mcp" | "permissions" | "general" | "appearance";
+export type SettingsSection = "models" | "model-metadata" | "skills" | "mcp" | "permissions" | "general" | "appearance";
 
 export type Conversation = {
   id: string;

@@ -31,6 +31,7 @@ import type { Conversation, Project } from "../types";
 import { BrandMark } from "./BrandMark";
 
 type ConversationSidebarProps = {
+  activePrimary: "chat" | "plugins";
   collapsed: boolean;
   conversations: Conversation[];
   projects: Project[];
@@ -264,6 +265,7 @@ function ProjectGroup({
 }
 
 export function ConversationSidebar({
+  activePrimary,
   collapsed,
   conversations,
   projects,
@@ -348,14 +350,14 @@ export function ConversationSidebar({
       </header>
 
       <nav className="sidebar-primary-nav" aria-label={t("主要导航")}>
-        <button className="primary-nav-item is-active" type="button" onClick={onNewChat} title={t("新建对话")}>
+        <button className={`primary-nav-item ${activePrimary === "chat" ? "is-active" : ""}`} type="button" onClick={onNewChat} title={t("新建对话")} aria-current={activePrimary === "chat" ? "page" : undefined}>
           <Plus size={18} />
           <span>{t("新建对话")}</span>
           <kbd>{shortcutLabel("N")}</kbd>
         </button>
-        <button className="primary-nav-item" type="button" onClick={onOpenPlugins} title={t("插件")}>
+        <button className={`primary-nav-item ${activePrimary === "plugins" ? "is-active" : ""}`} type="button" onClick={onOpenPlugins} title={t("插件中心")} aria-current={activePrimary === "plugins" ? "page" : undefined}>
           <Package size={17} />
-          <span>{t("插件")}</span>
+          <span>{t("插件中心")}</span>
         </button>
       </nav>
 
@@ -447,9 +449,9 @@ export function ConversationSidebar({
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
             <button className="user-trigger" type="button" title={t("本地账户")}>
-              <span className="user-avatar">PZ</span>
+              <span className="user-avatar">PI</span>
               <span>
-                <strong>Pengzhen</strong>
+                <strong>{t("Pi 用户")}</strong>
                 <small>{t("所有数据保存在本机")}</small>
               </span>
               <MoreHorizontal size={17} />
@@ -457,7 +459,7 @@ export function ConversationSidebar({
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content className="dropdown-content user-menu" side="top" align="start" sideOffset={8}>
-              <div className="dropdown-account">Pengzhen · {t("本地账户")}</div>
+              <div className="dropdown-account">{t("Pi 用户")} · {t("本地账户")}</div>
               <DropdownMenu.Item className="dropdown-item user-menu-item" onSelect={onOpenPet}>
                 <span className="menu-item-icon"><Sparkles size={15} /></span>
                 <span><strong>{t("宠物")}</strong><small>{t("陪伴模式与个性设置")}</small></span>

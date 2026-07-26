@@ -342,7 +342,7 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
   return (
     <div className="settings-panel plugins-panel">
       <header className="settings-page-header plugins-header">
-        <div><h2>{t("插件")}</h2><p>{t("发现并管理 npm 上标记为 pi-package 的扩展、Skills、Prompts 与主题。")}</p></div>
+        <div><h2>{t("插件中心")}</h2><p>{t("发现并管理 npm 上标记为 pi-package 的扩展、Skills、Prompts 与主题。")}</p></div>
         <button className="secondary-button plugin-reload-button" type="button" disabled={Boolean(operation) || agentRunning} onClick={() => void reloadPlugins()}><RefreshCw size={13} />{t("重新加载")}</button>
       </header>
 
@@ -372,7 +372,7 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
               return (
                 <article className="plugin-card" key={`${plugin.name}@${plugin.version}`}>
                   <button className="plugin-card-details-trigger" type="button" disabled={Boolean(operation)} onClick={() => void openDetails(plugin)} aria-label={t("查看 {name} 的用途与使用方法", { name: plugin.name })}>
-                    <header><span className="plugin-icon"><Box size={18} /></span><span><strong title={plugin.name}>{plugin.name}</strong><small>v{plugin.version} · {plugin.publisher}</small></span><ChevronRight className="plugin-card-chevron" size={15} /></header>
+                    <header><span className="plugin-icon"><Box size={18} /></span><span><strong title={plugin.name}>{plugin.name}</strong><small>v{plugin.version} · {plugin.publisher}</small></span></header>
                     <p>{plugin.description}</p>
                     <div className="plugin-tags">
                       {plugin.resources.length > 0 ? plugin.resources.map((resource) => <span key={resource}>{t(resourceLabels[resource])}</span>) : <span>Pi Package</span>}
