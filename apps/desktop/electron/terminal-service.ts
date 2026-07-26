@@ -2,13 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import * as pty from "node-pty";
+import type { IPty, IPtyForkOptions, IWindowsPtyForkOptions } from "node-pty";
 import type { TerminalEvent, TerminalSessionInfo } from "../src/contracts.js";
 
 type TerminalSink = (event: TerminalEvent) => void;
 
-export type PseudoTerminal = Pick<pty.IPty, "write" | "resize" | "kill" | "onData" | "onExit">;
-export type PseudoTerminalFactory = (shell: string, args: string[], options: pty.IPtyForkOptions | pty.IWindowsPtyForkOptions) => PseudoTerminal;
+export type PseudoTerminal = Pick<IPty, "write" | "resize" | "kill" | "onData" | "onExit">;
+export type PseudoTerminalFactory = (shell: string, args: string[], options: IPtyForkOptions | IWindowsPtyForkOptions) => PseudoTerminal;
 
 type ManagedTerminal = {
   info: TerminalSessionInfo;
@@ -18,6 +18,11 @@ type ManagedTerminal = {
 };
 
 const require = createRequire(import.meta.url);
+
+const nodePtyFactory: PseudoTerminalFactory = (shell, args, options) => {
+  const pty = require("node-pty") as typeof import("node-pty");
+  return pty.spawn(shell, args, options);
+};
 
 function nodePtyRoot(): string {
   const entry = require.resolve("node-pty")
@@ -95,7 +100,7 @@ export class TerminalService {
     factory?: PseudoTerminalFactory,
   ) {
     this.usesNodePty = !factory;
-    this.factory = factory ?? ((shell, args, options) => pty.spawn(shell, args, options));
+    this.factory = factory ?? nodePtyFactory;
   }
 
   create(cwd?: string, columns?: number, rowCount?: number): TerminalSessionInfo {
