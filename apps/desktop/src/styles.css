@@ -200,9 +200,15 @@ textarea:focus-visible,
   color: var(--brand-ink);
   background: var(--brand);
   box-shadow: 0 0 24px rgb(123 241 168 / 13%);
-  font-size: 15px;
-  font-weight: 850;
-  line-height: 1;
+}
+
+.brand-mark > svg {
+  width: 18px;
+  height: 18px;
+}
+
+.brand-mark__node {
+  fill: var(--running);
 }
 
 .brand-mark--compact {
@@ -211,7 +217,11 @@ textarea:focus-visible,
   color: inherit;
   background: transparent;
   box-shadow: none;
-  font-size: 18px;
+}
+
+.brand-mark--compact > svg {
+  width: 20px;
+  height: 20px;
 }
 
 .icon-button {

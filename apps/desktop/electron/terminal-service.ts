@@ -74,7 +74,12 @@ function boundedDimension(value: number | undefined, fallback: number, maximum: 
 }
 
 function canonicalDirectory(value: string): string {
-  const resolved = fs.realpathSync(path.resolve(value));
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(path.resolve(value));
+  } catch {
+    throw new Error("终端工作目录无效。");
+  }
   if (!fs.statSync(resolved).isDirectory()) throw new Error("终端工作目录无效。");
   return resolved;
 }

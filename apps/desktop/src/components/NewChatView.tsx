@@ -591,7 +591,11 @@ function ActiveConversation(props: NewChatViewProps) {
       <footer className="conversation-dock">
         <FileChangesPanel changes={props.fileChanges} running={props.isRunning} onAccept={props.onAcceptChanges} onRevert={props.onRevertChanges} />
         {(props.queuedMessages.steering.length > 0 || props.queuedMessages.followUp.length > 0) && <div className="queued-messages"><span>{t("已排队 {count} 条消息", { count: props.queuedMessages.steering.length + props.queuedMessages.followUp.length })}</span>{props.queuedMessages.steering.map((message) => <em key={`steer:${message}`}>{t("立即调整")} · {message}</em>)}{props.queuedMessages.followUp.map((message) => <em key={`follow:${message}`}>{t("稍后继续")} · {message}</em>)}<button type="button" onClick={props.onClearQueue}>{t("清空队列")}</button></div>}
-        <form className="compact-composer" onSubmit={(event) => { event.preventDefault(); props.isRunning ? props.onQueue("followUp") : props.onSubmit(); }}>
+        <form className="compact-composer" onSubmit={(event) => {
+          event.preventDefault();
+          if (props.isRunning) props.onQueue("followUp");
+          else props.onSubmit();
+        }}>
           <textarea
             value={props.prompt}
             onChange={(event) => props.onPromptChange(event.target.value)}
@@ -599,7 +603,9 @@ function ActiveConversation(props: NewChatViewProps) {
               if (palette.onKeyDown(event)) return;
               if (!shouldSubmitOnEnter(event.nativeEvent)) return;
               event.preventDefault();
-              if (props.prompt.trim()) props.isRunning ? props.onQueue("followUp") : props.onSubmit();
+              if (!props.prompt.trim()) return;
+              if (props.isRunning) props.onQueue("followUp");
+              else props.onSubmit();
             }}
             placeholder={t(props.isRunning ? "输入调整指令，选择立即介入或稍后继续…" : "继续给 Pi 指令…")}
             aria-label={t("继续对话")}

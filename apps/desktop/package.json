@@ -2,6 +2,8 @@
   "name": "@pi-desktop/renderer",
   "private": true,
   "version": "0.1.0",
+  "description": "Open-source desktop foundation for building custom enterprise agents.",
+  "author": "Pi Forge contributors",
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "engines": {
@@ -11,6 +13,8 @@
     "postinstall": "node scripts/ensure-node-pty-helper.mjs",
     "dev": "tsc -p tsconfig.electron.json && concurrently -k -s first \"vite\" \"wait-on tcp:4173 && VITE_DEV_SERVER_URL=http://127.0.0.1:4173 electron dist-electron/electron/main.js\"",
     "build": "tsc -p tsconfig.electron.json && tsc -b && vite build",
+    "package": "pnpm build && electron-builder --publish never",
+    "package:dir": "pnpm build && electron-builder --dir",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.electron.json --noEmit --pretty false && tsc -p tsconfig.test.json --pretty false",
     "preview": "vite preview",
@@ -41,10 +45,54 @@
     "@vitejs/plugin-react": "latest",
     "concurrently": "^10.0.3",
     "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
     "tailwindcss": "latest",
     "typescript": "latest",
     "vite": "latest",
     "vitest": "^4.1.10",
     "wait-on": "^9.1.0"
+  },
+  "build": {
+    "appId": "dev.piforge.desktop",
+    "productName": "Pi Forge",
+    "artifactName": "Pi-Forge-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**/*",
+      "node_modules/@anthropic-ai/sandbox-runtime/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "category": "Development",
+      "icon": "build/icon.png",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

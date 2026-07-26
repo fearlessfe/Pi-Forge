@@ -26,7 +26,7 @@ let pluginService: PluginService | undefined;
 let mcpService: McpService | undefined;
 let terminalService: TerminalService | undefined;
 
-app.setName("Pi Desktop");
+app.setName("Pi Forge");
 app.setPath("userData", process.env.PI_DESKTOP_USER_DATA
   ? path.resolve(process.env.PI_DESKTOP_USER_DATA)
   : path.join(app.getPath("appData"), "Pi Desktop"));

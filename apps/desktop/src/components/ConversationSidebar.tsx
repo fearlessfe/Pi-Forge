@@ -337,7 +337,7 @@ export function ConversationSidebar({
     <aside className={`conversation-sidebar ${collapsed ? "is-collapsed" : ""}`}>
       <header className="sidebar-brand-row">
         <BrandMark />
-        <strong>Pi Desktop</strong>
+        <strong>Pi Forge</strong>
         <button
           className="icon-button sidebar-collapse"
           type="button"

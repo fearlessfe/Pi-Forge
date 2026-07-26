@@ -5,7 +5,13 @@
   "scripts": {
     "dev": "pnpm --filter @pi-desktop/renderer dev",
     "build": "pnpm --filter @pi-desktop/renderer build",
+    "lint": "oxlint . --deny-warnings --report-unused-disable-directives",
+    "package": "pnpm --filter @pi-desktop/renderer package",
+    "package:dir": "pnpm --filter @pi-desktop/renderer package:dir",
     "test": "pnpm --filter @pi-desktop/renderer test",
     "typecheck": "pnpm --filter @pi-desktop/renderer typecheck"
+  },
+  "devDependencies": {
+    "oxlint": "^1.75.0"
   }
 }

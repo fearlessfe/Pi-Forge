@@ -1,5 +1,9 @@
 # Pi Forge
 
+<p align="center">
+  <img src="./apps/desktop/build/icon.svg" width="112" alt="Pi Forge icon">
+</p>
+
 **English** | [简体中文](./README.zh-CN.md)
 
 > Build agents like software.
@@ -166,10 +170,27 @@ The renderer can read only whether credentials are configured and their type. It
 ## Development and verification
 
 ```bash
+pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm package
 ```
+
+`pnpm build` compiles the application, while `pnpm package` creates an installer for the current operating system in `apps/desktop/release`. Use `pnpm package:dir` when you only need an unpacked application for a quick local check.
+
+### Releases
+
+Pushing a SemVer tag runs the release workflow. It verifies lint, types, and unit tests, builds the application on native Windows, macOS, and Linux runners, creates a GitHub Release, and uploads the installers:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow produces a Windows x64 NSIS installer, separate macOS DMG and ZIP packages for Intel (x64) and Apple Silicon (arm64), and Ubuntu x64 AppImage and Debian packages. Tags such as `v0.2.0-beta.1` create a prerelease. The workflow can also be run manually for an existing tag from **Actions → Release → Run workflow**.
+
+Release packages are unsigned by default. Before distributing them broadly, configure platform signing and macOS notarization credentials as GitHub Actions secrets; otherwise Windows SmartScreen and macOS Gatekeeper may warn users.
 
 The desktop application lives in `apps/desktop`:
 
@@ -261,6 +282,7 @@ Pi Forge welcomes contributions around:
 Before submitting a change, run at least:
 
 ```bash
+pnpm lint
 pnpm typecheck
 pnpm test
 ```

@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">Pi Forge application icon</title>
+  <desc id="description">A modular pi symbol forged from three mint-green billets on a dark structured field.</desc>
+  <defs>
+    <linearGradient id="surface" x1="144" y1="112" x2="856" y2="920" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18212A"/>
+      <stop offset="0.52" stop-color="#0D131A"/>
+      <stop offset="1" stop-color="#070A0E"/>
+    </linearGradient>
+    <linearGradient id="forge" x1="288" y1="246" x2="710" y2="784" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A2F8BF"/>
+      <stop offset="0.48" stop-color="#70EFA2"/>
+      <stop offset="1" stop-color="#43D97D"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="226" y1="252" x2="806" y2="416" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D4FFE1" stop-opacity="0.76"/>
+      <stop offset="1" stop-color="#81F5AB" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="heat" cx="0" cy="0" r="1" gradientTransform="translate(760 282) rotate(118) scale(116)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#73A9FF" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#73A9FF" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="64" height="64" patternUnits="userSpaceOnUse">
+      <path d="M64 0H0V64" fill="none" stroke="#A8BDD0" stroke-opacity="0.045" stroke-width="2"/>
+    </pattern>
+    <clipPath id="tile">
+      <rect x="64" y="64" width="896" height="896" rx="220"/>
+    </clipPath>
+    <filter id="symbolShadow" x="144" y="184" width="736" height="688" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="28" stdDeviation="28" flood-color="#000000" flood-opacity="0.42"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="34" flood-color="#52DF8A" flood-opacity="0.08"/>
+    </filter>
+    <filter id="nodeGlow" x="718" y="240" width="108" height="108" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="0" stdDeviation="12" flood-color="#73A9FF" flood-opacity="0.58"/>
+    </filter>
+  </defs>
+
+  <g clip-path="url(#tile)">
+    <rect x="64" y="64" width="896" height="896" fill="url(#surface)"/>
+    <rect x="64" y="64" width="896" height="896" fill="url(#grid)"/>
+    <circle cx="760" cy="282" r="116" fill="url(#heat)"/>
+    <path d="M64 720L344 440L554 650L960 244V960H64V720Z" fill="#000" opacity="0.06"/>
+  </g>
+  <rect x="70" y="70" width="884" height="884" rx="214" fill="none" stroke="#33404D" stroke-width="12"/>
+  <path d="M218 820V846C218 868 236 886 258 886H284" fill="none" stroke="#7BF1A8" stroke-opacity="0.14" stroke-width="8" stroke-linecap="round"/>
+
+  <g filter="url(#symbolShadow)">
+    <path d="M264 246H760L814 300V382C814 402 798 418 778 418H246C226 418 210 402 210 382V300L264 246Z" fill="url(#forge)"/>
+    <path d="M302 390H438V722L390 778H338C318 778 302 762 302 742V390Z" fill="url(#forge)"/>
+    <path d="M586 390H722V742C722 762 706 778 686 778H634L586 722V390Z" fill="url(#forge)"/>
+    <path d="M266 258H754L786 290H238L266 258Z" fill="url(#edge)"/>
+    <path d="M310 424H430" stroke="#D0FFDF" stroke-opacity="0.34" stroke-width="8" stroke-linecap="round"/>
+    <path d="M594 424H714" stroke="#D0FFDF" stroke-opacity="0.34" stroke-width="8" stroke-linecap="round"/>
+  </g>
+
+  <g filter="url(#nodeGlow)">
+    <rect x="750" y="270" width="32" height="32" rx="10" fill="#73A9FF"/>
+    <path d="M758 278H774" stroke="#DDEBFF" stroke-opacity="0.78" stroke-width="5" stroke-linecap="round"/>
+  </g>
+</svg>

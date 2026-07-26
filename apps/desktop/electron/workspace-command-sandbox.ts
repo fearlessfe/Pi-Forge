@@ -1,5 +1,6 @@
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -19,6 +20,20 @@ const allowedDomains = [
   "pypi.org",
   "*.pypi.org",
 ];
+
+const require = createRequire(import.meta.url);
+
+function packagedSeccompConfig(): SandboxRuntimeConfig["seccomp"] {
+  if (process.platform !== "linux" || (process.arch !== "x64" && process.arch !== "arm64")) return undefined;
+  const packageRoot = path.dirname(require.resolve("@anthropic-ai/sandbox-runtime/package.json"))
+    .replaceAll("app.asar", "app.asar.unpacked")
+    .replaceAll("node_modules.asar", "node_modules.asar.unpacked");
+  const binaryRoot = path.join(packageRoot, "vendor", "seccomp", process.arch);
+  return {
+    bpfPath: path.join(binaryRoot, "unix-block.bpf"),
+    applyPath: path.join(binaryRoot, "apply-seccomp"),
+  };
+}
 
 function sandboxConfig(cwd: string): SandboxRuntimeConfig {
   return {
@@ -40,6 +55,7 @@ function sandboxConfig(cwd: string): SandboxRuntimeConfig {
       denyWrite: [".env", ".env.*", "*.pem", "*.key"],
       allowGitConfig: false,
     },
+    seccomp: packagedSeccompConfig(),
   };
 }
 

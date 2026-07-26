@@ -1,5 +1,9 @@
 # Pi Forge
 
+<p align="center">
+  <img src="./apps/desktop/build/icon.svg" width="112" alt="Pi Forge 图标">
+</p>
+
 [English](./README.md) | **简体中文**
 
 > Build agents like software.
@@ -166,10 +170,27 @@ Renderer 只能读取凭据是否已配置以及凭据类型，不能读取 API 
 ## 开发与验证
 
 ```bash
+pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm package
 ```
+
+`pnpm build` 只编译应用，`pnpm package` 会为当前操作系统生成安装包，产物位于 `apps/desktop/release`。如果只想快速检查未封装的应用目录，可以运行 `pnpm package:dir`。
+
+### 版本发布
+
+推送符合 SemVer 的 Tag 后，Release 工作流会先执行 lint、类型检查和单元测试，再分别使用原生 Windows、macOS 和 Linux Runner 构建应用，创建 GitHub Release 并上传安装包：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+工作流会生成 Windows x64 NSIS 安装程序、分别面向 Intel（x64）和 Apple Silicon（arm64）的 macOS DMG/ZIP，以及 Ubuntu x64 AppImage/Debian 安装包。`v0.2.0-beta.1` 这类 Tag 会创建预发布版本。也可以在 **Actions → Release → Run workflow** 中为已有 Tag 手动执行发布。
+
+默认生成的是未签名安装包。正式大范围分发前，应通过 GitHub Actions Secrets 配置各平台代码签名以及 macOS 公证凭据，否则 Windows SmartScreen 或 macOS Gatekeeper 可能向用户显示警告。
 
 桌面应用位于 `apps/desktop`：
 
@@ -261,6 +282,7 @@ Pi Forge 欢迎围绕以下方向的贡献：
 提交改动前请至少运行：
 
 ```bash
+pnpm lint
 pnpm typecheck
 pnpm test
 ```

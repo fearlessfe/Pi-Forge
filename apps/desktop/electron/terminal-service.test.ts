@@ -78,7 +78,7 @@ describe("TerminalService", () => {
       onExit: () => ({ dispose: vi.fn() }),
     } satisfies PseudoTerminal;
     const service = new TerminalService(workspace, () => {}, () => terminal);
-    expect(() => service.create(path.join(workspace, "missing"))).toThrow();
+    expect(() => service.create(path.join(workspace, "missing"))).toThrow("终端工作目录无效");
     const first = service.create();
     expect(() => service.write(first.id, "x".repeat(64 * 1024 + 1))).toThrow("过长");
     for (let index = 1; index < 8; index += 1) service.create();

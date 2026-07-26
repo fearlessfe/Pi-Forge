@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error"
+  },
+  "plugins": ["typescript", "oxc", "react", "vitest"],
+  "ignorePatterns": [
+    ".omx/**",
+    "**/coverage/**",
+    "**/dist/**",
+    "**/dist-electron/**"
+  ],
+  "rules": {
+    "react/react-in-jsx-scope": "off",
+    "react/exhaustive-deps": "off",
+    "vitest/require-mock-type-parameters": "off",
+    "no-control-regex": "off",
+    "no-shadow": "off",
+    "preserve-caught-error": "off"
+  }
+}
