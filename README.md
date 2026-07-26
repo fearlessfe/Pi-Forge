@@ -1,21 +1,169 @@
-# Pi Desktop
+# Pi Forge
 
-Pi Desktop 是一个基于 Pi Coding Agent 构建的桌面端 AI 编程助手。它计划在保留 Pi Agent 能力的基础上，提供更加直观的图形界面，用于管理工作区、与 Agent 对话、查看工具执行过程、审核代码变更以及操作集成终端。
+**English** | [简体中文](./README.zh-CN.md)
 
-> 当前项目已接入 Electron 与 Pi Coding Agent SDK，已经能够配置真实模型、建立流式多轮会话并运行 Agent 工具。本文档同时描述已实现能力、产品方向和后续实施范围。
+> Build agents like software.
 
-桌面应用位于 `apps/desktop`。Renderer 通过受限 preload API 与 Electron 主进程通信；API Key、Pi Session、文件系统和工具执行不会进入浏览器进程。
+Pi Forge is an open-source agent foundation built on [Pi Coding Agent](https://github.com/badlogic/pi-mono). It provides the essential building blocks for model access, sessions, context, tools, permissions, sandboxes, MCP, and observable events, so developers can compose, debug, and deliver custom agents for different teams and workflows just like conventional software.
 
-## 本地开发
+`apps/desktop` is the first Pi Forge reference implementation: an Electron desktop application for local development workflows. It is both a usable coding agent and a proving ground for the runtime boundaries and developer experience that Pi Forge aims to establish.
 
-需要 Node.js 22.19+ 与 pnpm 10+（Pi Coding Agent 0.81 的运行时要求）。
+> Pi Forge is evolving quickly. The current release provides a usable local, single-agent loop. A standalone runtime, multi-agent scheduling, remote execution environments, and an enterprise control plane remain on the roadmap. This README distinguishes shipped capabilities from design direction.
+
+## Why Pi Forge
+
+A forge produces many different tools; it does not prescribe a single final shape.
+
+Pi Forge is not trying to build one universal agent. It provides stable, composable primitives that developers can combine with their own models, data, tools, security policies, and deployment environments to forge agents that fit real work.
+
+## Philosophy
+
+### 1. An agent is software, not a chat window
+
+A production agent needs more than a model and a prompt. It needs explicit state, tool contracts, permission boundaries, error handling, observable events, tests, and versioning.
+
+Pi Forge focuses on the full agent lifecycle, not just producing one response.
+
+### 2. A session is not a model context
+
+A session is a recoverable record of work. Context is the information selected for one model call.
+
+History should not become unrecoverable because of compaction or context trimming. Our long-term direction is for the session to preserve durable facts while the harness independently decides how to query, compress, and organize context for each turn.
+
+### 3. Brains and hands should be decoupled
+
+- **Brain**: the model, harness, context strategy, and tool selection.
+- **Hands**: local sandboxes, MCP servers, browsers, remote hosts, and internal enterprise systems.
+
+A brain should not depend on one execution environment, and a hand should not be permanently bound to one agent. Stable tool and execution interfaces should allow both sides to evolve and be replaced independently.
+
+### 4. Stabilize interfaces, not harnesses
+
+Model capabilities change. Context techniques and agent loops that are necessary today may become obsolete quickly. Pi Forge should define clear contracts around sessions, events, tools, permissions, and execution environments while allowing harnesses to evolve continuously.
+
+### 5. Security comes from structure, not prompts
+
+Prompts are not security boundaries. Sensitive credentials, user data, and untrusted code must be separated through process isolation, system sandboxes, least privilege, approval policies, and credential proxies.
+
+Default behavior should be explainable, rejectable, and reversible. Dangerous capabilities require explicit authorization.
+
+### 6. Every step should be observable and controllable
+
+Users and developers need to know:
+
+- why an agent started or stopped;
+- which tools it called;
+- which resources it read or changed;
+- how many tokens and how much money it consumed;
+- where it failed and whether it can recover.
+
+Pi Forge treats event protocols and execution traces as runtime capabilities, not UI decoration.
+
+### 7. Local first, openly extensible
+
+Project files, sessions, and tool execution remain in environments controlled by the user by default. Models, MCP servers, skills, extensions, and future execution backends should connect through open interfaces that avoid locking developers into a single provider or cloud.
+
+## Current capabilities
+
+| Area | Current status |
+| --- | --- |
+| Models | Reads the Pi SDK provider catalog and supports built-in providers plus OpenAI-, Anthropic-, and Google-compatible endpoints |
+| Credentials | Supports API keys, OAuth, and provider credential chains; persisted credentials are encrypted with Electron `safeStorage` |
+| Sessions | Persists local multi-turn sessions with resume, fork, rename, tag, archive, and export support |
+| Context | Supports Pi session context construction, compaction, context usage display, and model usage records |
+| Agent events | Exhaustively captures the Pi `AgentSessionEvent` union and adapts it into stable desktop events |
+| Tools | Supports reading, searching, shell commands, editing, writing, user questions, and read-only subagents |
+| Task control | Supports aborting, steering, follow-up queues, and waiting for user answers |
+| Change review | Captures file mutations, generates diffs, and safely reverts files that have not changed again |
+| Permissions | Provides permission modes, workspace boundaries, sensitive-operation approval, and project-resource trust |
+| Sandbox | Uses Anthropic Sandbox Runtime on macOS/Linux to restrict command filesystem and network access |
+| MCP | Supports user-scoped and trusted project-scoped stdio and Streamable HTTP MCP servers |
+| Extensions | Loads Pi extensions, skills, prompts, themes, and packages with source and enablement management |
+| Desktop experience | Provides conversations, tool traces, diffs, history, settings, and an integrated terminal |
+
+The test suite drives real Pi sessions with a local OpenAI-compatible fake model, so it does not require a real API key. It covers model connectivity, streaming, thinking, tool calls, user questions, subagents, multi-turn context, abort behavior, credential isolation, and event sequences.
+
+## Current boundaries
+
+To avoid presenting the roadmap as shipped functionality, the current release has these explicit limitations:
+
+- the agent harness still runs inside the Electron main process rather than an independent worker or service;
+- one application instance currently runs only one primary agent task at a time;
+- the built-in subagent is read-only, in-process, and backed by an in-memory session;
+- historical sessions can be resumed, but unfinished tool calls cannot automatically continue after a process crash;
+- the sandbox is a local command boundary and cannot yet provision remote execution environments;
+- there is no cloud sync, team control plane, organization policy, or distributed scheduler yet;
+- the current reference application targets desktop development workflows and is not a full IDE.
+
+## Architecture
+
+Current reference implementation:
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│ Pi Forge Desktop · React                               │
+│ Conversation · Trace · Diff · Settings · Terminal      │
+└──────────────────────────┬──────────────────────────────┘
+                           │ Typed IPC
+┌──────────────────────────▼──────────────────────────────┐
+│ Electron Main                                           │
+│ Agent Service · Session · Policy · Resource Management  │
+├─────────────────────────────────────────────────────────┤
+│ Pi Coding Agent                                         │
+│ Model Runtime · Agent Session · Context · Tools          │
+├────────────────┬────────────────┬───────────────────────┤
+│ Local Sandbox  │ MCP Servers    │ OS Keychain / PTY     │
+└────────────────┴────────────────┴───────────────────────┘
+```
+
+Target boundaries:
+
+```text
+                       ┌──────────────────────┐
+                       │  Studio / API / SDK  │
+                       └──────────┬───────────┘
+                                  │
+┌──────────────────┐    ┌─────────▼─────────┐    ┌──────────────────┐
+│ Durable Session  │◀──▶│ Agent Runtime     │───▶│ Hand Adapters    │
+│ Events · Context │    │ Brain · Harness   │    │ Sandbox · MCP    │
+└──────────────────┘    └─────────┬─────────┘    │ Browser · VPC    │
+                                  │              └──────────────────┘
+                       ┌──────────▼───────────┐
+                       │ Policy · Secrets    │
+                       │ Audit · Observability│
+                       └──────────────────────┘
+```
+
+This direction does not require rewriting the desktop application all at once. Pi Forge will first extract stable interfaces from a working local loop, then progressively separate the runtime, sessions, and hands into independently deployable and replaceable components.
+
+## Quick start
+
+### Requirements
+
+- Node.js 22.19+
+- pnpm 10+
+- macOS or Linux for the complete command-sandbox experience; other platforms safely fall back to pre-execution approval
+
+### Start the development environment
 
 ```bash
 pnpm install
 pnpm dev
 ```
 
-该命令会先编译 Electron 主进程，然后启动 Vite Renderer 与 Pi Desktop 窗口。Renderer 固定监听 `http://127.0.0.1:4173`；如果端口已被占用，命令会安全退出，避免 Electron 误连到其他本地服务。
+The development command first compiles the Electron main process, then starts the Vite renderer and Pi Forge Desktop. The renderer binds to `http://127.0.0.1:4173`; startup exits safely when the port is occupied so Electron cannot connect to an unrelated local service.
+
+### Configure a model
+
+1. Open the account menu in the lower-left corner and navigate to **Settings → Models**.
+2. Select a provider and model, or configure a compatible endpoint.
+3. Enter an API key or use OAuth/system credentials supported by the provider.
+4. Select **Verify connection**.
+5. Return to the conversation, authorize a workspace through the directory menu, and start a task.
+
+The renderer can read only whether credentials are configured and their type. It cannot read plaintext API keys, access tokens, or refresh tokens.
+
+## Development and verification
 
 ```bash
 pnpm typecheck
@@ -23,254 +171,108 @@ pnpm test
 pnpm build
 ```
 
-## 配置并开始真实对话
-
-1. 打开左下角账户菜单，进入“设置 → 大模型”。
-2. 从 Pi SDK 的完整内置 Provider 目录中选择服务商与模型；也可选择 OpenAI Completions、OpenAI Responses、Anthropic Messages 或 Google Generative AI 兼容端点。
-3. 输入 API Key 并保存。Key 由 Electron `safeStorage` 使用操作系统凭据加密，Renderer 只能看到“是否已配置”。也支持 Pi Provider 官方定义的环境凭据与系统凭据链；本地兼容服务可不填 Key。
-4. 可点击“验证连接”发送一条最小真实模型请求。
-5. 返回对话；如需代码工具，先通过目录菜单授权一个工作目录，然后发送任务。
-
-Pi SDK 当前内置 38 个 Provider，设置页会直接读取 SDK 目录，不在产品代码中维护一份容易过期的硬编码副本。API Key、环境凭据以及 SDK 内置的 OAuth/订阅登录均可使用；浏览器授权、设备码、手动回调、取消和退出登录统一由 Electron 主进程编排。API Key、access token 与 refresh token 都通过操作系统 `safeStorage` 加密，Renderer 只能读取认证类型和状态。
-
-会话把 thinking 与连续工具调用收敛为一条可展开的过程摘要；失败、授权请求和最终回答保持突出。输入框下方会显示当前上下文占用与模型上限，每条回答会记录实际 Provider、响应模型、本轮输入/输出/缓存 Token，以及根据 Pi 模型目录单价计算的费用估值；这些信息会随 Session 一起恢复。底层仍会完整捕获每一个 Pi `AgentSessionEvent`，编译期完整性检查会在 SDK 新增或改名事件时直接失败，避免静默漏事件。默认“平衡”权限模式会自动允许规范化工作区路径内的 `edit` 与 `write`；`bash` 在 macOS/Linux 上通过 Anthropic Sandbox Runtime 限制文件系统和网络访问，递归删除、丢弃 Git 变更、提权以及工作区外访问仍会等待用户授权。模型还可以调用 `ask_user` 挂起并询问用户，或调用 `spawn_subagent` 创建只读的独立 Pi 子会话并把结果返回给主 Agent。停止按钮会中止当前 Pi Session 请求与等待中的问题。
-
-测试套件使用本地 OpenAI-compatible 假模型驱动真实 Pi Session，覆盖连接验证、thinking、工具调用、询问用户、子 Agent、多轮上下文、停止任务、密钥隔离和事件序列，不需要真实 API Key。
-
-## 项目目标
-
-Pi Desktop 希望把 Coding Agent 的完整工作流整合到一个桌面应用中：
-
-- 选择本地项目并创建独立会话
-- 通过对话提出开发、分析和调试任务
-- 实时查看模型输出、思考状态与工具调用过程
-- 查看并审核 Agent 产生的文件修改和代码 Diff
-- 在应用内观察和操作终端任务
-- 停止、重试、恢复和管理历史会话
-- 配置模型提供商、模型及 Agent 权限
-
-项目重点不是简单地为命令行套一层窗口，而是为 Agent 的事件流、工具调用、权限审批和代码变更设计原生桌面交互。
-
-## 产品原则
-
-- **过程透明**：用户可以清楚看到 Agent 正在做什么、调用了什么工具以及修改了哪些文件。
-- **用户可控**：危险操作、敏感资源访问和越界行为必须经过明确授权。
-- **会话可恢复**：应用重启后仍能继续查看和恢复工作上下文。
-- **本地优先**：项目文件、终端和会话数据默认在本机处理与存储。
-- **引擎解耦**：通过适配层接入 Pi，避免 UI 直接依赖 Pi 的内部实现细节。
-- **渐进增强**：先完成稳定的单工作区 Agent 闭环，再扩展多任务、插件和远程能力。
-
-## 总体架构
+The desktop application lives in `apps/desktop`:
 
 ```text
-┌─────────────────────────────────────────────────────┐
-│ Electron Renderer                                   │
-│ React UI · Conversation · Tool Calls · Diff · Shell │
-└──────────────────────────┬──────────────────────────┘
-                           │ Typed IPC
-┌──────────────────────────▼──────────────────────────┐
-│ Electron Main Process                               │
-│ Window · Lifecycle · Security · Native Integration  │
-├─────────────────────────────────────────────────────┤
-│ Application Services                                │
-│ Workspace · Session · Approval · Settings · Storage │
-├─────────────────────────────────────────────────────┤
-│ Pi Adapter                                          │
-│ Agent Session · Event Mapping · Tools · Cancellation│
-└───────────────┬───────────────────┬─────────────────┘
-                │                   │
-        ┌───────▼────────┐  ┌──────▼───────────────┐
-        │ Pi Coding Agent│  │ Local System         │
-        │ Model + Agent  │  │ Files · PTY · Keychain│
-        └────────────────┘  └──────────────────────┘
-```
-
-### 进程边界
-
-Pi Desktop 将遵循 Electron 的进程隔离模型：
-
-- **Renderer 进程**只负责界面渲染和用户交互，不直接访问 Node.js、文件系统、API Key 或 Shell。
-- **Preload 层**通过白名单暴露类型安全、范围有限的 IPC API。
-- **Main 进程**负责窗口生命周期、系统集成、密钥访问及应用服务调度。
-- **Agent 执行层**承载 Pi Session 和工具执行；随着任务复杂度提升，可迁移到独立 Worker 或子进程，减少 Agent 任务对桌面主进程的影响。
-
-## 技术选型
-
-### 桌面运行时：Electron
-
-选择 Electron 作为首个版本的桌面运行时：
-
-- Pi 与 Electron 都处于 Node.js/TypeScript 生态，集成路径最短。
-- Node.js 可以自然承载 Agent、文件系统、子进程和终端能力。
-- Electron 具备成熟的跨平台打包、自动更新和系统集成方案。
-- Renderer 与主进程可以共享 TypeScript 类型定义，便于维护 IPC 契约。
-
-Tauri 的安装体积和资源占用更有优势，但接入 Pi 通常还需要额外维护 Node.js sidecar。项目早期优先降低集成复杂度，后续可以根据性能与分发需求重新评估。
-
-### 前端：React + TypeScript
-
-- **React**：适合构建对话流、工具调用卡片、Diff 面板等状态密集型界面。
-- **TypeScript**：统一 UI、IPC 和 Pi 适配层的数据模型，降低事件协议出错概率。
-- **Vite**：提供快速的本地开发和前端构建体验。
-
-### 状态与数据请求
-
-- **Zustand**：管理窗口内的交互状态、当前会话和流式事件，API 简洁且适合桌面应用。
-- **TanStack Query**：用于会话列表、设置、工作区等异步数据的读取、缓存与刷新。
-
-两者职责分离：短生命周期 UI 状态进入 Zustand，具有服务端式读写语义的数据通过 Query 管理。
-
-### 本地存储：SQLite
-
-SQLite 用于保存：
-
-- 工作区信息
-- 会话元数据
-- 消息及工具调用记录
-- 权限决策与应用设置
-
-数据库只保存结构化业务数据。大段终端输出或其他高容量内容可以按需转存为本地文件，并由数据库记录索引。
-
-### 系统密钥：操作系统 Keychain
-
-模型提供商的 API Key 不写入普通配置文件或数据库，统一通过操作系统的安全凭据存储能力管理。Renderer 只能获取“是否已配置”等脱敏状态，不能读取明文密钥。
-
-### 集成终端：xterm.js + PTY
-
-- **xterm.js** 负责 Renderer 中的终端显示与输入。
-- **PTY** 运行在受信任的后端进程中，负责启动和管理真实 Shell。
-
-终端会话和 Agent 工具调用需要分别标识，避免普通交互终端绕过 Agent 的权限策略。
-
-### 代码 Diff 与编辑体验
-
-首个版本优先提供只读 Diff 审核能力，候选实现包括 Monaco Editor 的 Diff Editor。完整代码编辑器不是 MVP 的必要条件；用户仍可从 Pi Desktop 打开系统中已安装的编辑器继续工作。
-
-### UI 与样式
-
-- **Tailwind CSS**：用于布局、主题和设计 Token。
-- **Radix UI / shadcn/ui**：用于对话框、菜单、提示、选择器等可访问性基础组件。
-- 图标库将在实现阶段统一选定，避免同时引入多套视觉风格。
-
-## Pi 集成策略
-
-Pi Desktop 优先通过 Pi 提供的程序化能力创建和控制 Agent Session，而不是解析终端 UI 的文本输出。
-
-应用内部将增加独立的 `PiAdapter`，负责：
-
-- 创建、恢复和结束 Agent Session
-- 发送用户消息并取消正在执行的任务
-- 将 Pi 事件转换为稳定的应用事件
-- 映射模型输出、工具调用、状态变化和错误
-- 注入工作区、权限策略和模型配置
-- 隔离 Pi 版本升级带来的 API 变化
-
-Renderer 只依赖应用自己的事件协议，例如：
-
-```ts
-type AgentEvent =
-  | { type: "message.delta"; sessionId: string; text: string }
-  | { type: "tool.started"; sessionId: string; callId: string; tool: string }
-  | { type: "tool.updated"; sessionId: string; callId: string; output: string }
-  | { type: "tool.completed"; sessionId: string; callId: string; success: boolean }
-  | { type: "approval.requested"; sessionId: string; requestId: string }
-  | { type: "session.completed"; sessionId: string };
-```
-
-以上仅用于说明事件边界，最终字段将根据 Pi 的实际 API 和 UI 需求确定。
-
-## MVP 范围
-
-第一阶段以打通一个可靠的单工作区开发闭环为目标。
-
-### 包含
-
-- 打开和记忆本地工作区
-- 创建、切换和恢复 Agent 会话
-- 发送消息并显示流式回复
-- 展示工具调用状态及输出
-- 停止正在运行的 Agent
-- 查看本次任务产生的文件 Diff
-- 对敏感工具调用进行允许或拒绝
-- 配置模型提供商与模型
-- 在系统 Keychain 中保存 API Key
-- 基础集成终端
-- 深色与浅色主题
-
-### 暂不包含
-
-- 完整 IDE 能力
-- 多 Agent 并行编排
-- 云端会话同步
-- 团队协作和账号体系
-- 移动端或 Web 端
-- 插件市场
-- 自动更新服务的生产部署
-
-## 安全设计
-
-Coding Agent 可以读取文件、执行命令并修改代码，因此安全边界属于核心功能，而不是后续补充项。
-
-- Electron 启用 `contextIsolation`，关闭 Renderer 的 Node.js 集成。
-- IPC 使用显式白名单并验证所有参数，不暴露通用命令执行接口。
-- Agent 默认限制在用户选定的工作区内访问文件。
-- 命令执行采用 OS 级沙箱（macOS Seatbelt / Linux Bubblewrap）；沙箱不可用时安全降级为执行前确认。
-- 工作区外访问、危险命令及其他敏感能力采用可配置的审批策略。
-- API Key 只在受信任的后端进程中使用，日志和错误信息必须脱敏。
-- 所有长时间运行的任务都需要支持取消、超时和异常恢复。
-- Diff 只用于辅助审核；不能把“显示了 Diff”等同于用户已授权写入。
-
-## 建议目录结构
-
-```text
-pi-desktop/
+pi-forge/
 ├── apps/
 │   └── desktop/
-│       ├── src/main/       # Electron 主进程
-│       ├── src/preload/    # 安全 IPC Bridge
-│       └── src/renderer/   # React 应用
-├── packages/
-│   ├── agent/              # Pi Adapter 与 Agent 服务
-│   ├── contracts/          # IPC、事件和领域类型
-│   ├── storage/            # SQLite 与数据访问
-│   └── ui/                 # 可复用 UI 组件
-├── docs/                   # 架构、协议与产品文档
-└── README.md
+│       ├── electron/       # Electron main process and application services
+│       ├── src/            # React renderer, components, and shared contracts
+│       └── scripts/        # Development and runtime support scripts
+├── docs/                   # Design assets and verification scripts
+├── package.json
+└── pnpm-workspace.yaml
 ```
 
-项目初期可以先保持较少的包数量；只有出现清晰的跨进程或复用边界后，再拆分独立 package。
+As the runtime boundaries stabilize, we plan to extract:
 
-## 实施路线
+```text
+packages/
+├── runtime/                # Agent lifecycle and harness
+├── session/                # Durable events and context queries
+├── hands/                  # Sandbox, MCP, and remote execution adapters
+├── policy/                 # Permissions, approvals, and organization policy
+├── contracts/              # Stable public protocols
+└── sdk/                    # Custom agent development APIs
+```
 
-### 阶段一：基础闭环
+## Security model
 
-- 初始化 Monorepo、Electron、React 和 TypeScript
-- 定义 IPC 与 Agent Event 协议
-- 接入 Pi 并完成流式对话
-- 展示工具调用并支持停止任务
+- the Electron renderer is isolated and cannot directly access Node.js, the filesystem, shell, or credentials;
+- preload exposes only allowlisted, validated, typed IPC methods;
+- API keys and OAuth tokens are encrypted with operating-system secure storage;
+- out-of-workspace access, dangerous commands, privilege escalation, and destructive Git operations require explicit approval;
+- balanced-mode shell commands use an OS-level sandbox on supported platforms to restrict filesystem and network access;
+- if the sandbox is unavailable, Pi Forge falls back to pre-execution approval instead of silently relaxing permissions;
+- project-level extensions, skills, and MCP configuration load only after the project is trusted;
+- logs and MCP errors redact known credential values;
+- file reverts verify the post-agent content hash to avoid overwriting later user edits.
 
-### 阶段二：开发工作流
+The long-term goal is to separate the agent runtime, execution environments, and credential broker so untrusted code is structurally unable to access raw credentials.
 
-- 工作区与历史会话持久化
-- 文件变更追踪和 Diff 审核
-- 权限审批流程
-- 集成终端
+## Roadmap
 
-### 阶段三：产品化
+### Phase 1: Reliable local agent loop
 
-- 模型与密钥管理
-- 崩溃恢复、日志与诊断
-- 应用打包、签名和自动更新
-- 性能、可访问性与跨平台验证
+- [x] Real models and streaming Pi sessions
+- [x] Local session persistence and history management
+- [x] Tool traces, permission approval, and task abort
+- [x] Command sandboxing, file diffs, and safe reverts
+- [x] MCP, skills, extensions, and read-only subagents
+- [x] Model usage, cost estimation, and context usage
 
-## 平台计划
+### Phase 2: Extract the Pi Forge Runtime
 
-开发阶段优先支持 macOS，架构上避免依赖单一平台能力，并为 Windows 和 Linux 保留适配层。正式声明跨平台支持前，需要分别验证 PTY、Keychain、Shell、文件权限、应用签名和自动更新链路。
+- [ ] Move agent execution out of Electron into an independent worker
+- [ ] Define stable runtime, session, event, and hand contracts
+- [ ] Persist complete runtime events as a queryable, replayable event stream
+- [ ] Recover tasks after process crashes with idempotent tool execution
+- [ ] Provide an SDK and example templates for custom agents
 
-## 当前状态
+### Phase 3: Multi-agent and remote execution
 
-项目处于设计与脚手架准备阶段。下一步是初始化工程结构，并完成一个最小技术验证：从桌面 UI 创建 Pi Session、发送消息、接收流式事件以及停止任务。
+- [ ] Concurrent task scheduling and durable subagents
+- [ ] Provisionable, replaceable local and remote sandboxes
+- [ ] Safe hand sharing and handoff between agents
+- [ ] Credential brokering, fine-grained authorization, and complete audit trails
+- [ ] Runtime evaluation, tracing, cost, and reliability metrics
 
-## License
+### Phase 4: Enterprise extensions
 
-许可证尚未确定。在明确 Pi 相关依赖的许可证兼容性及项目发布方式后补充。
+- [ ] Organization-, project-, and environment-level policies
+- [ ] Private deployment and enterprise identity integration
+- [ ] Team collaboration and an optional cloud control plane
+- [ ] Internal catalogs for agents, tools, and templates
+
+Enterprise capabilities will build on the same open runtime and protocols without intentionally weakening the usefulness of the open-source edition.
+
+## Contributing
+
+Pi Forge welcomes contributions around:
+
+- agent runtime and session architecture;
+- model provider and MCP compatibility;
+- sandboxing, security policy, and credential isolation;
+- context engineering, memory, and compaction;
+- desktop UX, accessibility, and cross-platform support;
+- tests, documentation, example agents, and reproducible bug reports.
+
+Before submitting a change, run at least:
+
+```bash
+pnpm typecheck
+pnpm test
+```
+
+For significant architectural changes, please first describe the problem, boundaries, and compatibility strategy in an issue or design document.
+
+## Open-source license
+
+Pi Forge is intended to be released as open source, but the final license is still being selected. Until a formal `LICENSE` file is added, do not assume that the repository grants rights under a particular open-source license.
+
+## Acknowledgements
+
+Pi Forge is built on Pi Coding Agent and its open ecosystem, together with open-source projects including Electron, React, the MCP SDK, and Anthropic Sandbox Runtime.
+
+Pi Forge is an independent community project. Unless explicitly stated otherwise, it is not an official product of, or endorsed by, the projects and companies mentioned above.
