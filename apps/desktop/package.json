@@ -3,7 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "description": "Open-source desktop foundation for building custom enterprise agents.",
-  "author": "Pi Forge contributors",
+  "author": {
+    "name": "Pi Forge contributors",
+    "email": "505380967@qq.com"
+  },
+  "homepage": "https://github.com/fearlessfe/Pi-Forge",
   "desktopName": "pi-forge.desktop",
   "type": "module",
   "main": "dist-electron/electron/main.js",
