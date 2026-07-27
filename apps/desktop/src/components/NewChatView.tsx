@@ -24,6 +24,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import type { CommandInfo, ContextUsageInfo, ProviderCatalogEntry, ProviderId, QueuedMessages, ResponseUsage, TaskFileChange } from "../contracts";
 import { normalizeVisibleActivities } from "../conversation-activity";
 import { shouldSubmitOnEnter } from "../keyboard";
+import { inputTokensIncludingCache } from "../response-usage";
 import { useI18n } from "../i18n";
 import type { ChatActivity, ChatTurn, Project } from "../types";
 import { BrandMark } from "./BrandMark";
@@ -164,13 +165,14 @@ function ResponseUsageLine({ usage }: { usage: ResponseUsage }) {
   const { t, locale } = useI18n();
   const model = usage.responseModel || usage.model;
   const cache = usage.cacheReadTokens + usage.cacheWriteTokens;
+  const input = inputTokensIncludingCache(usage);
   const requestSummary = usage.requestCount > 1
     ? t("本回答共 {count} 次模型请求；token 显示最终请求，费用为全部请求合计", { count: usage.requestCount })
     : t("本回答共 1 次模型请求");
   return (
-    <footer className="response-usage" title={`${t("最终请求")}：${t("输入")} ${usage.inputTokens.toLocaleString(locale)} · ${t("输出")} ${usage.outputTokens.toLocaleString(locale)} · ${t("缓存")} ${cache.toLocaleString(locale)} · ${t("总计")} ${usage.totalTokens.toLocaleString(locale)} tokens · ${requestSummary} · ${t("费用按模型目录单价估算")}`}>
+    <footer className="response-usage" title={`${t("最终请求")}：${t("输入")} ${input.toLocaleString(locale)} · ${t("输出")} ${usage.outputTokens.toLocaleString(locale)} · ${t("缓存")} ${cache.toLocaleString(locale)} · ${t("总计")} ${usage.totalTokens.toLocaleString(locale)} tokens · ${requestSummary} · ${t("费用按模型目录单价估算")}`}>
       <span>{usage.provider}</span><strong>{model}</strong><i />
-      <span>↑ {formatTokens(usage.inputTokens)}</span><span>↓ {formatTokens(usage.outputTokens)}</span>
+      <span>↑ {formatTokens(input)}</span><span>↓ {formatTokens(usage.outputTokens)}</span>
       {cache > 0 && <span>{t("缓存")} {formatTokens(cache)}</span>}
       <span>{formatCost(usage.cost)}</span>
     </footer>

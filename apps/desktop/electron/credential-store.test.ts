@@ -27,6 +27,7 @@ function directory(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const value of directories.splice(0)) fs.rmSync(value, { recursive: true, force: true });
 });
 
@@ -81,5 +82,32 @@ describe("EncryptedCredentialStore", () => {
     const store = new EncryptedCredentialStore(directory(), unavailable);
     await expect(store.modify("openai", async () => ({ type: "api_key", key: "secret" })))
       .rejects.toThrow("操作系统安全存储当前不可用");
+  });
+
+  it("starts empty when saved credentials can no longer be decrypted", async () => {
+    const userData = directory();
+    const credentialPath = path.join(userData, "credentials.enc.json");
+    fs.writeFileSync(credentialPath, JSON.stringify({ version: 1, encrypted: "dW5yZWFkYWJsZQ==" }));
+    const unreadable: CredentialStorageEncryption = {
+      isEncryptionAvailable: () => true,
+      encryptString: (value) => Buffer.from(`replacement:${value}`, "utf8"),
+      decryptString: () => {
+        throw new Error("ciphertext belongs to another keychain");
+      },
+    };
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const store = new EncryptedCredentialStore(userData, unreadable);
+
+    await expect(store.list()).resolves.toEqual([]);
+    expect(fs.existsSync(credentialPath)).toBe(true);
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining("authentication is required again"),
+      "ciphertext belongs to another keychain",
+    );
+
+    await store.modify("openai", async () => ({ type: "api_key", key: "new-secret" }));
+    const replaced = JSON.parse(fs.readFileSync(credentialPath, "utf8")) as { encrypted: string };
+    expect(Buffer.from(replaced.encrypted, "base64").toString("utf8")).toContain("replacement:");
   });
 });

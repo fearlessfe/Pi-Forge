@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ResponseUsage } from "./contracts.js";
-import { mergeAnswerUsage } from "./response-usage.js";
+import { inputTokensIncludingCache, mergeAnswerUsage } from "./response-usage.js";
 
 function usage(inputTokens: number, outputTokens: number, cacheReadTokens: number, cost: number): ResponseUsage {
   return {
@@ -17,6 +17,10 @@ function usage(inputTokens: number, outputTokens: number, cacheReadTokens: numbe
 }
 
 describe("answer usage", () => {
+  it("includes cached tokens in the input count shown to users", () => {
+    expect(inputTokensIncludingCache(usage(858, 168, 14_000, 0.1618))).toBe(14_858);
+  });
+
   it("shows only the final request tokens while accumulating the whole answer cost", () => {
     const toolRequest = usage(46_000, 1_200, 200_000, 0.12);
     const finalRequest = usage(25_000, 800, 24_000, 0.08);

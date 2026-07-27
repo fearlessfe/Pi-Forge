@@ -511,6 +511,9 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow();
   });
+}).catch((error: unknown) => {
+  console.error("Application startup failed:", error instanceof Error ? error.stack ?? error.message : String(error));
+  app.quit();
 });
 
 app.on("window-all-closed", () => {

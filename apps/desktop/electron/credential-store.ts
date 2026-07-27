@@ -25,7 +25,18 @@ export class EncryptedCredentialStore implements CredentialStore {
 
   constructor(userDataPath: string, private readonly encryption: CredentialStorageEncryption = safeStorage) {
     this.filePath = path.join(userDataPath, "credentials.enc.json");
-    this.load();
+    try {
+      this.load();
+    } catch (error) {
+      // safeStorage ciphertext can become unreadable after an OS keychain reset or
+      // when user data is copied to another machine. Keep the encrypted file in
+      // place in case access is restored, but let the app start so the user can
+      // authenticate again and replace it.
+      console.warn(
+        "Saved model credentials could not be loaded; authentication is required again:",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   async read(providerId: string): Promise<Credential | undefined> {
