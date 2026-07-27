@@ -100,7 +100,7 @@ To avoid presenting the roadmap as shipped functionality, the current release ha
 
 - the agent harness runs in an independent local Runtime child process, but is not yet an independently deployable service;
 - one application instance currently runs only one primary agent task at a time;
-- the built-in subagent is read-only, in-process, and backed by an in-memory session;
+- the built-in subagent is read-only and in-process; each run has a persistent child session plus an independent token, request, and estimated-cost ledger, but cannot yet resume as a background task;
 - Runtime crashes preserve a recovery record and offer safe continuation; in-flight tool calls are not replayed automatically, avoiding duplicate side effects;
 - the sandbox is a local command boundary and cannot yet provision remote execution environments;
 - there is no cloud sync, team control plane, organization policy, or distributed scheduler yet;
@@ -262,7 +262,7 @@ The long-term goal is to separate the agent runtime, execution environments, and
 
 ### Phase 3: Multi-agent and remote execution
 
-- [ ] Concurrent task scheduling and durable subagents
+- [ ] Concurrent task scheduling and resumable background subagents
 - [ ] Provisionable, replaceable local and remote sandboxes
 - [ ] Safe hand sharing and handoff between agents
 - [ ] Credential brokering, fine-grained authorization, and complete audit trails

@@ -124,14 +124,14 @@ function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[] {
         return {
           ...current,
           activities: current.activities.map((item) => item.type === "tool" && item.id === event.callId
-            ? { ...item, output: event.output }
+            ? { ...item, output: event.output, details: event.details ?? item.details }
             : item),
         };
       case "tool.completed":
         return {
           ...current,
           activities: current.activities.map((item) => item.type === "tool" && item.id === event.callId
-            ? { ...item, output: event.output, status: event.isError ? "error" : "success" }
+            ? { ...item, output: event.output, status: event.isError ? "error" : "success", details: event.details ?? item.details }
             : item),
         };
       case "question.requested":
@@ -344,7 +344,13 @@ export function App() {
     try {
       setRuntimeRecoveries(await window.piDesktop.agent.listRecoveries());
     } catch (error) {
-      setNotice({ title: t("无法读取 Runtime 恢复状态"), message: eventError(error), type: "info" });
+      const message = eventError(error);
+      // During Vite HMR, a reloaded preload/renderer can briefly outlive the
+      // Electron main process version that registered the IPC handlers.
+      // Recovery is optional in that mixed-version window; a full restart will
+      // register the handler, so avoid surfacing a misleading product error.
+      if (message.includes("No handler registered for 'agent:list-recoveries'")) return;
+      setNotice({ title: t("无法读取 Runtime 恢复状态"), message, type: "info" });
     }
   }
 

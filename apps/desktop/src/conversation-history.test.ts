@@ -134,4 +134,34 @@ describe("conversation history compatibility", () => {
       status: "accepted",
     })]);
   });
+
+  it("restores persisted subagent run and cost details", () => {
+    const turn = normalizeHistoryTurn({
+      activities: [{
+        id: "call-subagent",
+        type: "tool",
+        name: "pi_desktop_subagent",
+        status: "success",
+        details: { subagent: {
+          id: "child-run",
+          parentRunId: "parent-run",
+          parentConversationId: "parent-conversation",
+          toolCallId: "call-subagent",
+          role: "reviewer",
+          task: "Review the change",
+          cwd: "/workspace",
+          sessionId: "child-session",
+          status: "completed",
+          startedAt: "2026-07-27T01:00:00.000Z",
+          updatedAt: "2026-07-27T01:01:00.000Z",
+          usage: { provider: "openai", model: "gpt-5", inputTokens: 10, outputTokens: 5, totalTokens: 15, requestCount: 2, cost: 0.01 },
+        } },
+      }],
+    }, 0);
+
+    expect(turn.activities[0]).toMatchObject({
+      type: "tool",
+      details: { subagent: { sessionId: "child-session", usage: { requestCount: 2, cost: 0.01 } } },
+    });
+  });
 });

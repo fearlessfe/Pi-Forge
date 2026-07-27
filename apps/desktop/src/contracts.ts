@@ -272,10 +272,32 @@ export type ResponseUsage = {
   cost: number;
 };
 
+export type SubagentRunInfo = {
+  id: string;
+  parentRunId?: string;
+  parentConversationId?: string;
+  toolCallId: string;
+  role: string;
+  task: string;
+  cwd: string;
+  sessionId: string;
+  status: "running" | "completed" | "error" | "stopped";
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  usage?: ResponseUsage;
+  error?: string;
+};
+
+export type ToolActivityDetails = {
+  subagent?: SubagentRunInfo;
+  [key: string]: unknown;
+};
+
 export type ConversationActivity =
   | { id: string; type: "message"; text: string }
   | { id: string; type: "thinking"; text: string }
-  | { id: string; type: "tool"; name: string; args: unknown; output: string; status: "running" | "success" | "error" }
+  | { id: string; type: "tool"; name: string; args: unknown; output: string; status: "running" | "success" | "error"; details?: ToolActivityDetails }
   | { id: string; type: "question"; question: string; options: QuestionOption[]; answer?: string; status: "pending" | "answered" };
 
 export type PiAgentEventType =
@@ -314,8 +336,8 @@ export type AgentEvent =
   | { type: "message.delta"; runId: string; text: string }
   | { type: "thinking.delta"; runId: string; text: string }
   | { type: "tool.started"; runId: string; callId: string; name: string; args: unknown }
-  | { type: "tool.updated"; runId: string; callId: string; name: string; output: string }
-  | { type: "tool.completed"; runId: string; callId: string; name: string; output: string; isError: boolean }
+  | { type: "tool.updated"; runId: string; callId: string; name: string; output: string; details?: ToolActivityDetails }
+  | { type: "tool.completed"; runId: string; callId: string; name: string; output: string; isError: boolean; details?: ToolActivityDetails }
   | { type: "question.requested"; runId: string; callId: string; question: string; options: QuestionOption[] }
   | { type: "response.usage"; runId: string; usage: ResponseUsage }
   | { type: "context.updated"; runId: string; usage: ContextUsageInfo }

@@ -37,6 +37,7 @@ import type {
   RuntimeTool,
   SaveModelSettings,
   TaskFileChange,
+  ToolActivityDetails,
 } from "../src/contracts.js";
 import { captureAgentSessionEvent } from "./agent-event-adapter.js";
 import { decideToolPermission, isInsideWorkspace, type PermissionGrant } from "./permission-policy.js";
@@ -53,6 +54,7 @@ import {
 import { ModelMetadataStore } from "./model-metadata-store.js";
 import type { McpToolDescriptor } from "./mcp-service.js";
 import type { BrowserDebugPort } from "./browser-service.js";
+import { SubagentRunStore } from "./subagent-run-store.js";
 
 type EventSink = (event: AgentEvent) => void;
 
@@ -271,6 +273,12 @@ function resultText(result: unknown): string {
   }
 }
 
+function resultDetails(result: unknown): ToolActivityDetails | undefined {
+  if (!result || typeof result !== "object" || !("details" in result)) return undefined;
+  const details = (result as { details?: unknown }).details;
+  return details && typeof details === "object" ? details as ToolActivityDetails : undefined;
+}
+
 function responseUsage(message: AssistantMessage): ResponseUsage {
   return {
     provider: message.provider,
@@ -304,6 +312,7 @@ export class AgentService {
   private readonly changeSnapshots = new Map<string, Buffer | undefined>();
   private lastChangeRunId?: string;
   private sessionCwd?: string;
+  private subagentRunStore?: SubagentRunStore;
 
   constructor(
     private readonly settings: ModelSettingsReader,
@@ -582,6 +591,11 @@ export class AgentService {
         if (activity?.type === "tool") {
           activity.output = this.messageText(result.content);
           activity.status = result.isError ? "error" : "success";
+          const details = result.details && typeof result.details === "object" ? result.details as ToolActivityDetails : undefined;
+          const subagent = activity.name === builtinSubagentToolName
+            ? this.subagentRuns().findByToolCall(result.toolCallId, conversationId) ?? details?.subagent
+            : undefined;
+          activity.details = subagent ? { ...details, subagent } : details;
         } else if (activity?.type === "question") {
           const answer = result.details && typeof result.details === "object" && typeof (result.details as Record<string, unknown>).answer === "string"
             ? (result.details as Record<string, unknown>).answer as string
@@ -1264,7 +1278,7 @@ export class AgentService {
       promptGuidelines: ["Give each subagent a bounded task and use its returned findings in your response."],
       parameters: subagentParameters,
       executionMode: "parallel",
-      execute: async (_toolCallId, params, signal, onUpdate) => {
+      execute: async (toolCallId, params, signal, onUpdate) => {
         const childLoader = new DefaultResourceLoader({
           cwd,
           agentDir: this.agentDir,
@@ -1302,43 +1316,74 @@ export class AgentService {
           }),
         });
         await childLoader.reload();
-        const child = await createAgentSession({
+        const subagentSessionDir = path.join(this.sessionDir, "subagents");
+        fs.mkdirSync(subagentSessionDir, { recursive: true, mode: 0o700 });
+        const childManager = SessionManager.create(cwd, subagentSessionDir);
+        const store = this.subagentRuns();
+        let record = store.create({
+          parentRunId: this.activeRunId,
+          parentConversationId: this.session?.sessionManager.getSessionId(),
+          toolCallId,
+          role: params.role,
+          task: params.task,
           cwd,
-          agentDir: this.agentDir,
-          model: runtime.model,
-          thinkingLevel: runtime.thinkingLevel,
-          modelRuntime: runtime.modelRuntime,
-          resourceLoader: childLoader,
-          tools: ["read", "grep", "find", "ls"],
-          sessionManager: SessionManager.inMemory(cwd),
+          sessionId: childManager.getSessionId(),
         });
+        let child: Awaited<ReturnType<typeof createAgentSession>> | undefined;
         let output = "";
         let activity = `子 Agent（${params.role}）已启动…`;
-        const unsubscribe = child.session.subscribe((event) => {
-          if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-            output += event.assistantMessageEvent.delta;
-            activity = output;
-          } else if (event.type === "tool_execution_start") {
-            activity = `${output}\n\n正在调用 ${event.toolName}…`.trim();
-          }
-          onUpdate?.({
-            content: [{ type: "text", text: activity }],
-            details: { role: params.role, status: "running" },
-          });
-        });
-        const abortChild = () => void child.session.abort();
-        signal?.addEventListener("abort", abortChild, { once: true });
+        let unsubscribe: (() => void) | undefined;
+        const abortChild = () => void child?.session.abort();
         try {
-          await child.session.prompt(`You are the ${params.role} subagent. Complete this bounded task and return concise, evidence-based findings to the parent agent.\n\n${params.task}`);
-          if (child.session.agent.state.errorMessage) throw new Error(child.session.agent.state.errorMessage);
+          const createdChild = await createAgentSession({
+            cwd,
+            agentDir: this.agentDir,
+            model: runtime.model,
+            thinkingLevel: runtime.thinkingLevel,
+            modelRuntime: runtime.modelRuntime,
+            resourceLoader: childLoader,
+            tools: ["read", "grep", "find", "ls"],
+            sessionManager: childManager,
+          });
+          child = createdChild;
+          unsubscribe = createdChild.session.subscribe((event) => {
+            if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+              output += event.assistantMessageEvent.delta;
+              activity = output;
+            } else if (event.type === "tool_execution_start") {
+              activity = `${output}\n\n正在调用 ${event.toolName}…`.trim();
+            } else if (event.type === "message_end" && event.message.role === "assistant") {
+              record = store.update(record.id, { usage: mergeAnswerUsage(record.usage, responseUsage(event.message)) }) ?? record;
+            }
+            onUpdate?.({
+              content: [{ type: "text", text: activity }],
+              details: { subagent: record },
+            });
+          });
+          signal?.addEventListener("abort", abortChild, { once: true });
+          if (signal?.aborted) abortChild();
+          await createdChild.session.prompt(`You are the ${params.role} subagent. Complete this bounded task and return concise, evidence-based findings to the parent agent.\n\n${params.task}`);
+          if (signal?.aborted) throw new Error("Subagent was stopped by the user.");
+          if (createdChild.session.agent.state.errorMessage) throw new Error(createdChild.session.agent.state.errorMessage);
+          const completedAt = new Date().toISOString();
+          record = store.update(record.id, { status: "completed", completedAt }) ?? record;
           return {
             content: [{ type: "text", text: output.trim() || "Subagent completed without text output." }],
-            details: { role: params.role, status: "completed" },
+            details: { subagent: record },
           };
+        } catch (error) {
+          const completedAt = new Date().toISOString();
+          record = store.update(record.id, {
+            status: signal?.aborted ? "stopped" : "error",
+            completedAt,
+            error: errorMessage(error),
+          }) ?? record;
+          onUpdate?.({ content: [{ type: "text", text: activity }], details: { subagent: record } });
+          throw error;
         } finally {
           signal?.removeEventListener("abort", abortChild);
-          unsubscribe();
-          child.session.dispose();
+          unsubscribe?.();
+          child?.session.dispose();
         }
       },
     });
@@ -1567,7 +1612,7 @@ export class AgentService {
       this.captureFileMutationStart(event.toolCallId, event.toolName, event.args);
       this.emit({ type: "tool.started", runId, callId: event.toolCallId, name: event.toolName, args: event.args });
     } else if (event.type === "tool_execution_update") {
-      this.emit({ type: "tool.updated", runId, callId: event.toolCallId, name: event.toolName, output: resultText(event.partialResult) });
+      this.emit({ type: "tool.updated", runId, callId: event.toolCallId, name: event.toolName, output: resultText(event.partialResult), details: resultDetails(event.partialResult) });
     } else if (event.type === "tool_execution_end") {
       this.captureFileMutationEnd(runId, event.toolCallId, event.toolName, event.result, event.isError);
       this.emit({
@@ -1577,8 +1622,13 @@ export class AgentService {
         name: event.toolName,
         output: resultText(event.result),
         isError: event.isError,
+        details: resultDetails(event.result),
       });
     }
+  }
+
+  private subagentRuns(): SubagentRunStore {
+    return this.subagentRunStore ??= new SubagentRunStore(path.join(this.sessionDir, "subagents"));
   }
 
   private captureFileMutationStart(callId: string, toolName: string, args: unknown): void {

@@ -2363,6 +2363,41 @@ textarea:focus-visible,
   word-break: break-word;
 }
 
+.subagent-run-details > section {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--border-soft);
+  border-radius: 7px;
+  background: var(--bg);
+}
+
+.subagent-run-details p {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 10px;
+}
+
+.subagent-run-details p small,
+.subagent-run-details code,
+.subagent-run-details em {
+  color: var(--faint);
+  font: 9px var(--mono);
+}
+
+.subagent-run-details em {
+  color: var(--danger);
+  font-style: normal;
+}
+
+.subagent-run-details .response-usage {
+  padding: 0;
+}
+
 .activity-spinner,
 .agent-working > i {
   width: 10px;

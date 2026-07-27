@@ -338,6 +338,7 @@ function InitialComposer(props: NewChatViewProps) {
 function ToolActivity({ activity }: { activity: Extract<ChatActivity, { type: "tool" }> }) {
   const { t } = useI18n();
   const isSubagent = activity.name === "spawn_subagent" || activity.name === "pi_desktop_subagent";
+  const subagent = activity.details?.subagent;
   const Icon = isSubagent ? Users : TerminalSquare;
   const title = t(toolLabel(activity.name));
   return (
@@ -350,6 +351,17 @@ function ToolActivity({ activity }: { activity: Extract<ChatActivity, { type: "t
         <ChevronDown size={13} className="activity-chevron" />
       </Collapsible.Trigger>
       <Collapsible.Content className="tool-content">
+        {subagent && (
+          <div className="subagent-run-details">
+            <span>{t("运行记录")}</span>
+            <section>
+              <p><strong>{subagent.role}</strong><small>{t(subagent.status === "running" ? "运行中" : subagent.status === "completed" ? "完成" : subagent.status === "stopped" ? "已停止" : "失败")}</small></p>
+              <code title={subagent.sessionId}>{t("会话")} {subagent.sessionId.slice(0, 8)}</code>
+              {subagent.usage && <ResponseUsageLine usage={subagent.usage} />}
+              {subagent.error && <em>{subagent.error}</em>}
+            </section>
+          </div>
+        )}
         <div><span>{t("输入")}</span><pre>{formatData(activity.args)}</pre></div>
         {(activity.output || activity.status !== "running") && <div><span>{t("输出")}</span><pre>{activity.output || t("工具未返回文本")}</pre></div>}
       </Collapsible.Content>

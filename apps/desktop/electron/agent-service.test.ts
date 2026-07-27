@@ -849,6 +849,12 @@ describe("AgentService with a real Pi session", () => {
             chunk({}, "tool_calls"),
           ]);
         } else if (requests.length === 2) {
+          writeSse(res, [
+            chunk({ role: "assistant" }),
+            chunk({ tool_calls: [{ index: 0, id: "call-child-read", type: "function", function: { name: "read", arguments: JSON.stringify({ path: "README.md" }) } }] }),
+            chunk({}, "tool_calls"),
+          ]);
+        } else if (requests.length === 3) {
           writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "child-report" }), chunk({}, "stop")]);
         } else {
           writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "parent-answer" }), chunk({}, "stop")]);
@@ -857,6 +863,8 @@ describe("AgentService with a real Pi session", () => {
     });
     const port = await listen(server);
     const cwd = createDirectory("subagent-workspace");
+    fs.writeFileSync(path.join(cwd, "README.md"), "subagent fixture\n", "utf8");
+    const agentDir = createDirectory("subagent-agent");
     const configuration: SaveModelSettings = {
       provider: "openai-compatible",
       baseUrl: `http://127.0.0.1:${port}/v1`,
@@ -865,7 +873,7 @@ describe("AgentService with a real Pi session", () => {
       apiKey: "subagent-key",
     };
     const events: AgentEvent[] = [];
-    const service = new AgentService({ resolve: () => ({ ...configuration }) }, createDirectory("subagent-agent"), cwd, (event) => events.push(event));
+    const service = new AgentService({ resolve: () => ({ ...configuration }) }, agentDir, cwd, (event) => events.push(event));
 
     try {
       const runId = await service.send("delegate this review", cwd);
@@ -874,11 +882,34 @@ describe("AgentService with a real Pi session", () => {
       expect(eventsOfType(events, "message.delta").filter((event) => event.runId === runId).map((event) => event.text).join("")).toBe("parent-answer");
       expect(events.some((event) => event.type === "tool.started" && event.name === "pi_desktop_subagent")).toBe(true);
       expect(events.some((event) => event.type === "tool.updated" && event.name === "pi_desktop_subagent" && event.output.includes("child-report"))).toBe(true);
-      expect(events.some((event) => event.type === "tool.completed" && event.name === "pi_desktop_subagent" && event.output.includes("child-report"))).toBe(true);
-      expect(requests).toHaveLength(3);
+      const completed = eventsOfType(events, "tool.completed").find((event) => event.name === "pi_desktop_subagent");
+      expect(completed).toMatchObject({
+        output: expect.stringContaining("child-report"),
+        details: { subagent: { role: "reviewer", status: "completed", usage: { requestCount: 2 } } },
+      });
+      expect(requests).toHaveLength(4);
       expect(JSON.stringify(requests[1].messages)).toContain("You are the reviewer subagent");
-      expect(requests[2].messages).toEqual(expect.arrayContaining([
+      expect(requests[3].messages).toEqual(expect.arrayContaining([
         expect.objectContaining({ role: "tool", content: expect.stringContaining("child-report") }),
+      ]));
+
+      const subagentDirectory = path.join(agentDir, "sessions", "subagents");
+      const childSessions = await SessionManager.listAll(subagentDirectory);
+      expect(childSessions).toEqual([expect.objectContaining({ id: completed?.details?.subagent?.sessionId })]);
+      const conversations = await service.listConversations();
+      expect(conversations).toHaveLength(1);
+      expect(conversations[0].id).not.toBe(completed?.details?.subagent?.sessionId);
+      const restored = await service.loadConversation(conversations[0].id);
+      expect(restored.turns[0].activities).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: "call-subagent",
+          details: expect.objectContaining({
+            subagent: expect.objectContaining({
+              sessionId: completed?.details?.subagent?.sessionId,
+              usage: expect.objectContaining({ requestCount: 2 }),
+            }),
+          }),
+        }),
       ]));
     } finally {
       service.dispose();
@@ -942,6 +973,54 @@ describe("AgentService with a real Pi session", () => {
         expect.objectContaining({ id: modified.id, status: "accepted" }),
       ]));
       expect(service.changePath(modified.id)).toBe(path.join(cwd, "existing.txt"));
+    } finally {
+      service.dispose();
+      await close(server);
+    }
+  });
+
+  it("persists a stopped subagent record when the parent run is aborted", async () => {
+    let requestCount = 0;
+    let childStarted!: () => void;
+    const started = new Promise<void>((resolve) => { childStarted = resolve; });
+    const server = http.createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        requestCount += 1;
+        if (requestCount === 1) {
+          writeSse(res, [
+            chunk({ role: "assistant" }),
+            chunk({ tool_calls: [{ index: 0, id: "call-stopped-child", type: "function", function: { name: "pi_desktop_subagent", arguments: JSON.stringify({ role: "researcher", task: "Wait for evidence" }) } }] }),
+            chunk({}, "tool_calls"),
+          ]);
+        } else {
+          res.writeHead(200, { "content-type": "text/event-stream", connection: "keep-alive" });
+          childStarted();
+        }
+      });
+    });
+    const port = await listen(server);
+    const cwd = createDirectory("subagent-abort-workspace");
+    const agentDir = createDirectory("subagent-abort-agent");
+    const configuration: SaveModelSettings = {
+      provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      modelId: "mock-model",
+      thinkingLevel: "off",
+      apiKey: "subagent-abort-key",
+    };
+    const events: AgentEvent[] = [];
+    const service = new AgentService({ resolve: () => ({ ...configuration }) }, agentDir, cwd, (event) => events.push(event));
+
+    try {
+      const runId = await service.send("delegate and wait", cwd);
+      await started;
+      await service.abort();
+      await vi.waitFor(() => {
+        const index = JSON.parse(fs.readFileSync(path.join(agentDir, "sessions", "subagents", "index.json"), "utf8")) as { runs: Array<{ status: string }> };
+        expect(index.runs[0]?.status).toBe("stopped");
+      });
+      expect(events.some((event) => event.type === "run.stopped" && event.runId === runId)).toBe(true);
     } finally {
       service.dispose();
       await close(server);

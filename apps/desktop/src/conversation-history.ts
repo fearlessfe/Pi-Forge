@@ -1,8 +1,47 @@
-import type { ContextUsageInfo, ConversationActivity, ResponseUsage, TaskFileChange } from "./contracts.js";
+import type { ContextUsageInfo, ConversationActivity, ResponseUsage, SubagentRunInfo, TaskFileChange, ToolActivityDetails } from "./contracts.js";
 import type { ChatTurn } from "./types.js";
 
 function finiteNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeSubagentRun(value: unknown): SubagentRunInfo | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const run = value as Record<string, unknown>;
+  if (
+    typeof run.id !== "string"
+    || typeof run.toolCallId !== "string"
+    || typeof run.role !== "string"
+    || typeof run.task !== "string"
+    || typeof run.cwd !== "string"
+    || typeof run.sessionId !== "string"
+    || (run.status !== "running" && run.status !== "completed" && run.status !== "error" && run.status !== "stopped")
+    || typeof run.startedAt !== "string"
+    || typeof run.updatedAt !== "string"
+  ) return undefined;
+  return {
+    id: run.id,
+    parentRunId: typeof run.parentRunId === "string" ? run.parentRunId : undefined,
+    parentConversationId: typeof run.parentConversationId === "string" ? run.parentConversationId : undefined,
+    toolCallId: run.toolCallId,
+    role: run.role,
+    task: run.task,
+    cwd: run.cwd,
+    sessionId: run.sessionId,
+    status: run.status,
+    startedAt: run.startedAt,
+    updatedAt: run.updatedAt,
+    completedAt: typeof run.completedAt === "string" ? run.completedAt : undefined,
+    usage: normalizeResponseUsage(run.usage),
+    error: typeof run.error === "string" ? run.error : undefined,
+  };
+}
+
+function normalizeToolDetails(value: unknown): ToolActivityDetails | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const details = value as Record<string, unknown>;
+  const subagent = normalizeSubagentRun(details.subagent);
+  return subagent ? { ...details, subagent } : undefined;
 }
 
 function normalizeActivity(value: unknown, index: number): ConversationActivity | undefined {
@@ -26,6 +65,7 @@ function normalizeActivity(value: unknown, index: number): ConversationActivity 
       args: activity.args,
       output: typeof activity.output === "string" ? activity.output : "",
       status,
+      details: normalizeToolDetails(activity.details),
     };
   }
   if (activity.type === "question") {
