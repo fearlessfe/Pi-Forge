@@ -4,7 +4,7 @@ import { ConversationSidebar } from "./components/ConversationSidebar";
 import { NewChatView } from "./components/NewChatView";
 import { PluginCenterView } from "./components/PluginCenterView";
 import { SettingsView } from "./components/SettingsView";
-import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, SaveModelSettings, SystemPromptSettings, TaskFileChange, WorkspaceTrustStatus } from "./contracts";
+import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
 import { appendMessageDelta } from "./conversation-activity";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { isPrimaryShortcut, shortcutLabel } from "./keyboard";
@@ -146,9 +146,10 @@ function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[] {
         };
       case "response.usage":
         return { ...current, usage: mergeAnswerUsage(current.usage, event.usage) };
+      case "changes.updated":
+        return { ...current, fileChanges: event.changes };
       case "context.updated":
       case "queue.updated":
-      case "changes.updated":
         return current;
       case "agent.event":
         // Raw SDK events are acknowledged here but intentionally stay out of the user-facing UI.
@@ -211,7 +212,6 @@ export function App() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
-  const [fileChanges, setFileChanges] = useState<TaskFileChange[]>([]);
   const [terminalOpen, setTerminalOpen] = useState(false);
 
   useEffect(() => {
@@ -243,7 +243,6 @@ export function App() {
     const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => {
       if (event.type === "context.updated") setContextUsage(event.usage);
       if (event.type === "queue.updated") setQueuedMessages(event.queue);
-      if (event.type === "changes.updated") setFileChanges(event.changes);
       setTurns((current) => applyAgentEvent(current, event));
       if (event.type === "run.completed" || event.type === "run.error" || event.type === "run.stopped") {
         setQueuedMessages({ steering: [], followUp: [] });
@@ -350,7 +349,6 @@ export function App() {
     if (isRunning) await window.piDesktop?.agent.abort();
     await window.piDesktop?.agent.reset();
     setTurns([]);
-    setFileChanges([]);
     setPrompt("");
   }
 
@@ -480,7 +478,6 @@ export function App() {
       if (selectedConversationId === conversationId) {
         setSelectedConversationId(null);
         setTurns([]);
-        setFileChanges([]);
         setPrompt("");
         setContextUsage(undefined);
         if (!scopeProject) setProject(null);
@@ -510,7 +507,6 @@ export function App() {
     setProject(nextProject ? projects.find((entry) => entry.id === nextProject.id) ?? nextProject : null);
     void refreshWorkspaceTrust(nextProject?.path);
     setPrompt("");
-    setFileChanges([]);
     const cachedTurns = conversationTurns[conversationId];
     if (cachedTurns) {
       setTurns(cachedTurns);
@@ -618,6 +614,7 @@ export function App() {
       question: question.trim(),
       answer: "",
       activities: [],
+      fileChanges: [],
       status: "running",
     }]);
     setPrompt("");
@@ -701,7 +698,9 @@ export function App() {
   async function acceptFileChanges(changeIds?: string[]) {
     if (!window.piDesktop?.agent.acceptChanges) return;
     try {
-      setFileChanges(await window.piDesktop.agent.acceptChanges(changeIds));
+      const changes = await window.piDesktop.agent.acceptChanges(changeIds);
+      const runId = changes[0]?.runId;
+      if (runId) setTurns((current) => current.map((turn) => turn.runId === runId ? { ...turn, fileChanges: changes } : turn));
       setNotice({ title: t("文件变更已接受"), message: t("该任务的变更将保留在工作区。"), type: "success" });
     } catch (error) {
       setNotice({ title: t("无法接受文件变更"), message: eventError(error), type: "info" });
@@ -712,7 +711,8 @@ export function App() {
     if (!window.piDesktop?.agent.revertChanges) return;
     try {
       const changes = await window.piDesktop.agent.revertChanges(changeIds);
-      setFileChanges(changes);
+      const runId = changes[0]?.runId;
+      if (runId) setTurns((current) => current.map((turn) => turn.runId === runId ? { ...turn, fileChanges: changes } : turn));
       const conflicts = changes.filter((change) => change.status === "conflict");
       setNotice(conflicts.length
         ? { title: t("部分变更未回退"), message: conflicts.map((change) => `${change.relativePath}: ${change.error}`).join("\n"), type: "info" }
@@ -938,7 +938,6 @@ export function App() {
                   prompt={prompt}
                   isRunning={isRunning}
                   queuedMessages={queuedMessages}
-                  fileChanges={fileChanges}
                   onPromptChange={setPrompt}
                   onProjectChange={setProject}
                   onChooseWorkspace={() => void chooseWorkspace()}

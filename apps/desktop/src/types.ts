@@ -1,4 +1,4 @@
-import type { AuthPrompt, ConversationActivity, ProviderId, ResponseUsage } from "./contracts.js";
+import type { AuthPrompt, ConversationActivity, ProviderId, ResponseUsage, TaskFileChange } from "./contracts.js";
 
 export type Theme = "dark" | "light";
 
@@ -45,6 +45,7 @@ export type ChatTurn = {
   question: string;
   answer: string;
   activities: ChatActivity[];
+  fileChanges?: TaskFileChange[];
   usage?: ResponseUsage;
   status: "running" | "completed" | "error" | "stopped";
   error?: string;

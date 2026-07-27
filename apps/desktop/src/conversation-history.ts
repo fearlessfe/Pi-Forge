@@ -1,4 +1,4 @@
-import type { ContextUsageInfo, ConversationActivity, ResponseUsage } from "./contracts.js";
+import type { ContextUsageInfo, ConversationActivity, ResponseUsage, TaskFileChange } from "./contracts.js";
 import type { ChatTurn } from "./types.js";
 
 function finiteNumber(value: unknown): number {
@@ -72,6 +72,36 @@ function normalizeResponseUsage(value: unknown): ResponseUsage | undefined {
   };
 }
 
+function normalizeFileChange(value: unknown): TaskFileChange | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const change = value as Record<string, unknown>;
+  if (
+    typeof change.id !== "string"
+    || typeof change.runId !== "string"
+    || typeof change.callId !== "string"
+    || typeof change.path !== "string"
+    || typeof change.relativePath !== "string"
+    || (change.kind !== "created" && change.kind !== "modified")
+    || typeof change.patch !== "string"
+    || typeof change.afterHash !== "string"
+    || (change.status !== "pending" && change.status !== "accepted" && change.status !== "reverted" && change.status !== "conflict")
+  ) return undefined;
+  return {
+    id: change.id,
+    runId: change.runId,
+    callId: change.callId,
+    path: change.path,
+    relativePath: change.relativePath,
+    kind: change.kind,
+    patch: change.patch,
+    beforeHash: typeof change.beforeHash === "string" ? change.beforeHash : undefined,
+    afterHash: change.afterHash,
+    status: change.status,
+    revertible: change.revertible === true,
+    error: typeof change.error === "string" ? change.error : undefined,
+  };
+}
+
 export function normalizeHistoryTurn(value: unknown, index: number): ChatTurn {
   const turn = value && typeof value === "object" ? value as Record<string, unknown> : {};
   return {
@@ -82,6 +112,9 @@ export function normalizeHistoryTurn(value: unknown, index: number): ChatTurn {
     activities: Array.isArray(turn.activities)
       ? turn.activities.map(normalizeActivity).filter((activity): activity is ConversationActivity => Boolean(activity))
       : [],
+    fileChanges: Array.isArray(turn.fileChanges)
+      ? turn.fileChanges.map(normalizeFileChange).filter((change): change is TaskFileChange => Boolean(change))
+      : undefined,
     usage: normalizeResponseUsage(turn.usage),
     status: "completed",
   };

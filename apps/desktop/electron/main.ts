@@ -445,6 +445,14 @@ function registerIpc(
     if (changeIds !== undefined && (!Array.isArray(changeIds) || changeIds.some((entry) => typeof entry !== "string"))) throw new Error("文件变更 ID 无效。");
     return agent.revertChanges(changeIds as string[] | undefined);
   });
+  ipcMain.handle("agent:open-change", async (_event, changeId: unknown) => {
+    const filePath = agent.changePath(requireString(changeId, "文件变更 ID 无效。"));
+    const failure = await shell.openPath(filePath);
+    if (failure) throw new Error(`无法打开文件：${failure}`);
+  });
+  ipcMain.handle("agent:reveal-change", (_event, changeId: unknown) => {
+    shell.showItemInFolder(agent.changePath(requireString(changeId, "文件变更 ID 无效。")));
+  });
   ipcMain.handle("agent:answer-question", (_event, callId: unknown, answer: unknown) => {
     if (typeof callId !== "string" || typeof answer !== "string") throw new Error("回答格式无效。");
     agent.answerQuestion(callId, answer);

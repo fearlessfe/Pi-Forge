@@ -9,6 +9,7 @@ describe("conversation history compatibility", () => {
       question: "hello",
       answer: "world",
       activities: [],
+      fileChanges: undefined,
       usage: undefined,
       status: "completed",
     });
@@ -111,5 +112,26 @@ describe("conversation history compatibility", () => {
       tokens: 32_000,
       percent: 25,
     });
+  });
+
+  it("restores safe persisted file changes for historical turns", () => {
+    expect(normalizeHistoryTurn({
+      fileChanges: [{
+        id: "change-1",
+        runId: "run-1",
+        callId: "call-1",
+        path: "/workspace/report.pdf",
+        relativePath: "report.pdf",
+        kind: "created",
+        patch: "Binary or large file changed: report.pdf",
+        afterHash: "hash",
+        status: "accepted",
+        revertible: false,
+      }, { id: "unsafe" }],
+    }, 0).fileChanges).toEqual([expect.objectContaining({
+      id: "change-1",
+      relativePath: "report.pdf",
+      status: "accepted",
+    })]);
   });
 });

@@ -350,6 +350,7 @@ export type ConversationHistoryTurn = {
   question: string;
   answer: string;
   activities: ConversationActivity[];
+  fileChanges?: TaskFileChange[];
   usage?: ResponseUsage;
 };
 
@@ -550,6 +551,8 @@ export type PiDesktopApi = {
     listChanges(runId?: string): Promise<TaskFileChange[]>;
     acceptChanges(changeIds?: string[]): Promise<TaskFileChange[]>;
     revertChanges(changeIds?: string[]): Promise<TaskFileChange[]>;
+    openChange(changeId: string): Promise<void>;
+    revealChange(changeId: string): Promise<void>;
     reset(): Promise<void>;
     answerQuestion(callId: string, answer: string): Promise<void>;
     onEvent(listener: (event: AgentEvent) => void): () => void;

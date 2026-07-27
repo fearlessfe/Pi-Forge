@@ -934,6 +934,14 @@ describe("AgentService with a real Pi session", () => {
       expect(conflicted).toMatchObject({ status: "conflict", error: expect.stringContaining("避免覆盖") });
       expect(fs.readFileSync(path.join(cwd, "existing.txt"), "utf8")).toBe("third-party change\n");
       expect(service.acceptChanges([modified.id]).find((change) => change.id === modified.id)?.status).toBe("accepted");
+
+      const conversation = (await service.listConversations()).find((entry) => entry.cwd === cwd)!;
+      const restored = await service.loadConversation(conversation.id);
+      expect(restored.turns[0]?.fileChanges).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: created.id, status: "reverted" }),
+        expect.objectContaining({ id: modified.id, status: "accepted" }),
+      ]));
+      expect(service.changePath(modified.id)).toBe(path.join(cwd, "existing.txt"));
     } finally {
       service.dispose();
       await close(server);

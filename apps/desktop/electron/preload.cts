@@ -96,6 +96,8 @@ const api: PiDesktopApi = {
     listChanges: (runId) => ipcRenderer.invoke("agent:list-changes", runId),
     acceptChanges: (changeIds) => ipcRenderer.invoke("agent:accept-changes", changeIds),
     revertChanges: (changeIds) => ipcRenderer.invoke("agent:revert-changes", changeIds),
+    openChange: (changeId) => ipcRenderer.invoke("agent:open-change", changeId),
+    revealChange: (changeId) => ipcRenderer.invoke("agent:reveal-change", changeId),
     reset: () => ipcRenderer.invoke("agent:reset"),
     answerQuestion: (callId: string, answer: string) => ipcRenderer.invoke("agent:answer-question", callId, answer),
     onEvent: (listener: (event: AgentEvent) => void) => {

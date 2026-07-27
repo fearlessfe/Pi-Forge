@@ -105,6 +105,7 @@ const officialMetadataSources: Record<string, string> = {
 
 const builtinSubagentToolName = "pi_desktop_subagent";
 const maxDiffSnapshotBytes = 5 * 1024 * 1024;
+const fileChangesEntryType = "pi-desktop:file-changes";
 
 type CompatibleProviderDefinition = {
   name: string;
@@ -160,6 +161,37 @@ const subagentParameters = Type.Object({
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function parseStoredFileChange(value: unknown): TaskFileChange | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const change = value as Record<string, unknown>;
+  if (
+    typeof change.id !== "string"
+    || typeof change.runId !== "string"
+    || typeof change.callId !== "string"
+    || typeof change.path !== "string"
+    || typeof change.relativePath !== "string"
+    || (change.kind !== "created" && change.kind !== "modified")
+    || typeof change.patch !== "string"
+    || typeof change.afterHash !== "string"
+    || (change.status !== "pending" && change.status !== "accepted" && change.status !== "reverted" && change.status !== "conflict")
+  ) return undefined;
+  return {
+    id: change.id,
+    runId: change.runId,
+    callId: change.callId,
+    path: change.path,
+    relativePath: change.relativePath,
+    kind: change.kind,
+    patch: change.patch,
+    beforeHash: typeof change.beforeHash === "string" ? change.beforeHash : undefined,
+    afterHash: change.afterHash,
+    status: change.status,
+    // Modified files need an in-memory before snapshot, which is intentionally not persisted.
+    revertible: change.kind === "created" && change.revertible === true,
+    error: typeof change.error === "string" ? change.error : undefined,
+  };
 }
 
 function modelEndpoint(provider: string, baseUrl: string): URL {
@@ -427,6 +459,7 @@ export class AgentService {
     void session.prompt(prompt.trim()).then(() => {
       if (this.activeRunId !== runId) return;
       const modelError = session.agent.state.errorMessage;
+      this.persistFileChanges(runId);
       this.activeRunId = undefined;
       this.running = false;
       this.emitContextUsage(runId, session);
@@ -434,6 +467,7 @@ export class AgentService {
       else this.emit({ type: "run.completed", runId });
     }).catch((error: unknown) => {
       if (this.activeRunId === runId) {
+        this.persistFileChanges(runId);
         this.activeRunId = undefined;
         this.running = false;
         this.emit({ type: "run.error", runId, message: errorMessage(error) });
@@ -483,6 +517,15 @@ export class AgentService {
     let latestAssistant: { message: AssistantMessage; entryIndex: number } | undefined;
 
     for (const [entryIndex, entry] of branch.entries()) {
+      if (entry.type === "custom" && entry.customType === fileChangesEntryType) {
+        const data = entry.data && typeof entry.data === "object" ? entry.data as Record<string, unknown> : {};
+        const changes = Array.isArray(data.changes) ? data.changes.map(parseStoredFileChange).filter((change): change is TaskFileChange => Boolean(change)) : [];
+        const current = turns.at(-1);
+        if (current) current.fileChanges = changes;
+        for (const change of changes) this.fileChanges.set(change.id, change);
+        if (typeof data.runId === "string") this.lastChangeRunId = data.runId;
+        continue;
+      }
       if (entry.type !== "message") continue;
       const record = entry.message as unknown as Record<string, unknown>;
       const role = typeof record.role === "string" ? record.role : "";
@@ -665,6 +708,7 @@ export class AgentService {
     this.pendingQuestions.clear();
     await this.session?.abort();
     if (runId && this.activeRunId === runId) {
+      this.persistFileChanges(runId);
       this.emit({ type: "run.stopped", runId });
       this.activeRunId = undefined;
       this.running = false;
@@ -691,6 +735,15 @@ export class AgentService {
   listChanges(runId = this.lastChangeRunId): TaskFileChange[] {
     if (!runId) return [];
     return [...this.fileChanges.values()].filter((change) => change.runId === runId).map((change) => ({ ...change }));
+  }
+
+  changePath(changeId: string): string {
+    const change = this.fileChanges.get(changeId);
+    if (!change) throw new Error("找不到该文件变更，请重新打开会话后再试。");
+    if (!path.isAbsolute(change.path) || !fs.existsSync(change.path) || !fs.statSync(change.path).isFile()) {
+      throw new Error("成果物不存在或已被移动。");
+    }
+    return change.path;
   }
 
   acceptChanges(changeIds?: string[]): TaskFileChange[] {
@@ -1544,7 +1597,17 @@ export class AgentService {
   }
 
   private emitChangedRuns(runIds: ReadonlySet<string>): void {
-    for (const runId of runIds) this.emit({ type: "changes.updated", runId, changes: this.listChanges(runId) });
+    for (const runId of runIds) {
+      this.persistFileChanges(runId);
+      this.emit({ type: "changes.updated", runId, changes: this.listChanges(runId) });
+    }
+  }
+
+  private persistFileChanges(runId: string): void {
+    if (!this.session) return;
+    const changes = this.listChanges(runId);
+    if (changes.length === 0) return;
+    this.session.sessionManager.appendCustomEntry(fileChangesEntryType, { runId, changes });
   }
 
   private hashBuffer(value: Buffer): string {

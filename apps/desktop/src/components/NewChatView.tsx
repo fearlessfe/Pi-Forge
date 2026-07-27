@@ -9,8 +9,11 @@ import {
   ChevronDown,
   CircleStop,
   Copy,
+  ExternalLink,
+  FileBox,
   FileDiff,
   Folder,
+  FolderOpen,
   GitFork,
   MessageCircleQuestion,
   RotateCcw,
@@ -18,11 +21,13 @@ import {
   ShieldCheck,
   Undo2,
   Users,
+  X,
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import type { CommandInfo, ContextUsageInfo, ProviderCatalogEntry, ProviderId, QueuedMessages, ResponseUsage, TaskFileChange } from "../contracts";
 import { normalizeVisibleActivities } from "../conversation-activity";
+import { fileExtension, isArtifactChange } from "../file-changes";
 import { shouldSubmitOnEnter } from "../keyboard";
 import { inputTokensIncludingCache } from "../response-usage";
 import { useI18n } from "../i18n";
@@ -39,7 +44,6 @@ type NewChatViewProps = {
   prompt: string;
   isRunning: boolean;
   queuedMessages: QueuedMessages;
-  fileChanges: TaskFileChange[];
   onPromptChange: (value: string) => void;
   onProjectChange: (project: Project | null) => void;
   onChooseWorkspace: () => void;
@@ -511,11 +515,15 @@ function ActivityTimeline({
   );
 }
 
-function ConversationTurn({ turn, onRetry, onForkTurn, onAnswerQuestion }: {
+function ConversationTurn({ turn, running, onRetry, onForkTurn, onAnswerQuestion, onOpenChange, onAcceptChanges, onRevertChanges }: {
   turn: ChatTurn;
+  running: boolean;
   onRetry: (turnId: string) => void;
   onForkTurn: NewChatViewProps["onForkTurn"];
   onAnswerQuestion: NewChatViewProps["onAnswerQuestion"];
+  onOpenChange: (change: TaskFileChange) => void;
+  onAcceptChanges: NewChatViewProps["onAcceptChanges"];
+  onRevertChanges: NewChatViewProps["onRevertChanges"];
 }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
@@ -551,47 +559,99 @@ function ConversationTurn({ turn, onRetry, onForkTurn, onAnswerQuestion }: {
           {turn.status === "stopped" && <div className="agent-stopped">{t("任务已停止")}</div>}
         </div>
       </section>
+      <FileChangesPanel changes={turn.fileChanges ?? []} running={running} onOpen={onOpenChange} onAccept={onAcceptChanges} onRevert={onRevertChanges} />
     </article>
   );
 }
 
-function FileChangesPanel({ changes, running, onAccept, onRevert }: {
+function FileChangesPanel({ changes, running, onOpen, onAccept, onRevert }: {
   changes: TaskFileChange[];
   running: boolean;
+  onOpen: (change: TaskFileChange) => void;
   onAccept: (changeIds?: string[]) => void;
   onRevert: (changeIds?: string[]) => void;
 }) {
   const { t } = useI18n();
   const pending = changes.filter((change) => change.status === "pending");
   if (changes.length === 0) return null;
-  return <Collapsible.Root className="file-changes-panel">
+  return <Collapsible.Root className="file-changes-panel turn-file-changes" defaultOpen>
     <header>
-      <Collapsible.Trigger className="file-changes-trigger"><FileDiff size={14} /><strong>{t("任务文件变更")}</strong><span>{changes.length}</span><ChevronDown size={13} /></Collapsible.Trigger>
+      <Collapsible.Trigger className="file-changes-trigger"><FileDiff size={14} /><strong>{t("改动的文件")}</strong><span>{changes.length}</span><ChevronDown size={13} /></Collapsible.Trigger>
       {pending.length > 0 && <div><button type="button" onClick={() => onAccept(pending.map((change) => change.id))}><ShieldCheck size={12} />{t("全部接受")}</button><button type="button" disabled={running || pending.some((change) => !change.revertible)} onClick={() => onRevert(pending.map((change) => change.id))}><Undo2 size={12} />{t("全部回退")}</button></div>}
     </header>
     <Collapsible.Content className="file-changes-content">
-      {changes.map((change) => <details key={change.id} className={`file-change is-${change.status}`}>
-        <summary><code>{change.relativePath}</code><span>{t(change.kind === "created" ? "新建" : "修改")}</span><em>{t(change.status)}</em></summary>
-        <pre>{change.patch.split("\n").map((line, index) => <span className={line.startsWith("+") && !line.startsWith("+++") ? "is-added" : line.startsWith("-") && !line.startsWith("---") ? "is-removed" : ""} key={`${index}:${line}`}>{line || " "}</span>)}</pre>
+      {changes.map((change) => <div key={change.id} className={`file-change-row is-${change.status}`}>
+        <button className="file-change-open" type="button" onClick={() => onOpen(change)} title={t("在右侧查看 Diff")}>
+          {isArtifactChange(change) ? <FileBox size={13} /> : <FileDiff size={13} />}
+          <code>{change.relativePath}</code>
+          {isArtifactChange(change) && <span className="file-change-type">{t("成果物")}</span>}
+          <span>{t(change.kind === "created" ? "新建" : "修改")}</span><em>{t(change.status)}</em>
+        </button>
+        {change.status === "pending" && <div className="file-change-actions"><button type="button" onClick={() => onAccept([change.id])}>{t("接受")}</button><button type="button" disabled={running || !change.revertible} onClick={() => onRevert([change.id])}>{t(change.revertible ? "回退" : "无法自动回退")}</button></div>}
         {change.error && <p>{change.error}</p>}
-        {change.status === "pending" && <footer><button type="button" onClick={() => onAccept([change.id])}>{t("接受")}</button><button type="button" disabled={running || !change.revertible} onClick={() => onRevert([change.id])}>{t(change.revertible ? "回退" : "无法自动回退")}</button></footer>}
-      </details>)}
+      </div>)}
     </Collapsible.Content>
   </Collapsible.Root>;
 }
 
-function ActiveConversation(props: NewChatViewProps) {
+function FileChangeInspector({ change, onClose }: { change: TaskFileChange; onClose: () => void }) {
+  const { t } = useI18n();
+  const isArtifact = isArtifactChange(change);
+  const [action, setAction] = useState<"open" | "reveal" | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAction(null);
+    setActionError(null);
+  }, [change.id]);
+
+  async function performAction(nextAction: "open" | "reveal") {
+    setAction(nextAction);
+    setActionError(null);
+    try {
+      const api = window.piDesktop?.agent;
+      if (!api) throw new Error(t("桌面文件操作不可用。"));
+      if (nextAction === "open") await api.openChange(change.id);
+      else await api.revealChange(change.id);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, "") : String(error));
+    } finally {
+      setAction(null);
+    }
+  }
+
+  return <aside className="chat-inspector" aria-label={t("文件变更详情")}>
+    <header className="chat-inspector__header">
+      <div>{isArtifact ? <FileBox size={16} /> : <FileDiff size={16} />}<span><strong>{isArtifact ? t("成果物") : "Diff"}</strong><code title={change.path}>{change.relativePath}</code></span></div>
+      <div className="chat-inspector__actions">
+        <button type="button" disabled={action !== null} onClick={() => void performAction("open")} title={t("使用系统默认应用打开")}><ExternalLink size={14} /><span>{t("打开")}</span></button>
+        <button type="button" disabled={action !== null} onClick={() => void performAction("reveal")} title={t("在文件管理器中显示")}><FolderOpen size={14} /><span>{t("定位")}</span></button>
+        <button type="button" onClick={onClose} aria-label={t("关闭文件变更详情")}><X size={16} /></button>
+      </div>
+    </header>
+    <div className="chat-inspector__meta"><span>{t(change.kind === "created" ? "新建" : "修改")}</span><span className={`is-${change.status}`}>{t(change.status)}</span><code title={change.path}>{change.path}</code></div>
+    {isArtifact ? <div className="chat-inspector__artifact">
+      <div className="artifact-file-mark"><FileBox size={30} /><span>{fileExtension(change.relativePath)}</span></div>
+      <strong>{t("成果物已生成")}</strong>
+      <p>{t("该文件是二进制文件或体积较大，无法显示文本 Diff。你可以直接打开，或在文件管理器中定位。")}</p>
+      <code>{change.path}</code>
+      <div><button type="button" disabled={action !== null} onClick={() => void performAction("open")}><ExternalLink size={14} />{action === "open" ? t("正在打开…") : t("打开成果物")}</button><button type="button" disabled={action !== null} onClick={() => void performAction("reveal")}><FolderOpen size={14} />{action === "reveal" ? t("正在定位…") : t("在文件管理器中显示")}</button></div>
+    </div> : <pre className="chat-inspector__diff" aria-label={t("文件 Diff")}>{change.patch.split("\n").map((line, index) => <span className={line.startsWith("+") && !line.startsWith("+++") ? "is-added" : line.startsWith("-") && !line.startsWith("---") ? "is-removed" : line.startsWith("@@") ? "is-hunk" : line.startsWith("---") || line.startsWith("+++") ? "is-file" : ""} key={`${index}:${line}`}><i>{index + 1}</i><code>{line || " "}</code></span>)}</pre>}
+    {(change.error || actionError) && <p className="chat-inspector__error"><XCircle size={13} />{actionError || change.error}</p>}
+  </aside>;
+}
+
+function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: TaskFileChange) => void }) {
   const { t } = useI18n();
   const palette = useCommandPalette(props);
   return (
     <section className="active-conversation" aria-label={t("当前对话")}>
       <div className="conversation-scroll" aria-live="polite">
         <div className="conversation-turns">
-          {props.turns.map((turn) => <ConversationTurn key={turn.id} turn={turn} onRetry={props.onRetry} onForkTurn={props.onForkTurn} onAnswerQuestion={props.onAnswerQuestion} />)}
+          {props.turns.map((turn) => <ConversationTurn key={turn.id} turn={turn} running={props.isRunning} onRetry={props.onRetry} onForkTurn={props.onForkTurn} onAnswerQuestion={props.onAnswerQuestion} onOpenChange={props.onOpenChange} onAcceptChanges={props.onAcceptChanges} onRevertChanges={props.onRevertChanges} />)}
         </div>
       </div>
       <footer className="conversation-dock">
-        <FileChangesPanel changes={props.fileChanges} running={props.isRunning} onAccept={props.onAcceptChanges} onRevert={props.onRevertChanges} />
         {(props.queuedMessages.steering.length > 0 || props.queuedMessages.followUp.length > 0) && <div className="queued-messages"><span>{t("已排队 {count} 条消息", { count: props.queuedMessages.steering.length + props.queuedMessages.followUp.length })}</span>{props.queuedMessages.steering.map((message) => <em key={`steer:${message}`}>{t("立即调整")} · {message}</em>)}{props.queuedMessages.followUp.map((message) => <em key={`follow:${message}`}>{t("稍后继续")} · {message}</em>)}<button type="button" onClick={props.onClearQueue}>{t("清空队列")}</button></div>}
         <form className="compact-composer" onSubmit={(event) => {
           event.preventDefault();
@@ -631,5 +691,16 @@ function ActiveConversation(props: NewChatViewProps) {
 }
 
 export function NewChatView(props: NewChatViewProps) {
-  return props.turns.length ? <ActiveConversation {...props} /> : <InitialComposer {...props} />;
+  const [selectedChangeId, setSelectedChangeId] = useState<string | null>(null);
+  const selectedChange = props.turns.flatMap((turn) => turn.fileChanges ?? []).find((change) => change.id === selectedChangeId);
+
+  useEffect(() => {
+    if (selectedChangeId && !selectedChange) setSelectedChangeId(null);
+  }, [selectedChange, selectedChangeId]);
+
+  if (!props.turns.length) return <InitialComposer {...props} />;
+  return <div className={`chat-workspace ${selectedChange ? "has-inspector" : ""}`}>
+    <ActiveConversation {...props} onOpenChange={(change) => setSelectedChangeId(change.id)} />
+    {selectedChange && <FileChangeInspector change={selectedChange} onClose={() => setSelectedChangeId(null)} />}
+  </div>;
 }
