@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentEvent, AuthEvent, ModelMetadataOverride, PiDesktopApi, PluginProgressEvent, SaveModelSettings, SendPromptInput, TerminalEvent } from "../src/contracts.js";
+import type { AgentEvent, AuthEvent, BrowserEvent, ModelMetadataOverride, PiDesktopApi, PluginProgressEvent, SaveModelSettings, SendPromptInput, TerminalEvent } from "../src/contracts.js";
 
 const api: PiDesktopApi = {
   settings: {
@@ -61,6 +61,23 @@ const api: PiDesktopApi = {
       const handler = (_event: Electron.IpcRendererEvent, payload: TerminalEvent) => listener(payload);
       ipcRenderer.on("terminal:event", handler);
       return () => ipcRenderer.removeListener("terminal:event", handler);
+    },
+  },
+  browser: {
+    state: () => ipcRenderer.invoke("browser:state"),
+    navigate: (url) => ipcRenderer.invoke("browser:navigate", url),
+    back: () => ipcRenderer.invoke("browser:back"),
+    forward: () => ipcRenderer.invoke("browser:forward"),
+    reload: () => ipcRenderer.invoke("browser:reload"),
+    stop: () => ipcRenderer.invoke("browser:stop"),
+    setBounds: (bounds) => ipcRenderer.invoke("browser:set-bounds", bounds),
+    setVisible: (visible) => ipcRenderer.invoke("browser:set-visible", visible),
+    startAnnotation: (prompt) => ipcRenderer.invoke("browser:start-annotation", prompt),
+    cancelAnnotation: () => ipcRenderer.invoke("browser:cancel-annotation"),
+    onEvent: (listener: (event: BrowserEvent) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: BrowserEvent) => listener(payload);
+      ipcRenderer.on("browser:event", handler);
+      return () => ipcRenderer.removeListener("browser:event", handler);
     },
   },
   plugins: {

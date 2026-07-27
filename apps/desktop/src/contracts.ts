@@ -365,6 +365,65 @@ export type ConversationExport = {
   content: string;
 };
 
+export type BrowserBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type BrowserState = {
+  url: string;
+  title: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  visible: boolean;
+  annotating: boolean;
+  error?: string;
+};
+
+export type BrowserAnnotationElement = {
+  index: number;
+  tag: string;
+  selector: string;
+  id?: string;
+  classes: string[];
+  text?: string;
+  comment?: string;
+  rect: { x: number; y: number; width: number; height: number };
+  attributes: Record<string, string>;
+  styles: Record<string, string>;
+  accessibility: {
+    role?: string;
+    name?: string;
+    focusable: boolean;
+    disabled: boolean;
+  };
+};
+
+export type BrowserAnnotationResult = {
+  success: boolean;
+  cancelled?: boolean;
+  reason?: string;
+  url: string;
+  title: string;
+  prompt?: string;
+  viewport: { width: number; height: number; deviceScaleFactor: number };
+  elements: BrowserAnnotationElement[];
+  screenshotPath?: string;
+};
+
+export type BrowserAnnotationCapture = {
+  result: BrowserAnnotationResult;
+  markdown: string;
+};
+
+export type BrowserEvent = {
+  type: "state";
+  state: BrowserState;
+};
+
 export type PluginResourceType = "extensions" | "skills" | "prompts" | "themes";
 export type PluginRiskTier = "low" | "medium" | "high" | "blocked";
 export type PluginManifest = Partial<Record<PluginResourceType, string[]>>;
@@ -521,6 +580,19 @@ export type PiDesktopApi = {
     resize(id: string, cols: number, rows: number): Promise<void>;
     kill(id: string): Promise<void>;
     onEvent(listener: (event: TerminalEvent) => void): () => void;
+  };
+  browser: {
+    state(): Promise<BrowserState>;
+    navigate(url: string): Promise<BrowserState>;
+    back(): Promise<BrowserState>;
+    forward(): Promise<BrowserState>;
+    reload(): Promise<BrowserState>;
+    stop(): Promise<BrowserState>;
+    setBounds(bounds: BrowserBounds): Promise<void>;
+    setVisible(visible: boolean): Promise<BrowserState>;
+    startAnnotation(prompt?: string): Promise<BrowserAnnotationCapture>;
+    cancelAnnotation(): Promise<void>;
+    onEvent(listener: (event: BrowserEvent) => void): () => void;
   };
   plugins: {
     search(query: string, offset?: number): Promise<PluginSearchResult>;

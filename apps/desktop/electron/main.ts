@@ -17,6 +17,7 @@ import { ResourceStore } from "./resource-store.js";
 import { McpStore } from "./mcp-store.js";
 import { McpService } from "./mcp-service.js";
 import { TerminalService } from "./terminal-service.js";
+import { BrowserService } from "./browser-service.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
@@ -25,6 +26,7 @@ let authService: AuthService | undefined;
 let pluginService: PluginService | undefined;
 let mcpService: McpService | undefined;
 let terminalService: TerminalService | undefined;
+let browserService: BrowserService | undefined;
 
 app.setName("Pi Forge");
 app.setPath("userData", process.env.PI_DESKTOP_USER_DATA
@@ -148,6 +150,7 @@ function registerIpc(
   resources: ResourceStore,
   mcp: McpService,
   terminal: TerminalService,
+  browser: BrowserService,
 ): void {
   ipcMain.handle("settings:get", () => settingsWithCredentials(settings, credentials));
   ipcMain.handle("settings:catalog", () => agent.getModelCatalog());
@@ -281,6 +284,29 @@ function registerIpc(
     terminal.resize(requireString(id, "终端会话无效。"), cols, rows);
   });
   ipcMain.handle("terminal:kill", (_event, id: unknown) => terminal.kill(requireString(id, "终端会话无效。")));
+  ipcMain.handle("browser:state", () => browser.state());
+  ipcMain.handle("browser:navigate", (_event, url: unknown) => browser.navigate(requireString(url, "浏览器地址无效。")));
+  ipcMain.handle("browser:back", () => browser.back());
+  ipcMain.handle("browser:forward", () => browser.forward());
+  ipcMain.handle("browser:reload", () => browser.reload());
+  ipcMain.handle("browser:stop", () => browser.stop());
+  ipcMain.handle("browser:set-visible", (_event, visible: unknown) => {
+    if (typeof visible !== "boolean") throw new Error("浏览器可见状态无效。");
+    return browser.setVisible(visible);
+  });
+  ipcMain.handle("browser:set-bounds", (_event, value: unknown) => {
+    if (!value || typeof value !== "object") throw new Error("浏览器视图尺寸无效。");
+    const bounds = value as Record<string, unknown>;
+    if ([bounds.x, bounds.y, bounds.width, bounds.height].some((entry) => typeof entry !== "number" || !Number.isFinite(entry))) {
+      throw new Error("浏览器视图尺寸无效。");
+    }
+    browser.setBounds(bounds as { x: number; y: number; width: number; height: number });
+  });
+  ipcMain.handle("browser:start-annotation", (_event, prompt: unknown) => browser.startAnnotation(
+    undefined,
+    typeof prompt === "string" ? prompt : "",
+  ));
+  ipcMain.handle("browser:cancel-annotation", () => browser.cancelAnnotation());
   ipcMain.handle("plugins:search", (_event, query: unknown, offset: unknown) => {
     return plugins.search(typeof query === "string" ? query : "", typeof offset === "number" ? offset : 0);
   });
@@ -474,6 +500,11 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   const mcpStore = new McpStore(userData);
   mcpService = new McpService(mcpStore, resources);
   terminalService = new TerminalService(chatSandbox, (event) => mainWindow?.webContents.send("terminal:event", event));
+  browserService = new BrowserService(
+    () => mainWindow,
+    path.join(app.getPath("temp"), "pi-desktop-browser"),
+    (event) => mainWindow?.webContents.send("browser:event", event),
+  );
   const systemPrompt = new SystemPromptStore(path.join(userData, "pi-agent"));
   try {
     await migrateLegacyApiKeys(settings, credentials);
@@ -494,6 +525,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
     resources,
     mcpService,
     pluginSecurity,
+    browserService,
   );
   authService = new AuthService(
     credentials,
@@ -507,7 +539,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
     (event) => mainWindow?.webContents.send("plugins:event", event),
     { securityStore: pluginSecurity },
   );
-  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata, resources, mcpService, terminalService);
+  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata, resources, mcpService, terminalService, browserService);
   mainWindow = createWindow();
 
   app.on("second-instance", () => {
@@ -534,4 +566,5 @@ app.on("before-quit", () => {
   agentService?.dispose();
   void mcpService?.dispose();
   terminalService?.dispose();
+  browserService?.dispose();
 });

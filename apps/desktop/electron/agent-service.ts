@@ -52,6 +52,7 @@ import {
 } from "./model-metadata-catalog.js";
 import { ModelMetadataStore } from "./model-metadata-store.js";
 import type { McpService } from "./mcp-service.js";
+import type { BrowserDebugPort } from "./browser-service.js";
 
 type EventSink = (event: AgentEvent) => void;
 
@@ -317,6 +318,7 @@ export class AgentService {
     },
     private readonly mcp?: McpService,
     private readonly pluginSecurity?: PluginSecurityReader,
+    private readonly browser?: BrowserDebugPort,
   ) {}
 
   async getModelCatalog(allowNetwork = true): Promise<ProviderCatalogEntry[]> {
@@ -1327,6 +1329,32 @@ export class AgentService {
       },
     });
 
+    const browserAnnotate = this.browser ? defineTool({
+      name: "browser_annotate",
+      label: "Visual browser annotation",
+      description:
+        "Open Pi Desktop's built-in browser annotation mode and wait for the user to select UI elements. "
+        + "Returns selectors, DOM attributes, accessibility data, computed styles, comments, and a screenshot path. "
+        + "Use when the user asks to visually debug, inspect, annotate, or point out a frontend issue.",
+      promptSnippet: "Let the user visually annotate a page in Pi Desktop's built-in browser",
+      promptGuidelines: [
+        "Use browser_annotate only for explicit visual debugging or annotation requests.",
+        "After it returns, inspect the screenshot path with the read tool when visual evidence is useful.",
+      ],
+      parameters: Type.Object({
+        url: Type.Optional(Type.String({ description: "HTTP(S) URL to open before annotation. Omit to use the current built-in browser page." })),
+        prompt: Type.Optional(Type.String({ description: "Short context shown in the annotation panel." })),
+      }),
+      executionMode: "sequential",
+      execute: async (_toolCallId, params, signal) => {
+        const capture = await this.browser!.startAnnotation(params.url, params.prompt ?? "", signal);
+        return {
+          content: [{ type: "text", text: capture.markdown }],
+          details: capture.result,
+        };
+      },
+    }) : undefined;
+
     const mcpTools = this.mcp ? await this.mcp.tools(cwd) : [];
     const adaptedMcpTools = mcpTools.map((descriptor) => defineTool({
       name: descriptor.name,
@@ -1346,7 +1374,7 @@ export class AgentService {
       },
     }));
 
-    return [askUser, spawnSubagent, ...adaptedMcpTools];
+    return [askUser, spawnSubagent, ...(browserAnnotate ? [browserAnnotate] : []), ...adaptedMcpTools];
   }
 
   private applyToolPolicy(session: AgentSession): void {

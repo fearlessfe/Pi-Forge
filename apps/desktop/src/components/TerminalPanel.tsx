@@ -1,13 +1,15 @@
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { Plus, SquareTerminal, X } from "lucide-react";
+import { Globe2, Plus, SquareTerminal, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { TerminalEvent, TerminalSessionInfo } from "../contracts";
 import { useI18n } from "../i18n";
+import { detectLocalServiceUrls } from "../terminal-urls";
 
 type TerminalPanelProps = {
   cwd?: string;
   onClose: () => void;
+  onOpenInBrowser: (url: string) => void;
 };
 
 function errorMessage(error: unknown): string {
@@ -76,19 +78,30 @@ function TerminalPane({ session, active, register }: {
   return <div className={`terminal-pane ${active ? "is-active" : ""}`} ref={host} aria-hidden={!active} />;
 }
 
-export function TerminalPanel({ cwd, onClose }: TerminalPanelProps) {
+export function TerminalPanel({ cwd, onClose, onOpenInBrowser }: TerminalPanelProps) {
   const { t } = useI18n();
   const [sessions, setSessions] = useState<TerminalSessionInfo[]>([]);
   const [activeId, setActiveId] = useState<string>();
   const [error, setError] = useState("");
+  const [serviceUrls, setServiceUrls] = useState<Record<string, string[]>>({});
   const terminals = useRef(new Map<string, Terminal>());
   const pendingOutput = useRef(new Map<string, string>());
+  const urlScanBuffers = useRef(new Map<string, string>());
 
   useEffect(() => {
     let cancelled = false;
     const unsubscribe = window.piDesktop?.terminal.onEvent((event: TerminalEvent) => {
       if (cancelled) return;
       if (event.type === "terminal.data") {
+        const scanBuffer = `${urlScanBuffers.current.get(event.id) ?? ""}${event.data}`.slice(-4_096);
+        urlScanBuffers.current.set(event.id, scanBuffer);
+        const detectedUrls = detectLocalServiceUrls(scanBuffer);
+        if (detectedUrls.length > 0) {
+          setServiceUrls((current) => {
+            const next = [...new Set([...(current[event.id] ?? []), ...detectedUrls])];
+            return next.length === (current[event.id]?.length ?? 0) ? current : { ...current, [event.id]: next };
+          });
+        }
         const terminal = terminals.current.get(event.id);
         if (terminal) terminal.write(event.data);
         else pendingOutput.current.set(event.id, `${pendingOutput.current.get(event.id) ?? ""}${event.data}`.slice(-1_000_000));
@@ -139,6 +152,13 @@ export function TerminalPanel({ cwd, onClose }: TerminalPanelProps) {
   async function closeTerminal(id: string) {
     await window.piDesktop?.terminal.kill(id).catch((caught: unknown) => setError(errorMessage(caught)));
     pendingOutput.current.delete(id);
+    urlScanBuffers.current.delete(id);
+    setServiceUrls((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
     setSessions((current) => {
       const next = current.filter((session) => session.id !== id);
       setActiveId((active) => active === id ? next[0]?.id : active);
@@ -159,9 +179,14 @@ export function TerminalPanel({ cwd, onClose }: TerminalPanelProps) {
     }
   }
 
+  const activeServiceUrl = activeId ? serviceUrls[activeId]?.at(-1) : undefined;
+
   return <section className="terminal-panel" aria-label={t("集成终端")}>
     <header className="terminal-panel-header">
       <span><SquareTerminal size={15} /><strong>{t("终端")}</strong><small>{t("由你直接控制；不经过 Agent 权限与沙箱策略")}</small></span>
+      {activeServiceUrl && <button className="terminal-browser-button" type="button" onClick={() => onOpenInBrowser(activeServiceUrl)} title={activeServiceUrl}>
+        <Globe2 size={13} /><span>{t("在内置浏览器中打开")}</span><code>{new URL(activeServiceUrl).port}</code>
+      </button>}
       <button type="button" onClick={() => void createTerminal()} aria-label={t("新建终端")}><Plus size={14} /></button>
       <button type="button" onClick={onClose} aria-label={t("关闭终端面板")}><X size={14} /></button>
     </header>

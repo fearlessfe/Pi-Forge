@@ -4,6 +4,7 @@ import { ConversationSidebar } from "./components/ConversationSidebar";
 import { NewChatView } from "./components/NewChatView";
 import { PluginCenterView } from "./components/PluginCenterView";
 import { SettingsView } from "./components/SettingsView";
+import { BrowserWorkbench } from "./components/BrowserWorkbench";
 import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
 import { appendMessageDelta } from "./conversation-activity";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
@@ -213,6 +214,7 @@ export function App() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [browserOpen, setBrowserOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -259,9 +261,16 @@ export function App() {
         setNotice({ title: t("登录失败"), message: event.message, type: "info" });
       }
     });
+    const unsubscribeBrowser = window.piDesktop?.browser?.onEvent((event) => {
+      if (event.state.annotating) {
+        setView("chat");
+        setBrowserOpen(true);
+      }
+    });
     return () => {
       unsubscribeAgent?.();
       unsubscribeAuth?.();
+      unsubscribeBrowser?.();
     };
   }, [language]);
 
@@ -329,9 +338,10 @@ export function App() {
 
   const title = useMemo(() => {
     if (view === "settings") return t("设置");
+    if (browserOpen) return t("内置浏览器");
     if (view === "plugins") return t("插件中心");
     return project?.name ?? t("新建对话");
-  }, [project, t, view]);
+  }, [browserOpen, project, t, view]);
   const isRunning = commandRunning || turns.some((turn) => turn.status === "running");
   const configuredModelProviders = useMemo(() => {
     const configured = new Set(modelSettings.configuredProviders);
@@ -352,10 +362,16 @@ export function App() {
     setPrompt("");
   }
 
+  function closeBuiltInBrowser() {
+    setBrowserOpen(false);
+    void window.piDesktop?.browser.cancelAnnotation();
+  }
+
   function startNewChat() {
     if (selectedConversationId) {
       setConversationContexts((current) => ({ ...current, [selectedConversationId]: contextUsage }));
     }
+    closeBuiltInBrowser();
     setView("chat");
     setProject(null);
     setWorkspaceTrust(undefined);
@@ -368,6 +384,7 @@ export function App() {
     if (selectedConversationId) {
       setConversationContexts((current) => ({ ...current, [selectedConversationId]: contextUsage }));
     }
+    closeBuiltInBrowser();
     setView("chat");
     setProject(projects.find((entry) => entry.id === nextProject.id) ?? nextProject);
     void refreshWorkspaceTrust(nextProject.path);
@@ -493,6 +510,7 @@ export function App() {
   }
 
   async function openConversation(conversationId: string, nextProject?: Project) {
+    closeBuiltInBrowser();
     if (conversationId === selectedConversationId) {
       setView("chat");
       return;
@@ -867,6 +885,16 @@ export function App() {
     setAuthFlow(null);
   }
 
+  function openBuiltInBrowser(url?: string) {
+    setView("chat");
+    setBrowserOpen(true);
+    if (url) {
+      void window.piDesktop?.browser.navigate(url).catch((error: unknown) => {
+        setNotice({ title: t("无法打开内置浏览器"), message: eventError(error), type: "info" });
+      });
+    }
+  }
+
   async function logoutProvider(providerId: string) {
     if (!window.piDesktop?.auth) throw new Error("OAuth 模块尚未加载，请重新启动 Pi Desktop。");
     await window.piDesktop.auth.logout(providerId);
@@ -922,12 +950,12 @@ export function App() {
               onDeleteConversation={deleteConversation}
               conversationActionsDisabled={isRunning}
               onAddProject={() => void chooseWorkspace()}
-              onOpenSettings={() => { setSettingsSection("models"); setView("settings"); }}
-              onOpenPlugins={() => setView("plugins")}
+              onOpenSettings={() => { closeBuiltInBrowser(); setSettingsSection("models"); setView("settings"); }}
+              onOpenPlugins={() => { closeBuiltInBrowser(); setView("plugins"); }}
               onOpenPet={() => setNotice({ title: t("Pi 宠物"), message: t("陪伴模式将在后续版本接入。"), type: "info" })}
             />
-            {view === "chat" ? (
-              <main className="chat-main">
+            <div className="workspace-main">
+              {view === "chat" ? <main className="chat-main">
                 <NewChatView
                   project={project}
                   turns={turns}
@@ -953,11 +981,18 @@ export function App() {
                   onForkTurn={(entryId) => selectedConversationId ? void forkConversation(selectedConversationId, project ?? undefined, entryId) : undefined}
                   onAnswerQuestion={(turnId, callId, answer) => void answerQuestion(turnId, callId, answer)}
                 />
-                {terminalOpen && <Suspense fallback={<div className="terminal-panel terminal-loading">{t("正在启动终端…")}</div>}><TerminalPanel cwd={project?.path} onClose={() => setTerminalOpen(false)} /></Suspense>}
+                {terminalOpen && <Suspense fallback={<div className="terminal-panel terminal-loading">{t("正在启动终端…")}</div>}><TerminalPanel cwd={project?.path} onClose={() => setTerminalOpen(false)} onOpenInBrowser={openBuiltInBrowser} /></Suspense>}
               </main>
-            ) : (
-              <PluginCenterView agentRunning={isRunning} workspaceCwd={workspaceTrust?.path} />
-            )}
+              : <PluginCenterView agentRunning={isRunning} workspaceCwd={workspaceTrust?.path} />}
+              {browserOpen && <BrowserWorkbench
+                agentRunning={isRunning}
+                onClose={closeBuiltInBrowser}
+                onSendToAgent={(markdown) => {
+                  closeBuiltInBrowser();
+                  void sendQuestion(markdown);
+                }}
+              />}
+            </div>
           </div>
         ) : (
           <SettingsView
