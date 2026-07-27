@@ -198,4 +198,187 @@ describe("PluginService", () => {
     service.setEnabled("npm:pi-theme@1.4.0", false);
     expect(securityStore.isEnabled("npm:pi-theme@1.4.0")).toBe(false);
   });
+
+  it("normalizes diverse registry metadata and assigns conservative risk tiers", async () => {
+    const fetchMock = vi.fn(async () => response({
+      total: "unknown",
+      objects: [
+        {
+          package: {
+            name: "pi-legacy",
+            version: "1.0.0",
+            description: "  Legacy plugin  ",
+            keywords: "utility, pi-package",
+            author: "Legacy Author",
+            repository: "git+https://github.com/demo/pi-legacy.git",
+            readme: "# Package\n\nNo usage section.",
+          },
+        },
+        {
+          package: {
+            name: "pi-theme",
+            version: "2.0.0",
+            keywords: ["pi-package", 3],
+            publisher: { name: "Theme Publisher" },
+            pi: { themes: ["./themes"] },
+            dist: { shasum: "abc" },
+            links: { homepage: "https://example.com/theme" },
+            downloads: { weekly: 44, monthly: 200 },
+          },
+          downloads: { weekly: Number.NaN, monthly: 250 },
+        },
+        {
+          package: {
+            name: "pi-skill",
+            version: "3.0.0",
+            keywords: ["PI-PACKAGE"],
+            author: { name: "Skill Author" },
+            pi: { skills: ["./skills"], prompts: ["!./optional-prompt.md"] },
+            dist: { integrity: "sha512-skill" },
+            repository: { url: "https://github.com/demo/pi-skill.git" },
+          },
+          score: { final: 0.8 },
+        },
+        {
+          package: {
+            name: "pi-blocked",
+            version: "1.0.0",
+            keywords: ["pi-package"],
+            insecure: true,
+            pi: {},
+            dist: { integrity: "sha512-blocked" },
+          },
+        },
+        { package: { version: "1.0.0", keywords: ["pi-package"] } },
+        {},
+      ],
+    }));
+    const service = new PluginService("/agent", "/cwd", () => {}, {
+      fetch: fetchMock as typeof fetch,
+      registryUrl: "https://registry.example/",
+      packageManager: fakePackageManager(),
+    });
+
+    const result = await service.search("   ", -20);
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/^https:\/\/registry\.example\/-\/v1\/search\?/));
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("from=0"));
+    expect(result).toMatchObject({ total: 4, offset: 0 });
+    expect(result.packages).toEqual([
+      expect.objectContaining({
+        name: "pi-legacy",
+        description: "Legacy plugin",
+        publisher: "Legacy Author",
+        repositoryUrl: "https://github.com/demo/pi-legacy",
+        usage: undefined,
+        riskTier: "high",
+        compatibility: "unknown",
+      }),
+      expect.objectContaining({
+        name: "pi-theme",
+        publisher: "Theme Publisher",
+        weeklyDownloads: 44,
+        monthlyDownloads: 250,
+        riskTier: "low",
+        compatibility: "desktop",
+      }),
+      expect.objectContaining({
+        name: "pi-skill",
+        publisher: "Skill Author",
+        score: 0.8,
+        riskTier: "medium",
+        repositoryUrl: "https://github.com/demo/pi-skill",
+      }),
+      expect.objectContaining({ name: "pi-blocked", insecure: true, riskTier: "blocked" }),
+    ]);
+  });
+
+  it("rejects unsafe registry responses and rolls back unverifiable installs", async () => {
+    const manager = fakePackageManager({ extensions: ["./extension.ts"] });
+    const securityStore = new PluginSecurityStore(tempDirectory("plugin-rollback-security"));
+    const responses = [
+      response({}, 404),
+      response({}, 503),
+      response({ version: "1.0.0", keywords: ["pi-package"] }),
+      response({ name: "different-name", version: "1.0.0", keywords: ["pi-package"] }),
+      response({ name: "pi-mismatch", version: "2.0.0", keywords: ["pi-package"] }),
+      response({ name: "pi-blocked", version: "1.0.0", keywords: ["pi-package"], insecure: true }),
+      response({ name: "pi-tampered", version: "1.0.0", keywords: ["pi-package"], pi: { themes: ["./themes"] }, dist: { integrity: "sha512-ok" } }),
+    ];
+    const service = new PluginService("/agent", "/cwd", () => {}, {
+      fetch: (async () => responses.shift()!) as typeof fetch,
+      packageManager: manager,
+      securityStore,
+    });
+
+    await expect(service.details("bad/name", "latest")).rejects.toThrow("包名无效");
+    await expect(service.details("pi-safe", "bad version")) .rejects.toThrow("版本无效");
+    await expect(service.details("pi-missing")).rejects.toThrow("没有找到");
+    await expect(service.details("pi-error")).rejects.toThrow("HTTP 503");
+    await expect(service.details("pi-incomplete")).rejects.toThrow("元数据不完整");
+    await expect(service.details("pi-expected", "1.0.0")).rejects.toThrow("不匹配的包名");
+    await expect(service.details("pi-mismatch", "1.0.0")).rejects.toThrow("不匹配的版本");
+    await expect(service.install("pi-blocked", "1.0.0")).rejects.toThrow("安全风险");
+    await expect(service.install("pi-tampered", "1.0.0")).rejects.toThrow("校验失败");
+    expect(manager.removeAndPersist).toHaveBeenCalledWith("npm:pi-tampered@1.0.0");
+    expect(securityStore.list()).toEqual([]);
+  });
+
+  it("removes installed plugins and validates enablement scope", async () => {
+    const manager = fakePackageManager({ themes: ["./themes"] });
+    const securityStore = new PluginSecurityStore(tempDirectory("plugin-remove-security"));
+    const service = new PluginService("/agent", "/cwd", () => {}, {
+      fetch: (async () => response({
+        name: "pi-removable",
+        version: "1.0.0",
+        keywords: ["pi-package"],
+        pi: { themes: ["./themes"] },
+        dist: { integrity: "sha512-remove" },
+      })) as typeof fetch,
+      packageManager: manager,
+      securityStore,
+    });
+
+    await expect(service.remove("file:plugin")).rejects.toThrow("只能移除");
+    await expect(service.remove("npm:missing@1.0.0")).rejects.toThrow("未安装");
+    expect(() => service.setEnabled("npm:missing@1.0.0", false)).toThrow("未安装");
+    await service.install("pi-removable", "1.0.0");
+    expect(() => service.setEnabled("npm:pi-removable@1.0.0", false, undefined, "project")).toThrow("需要工作区路径");
+    await expect(service.remove("npm:pi-removable@1.0.0")).resolves.toEqual([]);
+    expect(securityStore.get("npm:pi-removable@1.0.0")).toBeUndefined();
+    service.dispose();
+    expect(manager.progress).toBeUndefined();
+  });
+
+  it("reports legacy unpinned plugin records with missing install directories", () => {
+    let progress: ProgressCallback | undefined;
+    const manager: PackageManagerPort = {
+      setProgressCallback(callback) { progress = callback; },
+      listConfiguredPackages: () => [
+        { source: "npm:legacy-plugin", scope: "user", filtered: false },
+        { source: "npm:project-only@1.0.0", scope: "project", filtered: false },
+        { source: "git:https://example.com/plugin", scope: "user", filtered: false },
+      ],
+      getInstalledPath: () => undefined,
+      installAndPersist: vi.fn(),
+      removeAndPersist: vi.fn(),
+    };
+    const service = new PluginService("/agent", "/cwd", () => {}, {
+      packageManager: manager,
+      securityStore: new PluginSecurityStore(tempDirectory("legacy-missing-security")),
+    });
+
+    expect(progress).toEqual(expect.any(Function));
+    expect(service.listInstalled("/cwd")).toEqual([expect.objectContaining({
+      source: "npm:legacy-plugin",
+      name: "legacy-plugin",
+      version: undefined,
+      installed: false,
+      enabled: true,
+      projectEnabled: true,
+      provenance: "legacy",
+      riskTier: "high",
+      resources: [],
+      verification: "missing",
+    })]);
+  });
 });

@@ -101,4 +101,98 @@ describe("McpStore", () => {
     });
     expect(cleared.hasCredentials).toBe(false);
   });
+
+  it("rejects malformed identities, timeouts, environments, headers, and transports", () => {
+    const store = new McpStore(directory("validation"), encryption);
+    const base = {
+      id: "valid-id",
+      name: "Valid",
+      scope: "user" as const,
+      enabled: true,
+      timeoutMs: 5_000,
+      transport: { type: "stdio" as const, command: "node", args: [], environment: {} },
+    };
+
+    expect(() => store.save({ ...base, id: " invalid id " })).toThrow("ID 只能包含");
+    expect(() => store.save({ ...base, name: " " })).toThrow("名称不能为空");
+    expect(() => store.save({ ...base, scope: "invalid" as "user" })).toThrow("作用域无效");
+    expect(() => store.save({ ...base, scope: "project", projectPath: "relative" })).toThrow("有效的项目路径");
+    expect(() => store.save({ ...base, enabled: "yes" as unknown as boolean })).toThrow("启用状态无效");
+    expect(() => store.save({ ...base, timeoutMs: 999 })).toThrow("介于 1 秒");
+    expect(() => store.save({ ...base, transport: { type: "stdio", command: "bad\ncommand", args: [], environment: {} } })).toThrow("stdio 命令无效");
+    expect(() => store.save({ ...base, transport: { type: "stdio", command: "node", args: ["bad\0arg"], environment: {} } })).toThrow("stdio 参数无效");
+    expect(() => store.save({ ...base, transport: { type: "stdio", command: "node", args: [], environment: { "BAD-KEY": "x" } } })).toThrow("环境变量字段无效");
+    expect(() => store.save({ ...base, transport: { type: "streamable-http", url: "file:///tmp/server", headers: {} } })).toThrow("必须使用 http/https");
+    expect(() => store.save({ ...base, transport: { type: "streamable-http", url: "not a url", headers: {} } })).toThrow("URL 无效");
+    expect(() => store.save({ ...base, transport: { type: "streamable-http", url: "https://example.com", headers: { "bad header": "x" } } })).toThrow("请求头字段无效");
+    expect(() => store.save({ ...base, transport: { type: "unknown" } as never })).toThrow("传输类型无效");
+    expect(() => store.save(null as never)).toThrow("配置格式无效");
+  });
+
+  it("renames and removes servers without orphaning encrypted credentials", () => {
+    const userData = directory("rename");
+    const store = new McpStore(userData, encryption);
+    const original = store.save({
+      id: "old-id",
+      name: "Original",
+      scope: "user",
+      enabled: true,
+      timeoutMs: 5_000,
+      transport: { type: "stdio", command: "node", args: [], environment: {} },
+      secretEnvironment: { TOKEN: "rename-secret" },
+    });
+    const renamed = store.save({
+      previousKey: original.key,
+      id: "new-id",
+      name: "Renamed",
+      scope: "user",
+      enabled: true,
+      timeoutMs: 5_000,
+      transport: { type: "stdio", command: "node", args: [], environment: {} },
+    });
+
+    expect(store.list()).toEqual([expect.objectContaining({ id: "new-id", hasCredentials: true })]);
+    expect(store.resolved(renamed).secrets.environment).toEqual({ TOKEN: "rename-secret" });
+    store.remove(renamed.key);
+    expect(store.list()).toEqual([]);
+    expect(fs.existsSync(path.join(userData, "mcp-credentials.enc.json"))).toBe(false);
+    expect(() => store.remove("user:missing")).toThrow("找不到该 MCP Server");
+  });
+
+  it("recovers valid records from partially corrupted configuration files", () => {
+    const userData = directory("corruption");
+    fs.writeFileSync(path.join(userData, "mcp-servers.json"), JSON.stringify({
+      version: 1,
+      servers: [
+        { id: "valid", name: "Valid", enabled: true, timeoutMs: 5_000, transport: { type: "stdio", command: "node", args: [], environment: {} } },
+        { id: "bad id", name: "Bad", enabled: true, timeoutMs: 5_000, transport: { type: "stdio", command: "node", args: [], environment: {} } },
+      ],
+    }));
+    const store = new McpStore(userData, encryption);
+    expect(store.list()).toEqual([expect.objectContaining({ id: "valid" })]);
+
+    fs.writeFileSync(path.join(userData, "mcp-servers.json"), "not-json");
+    expect(store.list()).toEqual([]);
+    fs.writeFileSync(path.join(userData, "mcp-servers.json"), JSON.stringify({ version: 2, servers: [] }));
+    expect(store.list()).toEqual([]);
+  });
+
+  it("refuses to persist secrets when operating-system encryption is unavailable", () => {
+    const userData = directory("unencrypted");
+    const unavailable: McpStorageEncryption = {
+      isEncryptionAvailable: () => false,
+      encryptString: (value) => Buffer.from(value),
+      decryptString: (value) => value.toString("utf8"),
+    };
+    const store = new McpStore(userData, unavailable);
+    expect(() => store.save({
+      id: "secret",
+      name: "Secret",
+      scope: "user",
+      enabled: true,
+      timeoutMs: 5_000,
+      transport: { type: "stdio", command: "node", args: [], environment: {} },
+      secretEnvironment: { TOKEN: "secret" },
+    })).toThrow("安全存储当前不可用");
+  });
 });

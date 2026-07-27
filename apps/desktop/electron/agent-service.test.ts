@@ -5,7 +5,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage, ToolResultMessage, Usage, UserMessage } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, type AssistantMessage, type ToolResultMessage, type Usage, type UserMessage } from "@earendil-works/pi-ai";
 import type { AgentEvent, SaveModelSettings } from "../src/contracts.js";
 
 vi.mock("electron", () => ({
@@ -76,6 +76,8 @@ async function close(server: http.Server): Promise<void> {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   for (const directory of temporaryDirectories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 });
 
@@ -154,6 +156,138 @@ describe("AgentService with a real Pi session", () => {
     } finally {
       service.dispose();
       await close(server);
+    }
+  });
+
+  it("discovers Google and Anthropic model payload variants with provider-specific authentication", async () => {
+    const agentDir = createDirectory("multi-protocol-discovery-agent");
+    const workspace = createDirectory("multi-protocol-discovery-workspace");
+    const credentials = new InMemoryCredentialStore();
+    await credentials.modify("google-compatible", async () => ({ type: "api_key", key: "stored-google-key" }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ models: [
+        "models/gemini-string",
+        { name: "models/gemini-display", displayName: "Gemini Display", max_context_length: 32_000 },
+        { name: "models/gemini-display", displayName: "Duplicate" },
+        { id: " ", displayName: "Missing id" },
+        null,
+      ] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([
+        { id: "claude-custom", display_name: "Claude Custom", contextWindow: 48_000 },
+        { name: "claude-name", context_window: -1 },
+      ]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new AgentService(
+      { resolve: () => ({ provider: "google-compatible", baseUrl: "https://generativelanguage.example/v1beta", modelId: "gemini-display", thinkingLevel: "off" }) },
+      agentDir,
+      workspace,
+      () => {},
+      credentials,
+    );
+
+    try {
+      const google = await service.discoverModels({
+        provider: "google-compatible",
+        baseUrl: "https://generativelanguage.example/v1beta/?ignored=yes#fragment",
+        modelId: "gemini-display",
+        thinkingLevel: "off",
+      });
+      expect(google).toEqual([
+        expect.objectContaining({ id: "gemini-display", name: "Duplicate", contextWindow: 0 }),
+        expect.objectContaining({ id: "gemini-string", name: "gemini-string" }),
+      ]);
+      const [googleUrl, googleRequest] = fetchMock.mock.calls[0] as [URL, RequestInit];
+      expect(googleUrl.toString()).toBe("https://generativelanguage.example/v1beta/models");
+      expect(googleRequest.headers).toMatchObject({ "x-goog-api-key": "stored-google-key" });
+
+      const anthropic = await service.discoverModels({
+        provider: "anthropic-compatible",
+        baseUrl: "https://anthropic.example/api",
+        modelId: "claude-custom",
+        thinkingLevel: "off",
+        apiKey: " anthropic-key ",
+      });
+      expect(anthropic).toEqual([
+        expect.objectContaining({ id: "claude-custom", name: "Claude Custom", contextWindow: 48_000 }),
+        expect.objectContaining({ id: "claude-name", name: "claude-name", contextWindow: 0 }),
+      ]);
+      const [anthropicUrl, anthropicRequest] = fetchMock.mock.calls[1] as [URL, RequestInit];
+      expect(anthropicUrl.toString()).toBe("https://anthropic.example/api/v1/models");
+      expect(anthropicRequest.headers).toMatchObject({ "x-api-key": "anthropic-key", "anthropic-version": "2023-06-01" });
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("reports actionable model discovery failures without persisting bad responses", async () => {
+    const agentDir = createDirectory("discovery-errors-agent");
+    const workspace = createDirectory("discovery-errors-workspace");
+    const configuration: SaveModelSettings = {
+      provider: "openai-compatible",
+      baseUrl: "https://models.example/v1",
+      modelId: "model",
+      thinkingLevel: "off",
+    };
+    const service = new AgentService({ resolve: () => ({ ...configuration }) }, agentDir, workspace, () => {});
+    const abortError = new Error("request aborted");
+    abortError.name = "AbortError";
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(abortError)
+      .mockRejectedValueOnce("socket closed")
+      .mockResolvedValueOnce(new Response("denied", { status: 401 }))
+      .mockResolvedValueOnce(new Response("not-json", { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), { status: 200 }))
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => "x".repeat(10_000_001) } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await expect(service.discoverModels({ ...configuration, baseUrl: "not a URL" })).rejects.toThrow("有效的 API 地址");
+      await expect(service.discoverModels(configuration)).rejects.toThrow("获取模型超时");
+      await expect(service.discoverModels(configuration)).rejects.toThrow("无法连接模型端点：socket closed");
+      await expect(service.discoverModels(configuration)).rejects.toThrow("HTTP 401");
+      await expect(service.discoverModels(configuration)).rejects.toThrow("有效的 JSON");
+      await expect(service.discoverModels(configuration)).rejects.toThrow("没有找到任何模型");
+      await expect(service.discoverModels(configuration)).rejects.toThrow("响应过大");
+      await expect(service.discoverModels({ ...configuration, provider: "missing-provider" })).rejects.toThrow("不存在 provider");
+      await expect(service.discoverModels({ ...configuration, provider: "anthropic" })).resolves.toEqual(expect.any(Array));
+      expect(fs.existsSync(path.join(agentDir, "discovered-models.json"))).toBe(false);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("migrates trustworthy discovered-model metadata and ignores corrupted cache entries", async () => {
+    const agentDir = createDirectory("discovery-cache-agent");
+    fs.writeFileSync(path.join(agentDir, "discovered-models.json"), JSON.stringify({
+      version: 1,
+      providers: {
+        "openai-compatible": {
+          baseUrl: 123,
+          updatedAt: null,
+          models: [
+            { id: "unknown-model", name: "Unknown", reasoning: true, contextWindow: 128_000 },
+            { id: "gpt-5.6-sol", name: "GPT", reasoning: true, contextWindow: 128_000 },
+            { id: 3, name: "Invalid", reasoning: true },
+          ],
+        },
+        invalid: null,
+      },
+    }));
+    const service = new AgentService(
+      { resolve: () => ({ provider: "openai-compatible", baseUrl: "http://127.0.0.1:11434/v1", modelId: "unknown-model", thinkingLevel: "off" }) },
+      agentDir,
+      createDirectory("discovery-cache-workspace"),
+      () => {},
+    );
+
+    try {
+      const models = (await service.getModelCatalog(false)).find((provider) => provider.id === "openai-compatible")?.models ?? [];
+      expect(models.find((model) => model.id === "unknown-model")?.contextWindow).toBe(0);
+      expect(models.find((model) => model.id === "gpt-5.6-sol")?.contextWindow).toBe(1_050_000);
+      fs.writeFileSync(path.join(agentDir, "discovered-models.json"), "corrupted");
+      await expect(service.getModelCatalog(false)).resolves.toEqual(expect.any(Array));
+    } finally {
+      service.dispose();
     }
   });
 
@@ -441,6 +575,66 @@ describe("AgentService with a real Pi session", () => {
       const forkDetail = await service.loadConversation(fork.id);
       expect(forkDetail.turns).toHaveLength(1);
       expect(forkDetail.turns[0]).toMatchObject({ question: "find the hidden phrase", answer: "needle-in-the-history" });
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("enforces idle-state and conversation-management boundaries", async () => {
+    const cwd = createDirectory("public-contract-workspace");
+    const agentDir = createDirectory("public-contract-agent");
+    const sessionDir = createDirectory("public-contract-sessions");
+    const manager = SessionManager.create(cwd, sessionDir, { id: "contract-conversation" });
+    manager.appendMessage({ role: "user", content: [{ type: "text", text: "contract question" }, { type: "image", data: "ignored", mimeType: "image/png" }] as UserMessage["content"], timestamp: 1 } satisfies UserMessage);
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "contract answer" }],
+      api: "openai-completions",
+      provider: "openai-compatible",
+      model: "mock-model",
+      usage: usage(1, 1, 0),
+      stopReason: "stop",
+      timestamp: 2,
+    } satisfies AssistantMessage);
+    const service = new AgentService(
+      { resolve: () => ({ provider: "openai-compatible", baseUrl: "http://127.0.0.1:11434/v1", modelId: "mock-model", thinkingLevel: "off" }) },
+      agentDir,
+      cwd,
+      () => {},
+      undefined,
+      undefined,
+      sessionDir,
+    );
+
+    try {
+      await expect(service.loadConversation("missing")).rejects.toThrow("找不到该会话");
+      await expect(service.renameConversation("contract-conversation", "   ")).rejects.toThrow("不能为空");
+      await expect(service.renameConversation("contract-conversation", "x".repeat(61))).rejects.toThrow("不能超过 60");
+      await expect(service.renameConversation("missing", "Valid")).rejects.toThrow("找不到该会话");
+      await expect(service.deleteConversation("missing")).rejects.toThrow("找不到该会话");
+      await expect(service.setConversationTags("contract-conversation", Array.from({ length: 9 }, (_, index) => `tag-${index}`))).rejects.toThrow("最多设置 8 个标签");
+      await expect(service.setConversationTags("contract-conversation", ["x".repeat(25)])).rejects.toThrow("不超过 24");
+      await expect(service.forkConversation("contract-conversation", "missing-entry")).rejects.toThrow("节点不存在");
+      const fork = await service.forkConversation("contract-conversation");
+      expect(fork.parentConversationId).toBe("contract-conversation");
+
+      expect(await service.executeExtensionCommand("not a command", cwd)).toBe(false);
+      await expect(service.queueMessage("later", "steer")).rejects.toThrow("没有正在运行");
+      expect(service.clearQueue()).toEqual({ steering: [], followUp: [] });
+      expect(service.listChanges()).toEqual([]);
+      expect(service.acceptChanges()).toEqual([]);
+      expect(service.revertChanges()).toEqual([]);
+      expect(service.getPermissionRuntime()).toMatchObject({ platform: process.platform, sandbox: expect.stringMatching(/available|unavailable/) });
+      expect(service.getPluginRuntime()).toMatchObject({ hasSession: false, effectiveSubagent: { kind: "pending" } });
+      expect(await service.reloadPackages()).toBe(false);
+      expect(service.refreshCapabilities()).toMatchObject({ hasSession: false });
+      expect(() => service.answerQuestion("missing", "answer")).toThrow("已失效");
+      await service.abort();
+
+      const inventory = await service.getResourceInventory(cwd);
+      expect(inventory).toMatchObject({ cwd: path.resolve(cwd), commands: expect.any(Array), skills: expect.any(Array) });
+      await expect(service.getResourceInventory(path.join(cwd, "missing"))).rejects.toThrow("工作目录不存在");
+      service.reset();
     } finally {
       service.dispose();
     }

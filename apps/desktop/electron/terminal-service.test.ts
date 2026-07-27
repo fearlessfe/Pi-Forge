@@ -97,4 +97,87 @@ describe("TerminalService", () => {
     const service = new TerminalService(workspace, () => {}, () => { throw new Error("posix_spawnp failed"); });
     expect(() => service.create()).toThrow(/终端启动失败（.+）：posix_spawnp failed/);
   });
+
+  it("rejects missing helpers and reports permission repair failures", () => {
+    const missingRoot = directory("missing-helper");
+    expect(() => ensureNodePtySpawnHelperExecutable(missingRoot, "darwin")).toThrow("spawn-helper 缺失");
+
+    const root = directory("broken-helper");
+    const release = path.join(root, "build", "Release");
+    fs.mkdirSync(release, { recursive: true });
+    fs.writeFileSync(path.join(release, "pty.node"), "native-placeholder");
+    fs.writeFileSync(path.join(release, "spawn-helper"), "helper", { mode: 0o644 });
+    const chmod = vi.spyOn(fs, "chmodSync").mockImplementationOnce(() => { throw new Error("read-only filesystem"); });
+    expect(() => ensureNodePtySpawnHelperExecutable(root, "darwin")).toThrow("read-only filesystem");
+    chmod.mockRestore();
+  });
+
+  it("bounds dimensions and rejects invalid session operations", () => {
+    const workspace = directory("validation");
+    const file = path.join(workspace, "not-a-directory");
+    fs.writeFileSync(file, "x");
+    const terminal = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      kill: vi.fn(),
+      onData: () => ({ dispose: vi.fn() }),
+      onExit: () => ({ dispose: vi.fn() }),
+    } satisfies PseudoTerminal;
+    const factory = vi.fn(() => terminal);
+    const service = new TerminalService(workspace, () => {}, factory);
+
+    expect(() => service.create(file)).toThrow("终端工作目录无效");
+    const session = service.create(undefined, Number.POSITIVE_INFINITY, 1);
+    expect(session).toMatchObject({ cols: 100, rows: 2, title: path.basename(workspace) });
+    service.resize(session.id, 999, Number.NaN);
+    expect(terminal.resize).toHaveBeenCalledWith(500, 2);
+    expect(() => service.write(session.id, 42 as unknown as string)).toThrow("终端输入无效");
+    expect(() => service.resize("missing", 80, 24)).toThrow("找不到该终端");
+    service.kill("missing");
+    service.kill(session.id);
+    expect(terminal.kill).toHaveBeenCalledOnce();
+    service.dispose();
+  });
+
+  it("retains only the latest eight exited sessions and does not kill exited PTYs", () => {
+    const workspace = directory("pruning");
+    const exits: Array<(event: { exitCode: number; signal?: number }) => void> = [];
+    const kills: Array<ReturnType<typeof vi.fn>> = [];
+    const disposed: Array<ReturnType<typeof vi.fn>> = [];
+    const factory: PseudoTerminalFactory = () => {
+      const kill = vi.fn();
+      kills.push(kill);
+      return {
+        write: vi.fn(),
+        resize: vi.fn(),
+        kill,
+        onData: () => {
+          const dispose = vi.fn();
+          disposed.push(dispose);
+          return { dispose };
+        },
+        onExit: (listener) => {
+          exits.push(listener);
+          const dispose = vi.fn();
+          disposed.push(dispose);
+          return { dispose };
+        },
+      };
+    };
+    const service = new TerminalService(workspace, () => {}, factory);
+
+    for (let index = 0; index < 10; index += 1) {
+      service.create();
+      exits[index]({ exitCode: index });
+    }
+    // Pruning happens after the next create; the first exited session is
+    // removed once a ninth completed terminal exists.
+    expect(service.list()).toHaveLength(9);
+    expect(service.list().map((session) => session.exitCode)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    service.kill(service.list()[0].id);
+    expect(kills.every((kill) => !kill.mock.calls.length)).toBe(true);
+    service.dispose();
+    expect(disposed.some((dispose) => dispose.mock.calls.length > 0)).toBe(true);
+    expect(kills.every((kill) => !kill.mock.calls.length)).toBe(true);
+  });
 });

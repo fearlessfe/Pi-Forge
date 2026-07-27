@@ -29,4 +29,87 @@ describe("conversation history compatibility", () => {
     });
     expect(normalizeContextUsage({ contextWindow: undefined })).toBeUndefined();
   });
+
+  it("preserves supported activity variants and drops unsafe nested data", () => {
+    const turn = normalizeHistoryTurn({
+      id: "complete",
+      question: 42,
+      answer: null,
+      activities: [
+        { id: "message", type: "message", text: 42 },
+        { id: "thinking", type: "thinking", text: "reasoning" },
+        { id: "tool-running", type: "tool", name: "bash", status: "running", args: { command: "pwd" }, output: 17 },
+        { id: "tool-success", type: "tool", name: "read", status: "success", output: "ok" },
+        { type: "tool", name: 123 },
+        {
+          id: "question",
+          type: "question",
+          question: 9,
+          status: "pending",
+          answer: "yes",
+          options: [null, { label: 7 }, { label: "Yes", description: "Continue" }, { label: "No", description: 9 }],
+        },
+        { type: "unknown" },
+      ],
+      usage: {
+        provider: "openai",
+        model: "gpt",
+        responseModel: "gpt-2026",
+        inputTokens: 10,
+        outputTokens: Infinity,
+        cacheReadTokens: 2,
+        cacheWriteTokens: "3",
+        totalTokens: 12,
+        requestCount: 3,
+        cost: 0.01,
+      },
+    }, 0);
+
+    expect(turn).toMatchObject({
+      id: "complete",
+      sessionEntryId: "complete",
+      question: "",
+      answer: "",
+      activities: [
+        { id: "message", type: "message", text: "" },
+        { id: "thinking", type: "thinking", text: "reasoning" },
+        { id: "tool-running", type: "tool", name: "bash", status: "running", output: "" },
+        { id: "tool-success", type: "tool", name: "read", status: "success", output: "ok" },
+        { id: "question", type: "question", question: "Pi 需要你的回答", answer: "yes", status: "answered", options: [
+          { label: "Yes", description: "Continue" },
+          { label: "No", description: undefined },
+        ] },
+      ],
+      usage: {
+        responseModel: "gpt-2026",
+        inputTokens: 10,
+        outputTokens: 0,
+        cacheReadTokens: 2,
+        cacheWriteTokens: 0,
+        totalTokens: 12,
+        requestCount: 3,
+        cost: 0.01,
+      },
+    });
+  });
+
+  it("rejects malformed usage and normalizes partial context telemetry", () => {
+    expect(normalizeHistoryTurn(null, 4)).toMatchObject({ id: "history-4", activities: [], usage: undefined });
+    expect(normalizeHistoryTurn({ activities: "invalid", usage: { provider: 1, model: "gpt" } }, 5)).toMatchObject({
+      activities: [],
+      usage: undefined,
+    });
+    expect(normalizeContextUsage(null)).toBeUndefined();
+    expect(normalizeContextUsage({ contextWindow: -1 })).toBeUndefined();
+    expect(normalizeContextUsage({ contextWindow: 128_000, tokens: Number.NaN, percent: "25" })).toEqual({
+      contextWindow: 128_000,
+      tokens: null,
+      percent: null,
+    });
+    expect(normalizeContextUsage({ contextWindow: 128_000, tokens: 32_000, percent: 25 })).toEqual({
+      contextWindow: 128_000,
+      tokens: 32_000,
+      percent: 25,
+    });
+  });
 });
