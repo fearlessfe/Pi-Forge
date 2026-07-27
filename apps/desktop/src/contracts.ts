@@ -332,6 +332,17 @@ export type SendPromptInput = {
   conversationId?: string;
 };
 
+export type RuntimeRecoveryInfo = {
+  id: string;
+  runId?: string;
+  input: SendPromptInput;
+  status: "starting" | "running" | "interrupted";
+  attempts: number;
+  startedAt: string;
+  updatedAt: string;
+  message?: string;
+};
+
 export type ConversationHistoryItem = {
   id: string;
   title: string;
@@ -627,6 +638,9 @@ export type PiDesktopApi = {
     revealChange(changeId: string): Promise<void>;
     reset(): Promise<void>;
     answerQuestion(callId: string, answer: string): Promise<void>;
+    listRecoveries(): Promise<RuntimeRecoveryInfo[]>;
+    retryRecovery(id: string): Promise<{ runId: string }>;
+    discardRecovery(id: string): Promise<void>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
   };
 };

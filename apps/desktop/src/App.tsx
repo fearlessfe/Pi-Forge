@@ -1,11 +1,11 @@
-import { CheckCircle2, Package, Sparkles, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Package, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { ConversationSidebar } from "./components/ConversationSidebar";
 import { NewChatView } from "./components/NewChatView";
 import { PluginCenterView } from "./components/PluginCenterView";
 import { SettingsView } from "./components/SettingsView";
 import { BrowserWorkbench } from "./components/BrowserWorkbench";
-import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
+import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
 import { appendMessageDelta } from "./conversation-activity";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { isPrimaryShortcut, shortcutLabel } from "./keyboard";
@@ -215,6 +215,7 @@ export function App() {
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
+  const [runtimeRecoveries, setRuntimeRecoveries] = useState<RuntimeRecoveryInfo[]>([]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -242,6 +243,7 @@ export function App() {
     void refreshResourceSettings();
     void refreshProviderCatalog(t("无法读取模型目录"));
     void refreshConversationHistory();
+    void refreshRuntimeRecoveries();
     const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => {
       if (event.type === "context.updated") setContextUsage(event.usage);
       if (event.type === "queue.updated") setQueuedMessages(event.queue);
@@ -249,6 +251,7 @@ export function App() {
       if (event.type === "run.completed" || event.type === "run.error" || event.type === "run.stopped") {
         setQueuedMessages({ steering: [], followUp: [] });
         void refreshConversationHistory();
+        void refreshRuntimeRecoveries();
       }
     });
     const unsubscribeAuth = window.piDesktop?.auth?.onEvent((event) => {
@@ -333,6 +336,15 @@ export function App() {
       setProjects([...grouped.values()]);
     } catch (error) {
       setNotice({ title: t("无法读取会话历史"), message: eventError(error), type: "info" });
+    }
+  }
+
+  async function refreshRuntimeRecoveries() {
+    if (!window.piDesktop?.agent.listRecoveries) return;
+    try {
+      setRuntimeRecoveries(await window.piDesktop.agent.listRecoveries());
+    } catch (error) {
+      setNotice({ title: t("无法读取 Runtime 恢复状态"), message: eventError(error), type: "info" });
     }
   }
 
@@ -694,6 +706,39 @@ export function App() {
     if (turn) void sendQuestion(turn.question);
   }
 
+  async function retryRuntimeRecovery(recovery: RuntimeRecoveryInfo) {
+    if (!window.piDesktop?.agent.retryRecovery || isRunning) return;
+    const recoveryProject = projects.find((entry) => entry.path === recovery.input.cwd);
+    if (recovery.input.conversationId) await openConversation(recovery.input.conversationId, recoveryProject);
+    const turnId = `recovery-${recovery.id}`;
+    setTurns((current) => [...current, {
+      id: turnId,
+      question: recovery.input.prompt,
+      answer: "",
+      activities: [],
+      fileChanges: [],
+      status: "running",
+    }]);
+    try {
+      const { runId } = await window.piDesktop.agent.retryRecovery(recovery.id);
+      setTurns((current) => current.map((turn) => turn.id === turnId && !turn.runId ? { ...turn, runId } : turn));
+      await refreshRuntimeRecoveries();
+    } catch (error) {
+      setTurns((current) => current.map((turn) => turn.id === turnId ? { ...turn, status: "error", error: eventError(error) } : turn));
+      await refreshRuntimeRecoveries();
+    }
+  }
+
+  async function discardRuntimeRecovery(id: string) {
+    if (!window.piDesktop?.agent.discardRecovery) return;
+    try {
+      await window.piDesktop.agent.discardRecovery(id);
+      await refreshRuntimeRecoveries();
+    } catch (error) {
+      setNotice({ title: t("无法丢弃恢复记录"), message: eventError(error), type: "info" });
+    }
+  }
+
   async function stopAgent() {
     await window.piDesktop?.agent.abort();
   }
@@ -956,6 +1001,15 @@ export function App() {
             />
             <div className="workspace-main">
               {view === "chat" ? <main className="chat-main">
+                {runtimeRecoveries.length > 0 && <section className="runtime-recovery-banner" aria-live="polite">
+                  <AlertTriangle size={17} />
+                  <span>
+                    <strong>{t("检测到中断的 Runtime 任务")}</strong>
+                    <small>{runtimeRecoveries[0].input.prompt}{runtimeRecoveries.length > 1 ? t(" · 另有 {count} 项", { count: runtimeRecoveries.length - 1 }) : ""}</small>
+                  </span>
+                  <button type="button" disabled={isRunning} onClick={() => void retryRuntimeRecovery(runtimeRecoveries[0])}><RotateCcw size={13} />{t("安全继续")}</button>
+                  <button className="runtime-recovery-discard" type="button" disabled={isRunning} onClick={() => void discardRuntimeRecovery(runtimeRecoveries[0].id)} aria-label={t("丢弃恢复记录")}><Trash2 size={13} /></button>
+                </section>}
                 <NewChatView
                   project={project}
                   turns={turns}

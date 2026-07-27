@@ -84,6 +84,7 @@ Project files, sessions, and tool execution remain in environments controlled by
 | Agent events | Exhaustively captures the Pi `AgentSessionEvent` union and adapts it into stable desktop events |
 | Tools | Supports reading, searching, shell commands, editing, writing, user questions, and read-only subagents |
 | Task control | Supports aborting, steering, follow-up queues, and waiting for user answers |
+| Runtime | Runs the agent harness in an independent child process with protocol RPC, automatic restart, and safe continuation of interrupted tasks |
 | Change review | Captures file mutations, generates diffs, and safely reverts files that have not changed again |
 | Permissions | Provides permission modes, workspace boundaries, sensitive-operation approval, and project-resource trust |
 | Sandbox | Uses Anthropic Sandbox Runtime on macOS/Linux to restrict command filesystem and network access |
@@ -97,10 +98,10 @@ The test suite drives real Pi sessions with a local OpenAI-compatible fake model
 
 To avoid presenting the roadmap as shipped functionality, the current release has these explicit limitations:
 
-- the agent harness still runs inside the Electron main process rather than an independent worker or service;
+- the agent harness runs in an independent local Runtime child process, but is not yet an independently deployable service;
 - one application instance currently runs only one primary agent task at a time;
 - the built-in subagent is read-only, in-process, and backed by an in-memory session;
-- historical sessions can be resumed, but unfinished tool calls cannot automatically continue after a process crash;
+- Runtime crashes preserve a recovery record and offer safe continuation; in-flight tool calls are not replayed automatically, avoiding duplicate side effects;
 - the sandbox is a local command boundary and cannot yet provision remote execution environments;
 - there is no cloud sync, team control plane, organization policy, or distributed scheduler yet;
 - the current reference application targets desktop development workflows and is not a full IDE.
@@ -117,10 +118,10 @@ Current reference implementation:
                            │ Typed IPC
 ┌──────────────────────────▼──────────────────────────────┐
 │ Electron Main                                           │
-│ Agent Service · Session · Policy · Resource Management  │
+│ Window · Credentials · Browser · MCP Host               │
 ├─────────────────────────────────────────────────────────┤
-│ Pi Coding Agent                                         │
-│ Model Runtime · Agent Session · Context · Tools          │
+│ Independent Agent Runtime                               │
+│ Pi Session · Policy · Context · Tools · Recovery Journal │
 ├────────────────┬────────────────┬───────────────────────┤
 │ Local Sandbox  │ MCP Servers    │ OS Keychain / PTY     │
 └────────────────┴────────────────┴───────────────────────┘
@@ -252,10 +253,11 @@ The long-term goal is to separate the agent runtime, execution environments, and
 
 ### Phase 2: Extract the Pi Forge Runtime
 
-- [ ] Move agent execution out of Electron into an independent worker
+- [x] Move agent execution out of Electron into an independent worker
 - [ ] Define stable runtime, session, event, and hand contracts
 - [ ] Persist complete runtime events as a queryable, replayable event stream
-- [ ] Recover tasks after process crashes with idempotent tool execution
+- [x] Detect Runtime crashes, restart automatically, and safely continue interrupted tasks
+- [ ] Add idempotent replay of unfinished tool calls and fully transparent recovery
 - [ ] Provide an SDK and example templates for custom agents
 
 ### Phase 3: Multi-agent and remote execution

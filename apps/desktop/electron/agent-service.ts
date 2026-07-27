@@ -41,7 +41,7 @@ import type {
 import { captureAgentSessionEvent } from "./agent-event-adapter.js";
 import { decideToolPermission, isInsideWorkspace, type PermissionGrant } from "./permission-policy.js";
 import { defaultPermissionSettings } from "./permission-store.js";
-import { SettingsStore } from "./settings-store.js";
+import type { ThinkingLevel } from "../src/contracts.js";
 import { WorkspaceCommandSandbox } from "./workspace-command-sandbox.js";
 import { mergeAnswerUsage } from "../src/response-usage.js";
 import {
@@ -51,7 +51,7 @@ import {
   type ProtocolModelMetadata,
 } from "./model-metadata-catalog.js";
 import { ModelMetadataStore } from "./model-metadata-store.js";
-import type { McpService } from "./mcp-service.js";
+import type { McpToolDescriptor } from "./mcp-service.js";
 import type { BrowserDebugPort } from "./browser-service.js";
 
 type EventSink = (event: AgentEvent) => void;
@@ -73,7 +73,17 @@ type ConversationMetadata = {
   archived: boolean;
 };
 
-type RuntimeConfig = ReturnType<SettingsStore["resolve"]>;
+export type AgentRuntimeConfig = {
+  provider: string;
+  baseUrl: string;
+  modelId: string;
+  thinkingLevel: ThinkingLevel;
+  apiKey?: string;
+};
+
+type ModelSettingsReader = {
+  resolve(input?: SaveModelSettings): AgentRuntimeConfig;
+};
 
 type CapabilitySettingsReader = Pick<{ get(): CapabilitySettings }, "get">;
 type PermissionSettingsReader = Pick<{ get(): PermissionSettings }, "get">;
@@ -83,6 +93,10 @@ type ResourceSettingsReader = Pick<{
   getTrustStatus(cwd: string): WorkspaceTrustStatus;
 }, "getSettings" | "isProjectTrusted" | "getTrustStatus">;
 type PluginSecurityReader = Pick<{ isEnabled(source: string, cwd?: string): boolean }, "isEnabled">;
+type McpRuntimePort = {
+  tools(cwd?: string): Promise<McpToolDescriptor[]>;
+  callTool(descriptor: McpToolDescriptor, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ text: string; details: unknown }>;
+};
 
 type DiscoveredModelsFile = {
   version: 1 | 2;
@@ -292,7 +306,7 @@ export class AgentService {
   private sessionCwd?: string;
 
   constructor(
-    private readonly settings: Pick<SettingsStore, "resolve">,
+    private readonly settings: ModelSettingsReader,
     private readonly agentDir: string,
     private readonly fallbackCwd: string,
     private readonly emit: EventSink,
@@ -316,7 +330,7 @@ export class AgentService {
       isProjectTrusted: () => false,
       getTrustStatus: (cwd) => ({ path: cwd, trusted: false, hasProjectResources: false, resourcePaths: [] }),
     },
-    private readonly mcp?: McpService,
+    private readonly mcp?: McpRuntimePort,
     private readonly pluginSecurity?: PluginSecurityReader,
     private readonly browser?: BrowserDebugPort,
   ) {}
@@ -1127,7 +1141,7 @@ export class AgentService {
     return SessionManager.create(cwd, this.sessionDir);
   }
 
-  private async ensureSession(cwd: string, config: RuntimeConfig, conversationId?: string): Promise<AgentSession> {
+  private async ensureSession(cwd: string, config: AgentRuntimeConfig, conversationId?: string): Promise<AgentSession> {
     const key = JSON.stringify([cwd, conversationId, config.provider, config.baseUrl, config.modelId, config.thinkingLevel, config.apiKey]);
     if (this.session && this.sessionKey === key) return this.session;
     this.disposeSession();
@@ -1437,7 +1451,7 @@ export class AgentService {
     return !source.startsWith("npm:") || !this.pluginSecurity || this.pluginSecurity.isEnabled(source, cwd);
   }
 
-  private async createModelRuntime(config: RuntimeConfig) {
+  private async createModelRuntime(config: AgentRuntimeConfig) {
     const modelRuntime = await ModelRuntime.create({
       credentials: this.credentials,
       modelsPath: path.join(this.agentDir, "models.json"),

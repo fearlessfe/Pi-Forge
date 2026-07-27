@@ -84,6 +84,7 @@ Pi Forge 将事件协议和执行轨迹视为运行时能力，而不是 UI 装�
 | Agent 事件 | 捕获完整的 Pi `AgentSessionEvent` 联合类型，并转换为稳定的桌面端事件 |
 | 工具 | 支持读取、搜索、Shell、编辑、写入、用户询问和只读子 Agent |
 | 任务控制 | 支持停止、steering、follow-up 队列和等待用户回答 |
+| Runtime | Agent Harness 运行在独立子进程，支持协议化 RPC、异常自动重启和中断任务安全续跑 |
 | 文件审核 | 捕获文件修改，生成 Diff，并在文件未发生二次变化时安全回退 |
 | 权限 | 提供权限模式、工作区边界、敏感操作审批和项目资源信任机制 |
 | 沙箱 | macOS/Linux 上通过 Anthropic Sandbox Runtime 限制命令的文件系统和网络访问 |
@@ -97,10 +98,10 @@ Pi Forge 将事件协议和执行轨迹视为运行时能力，而不是 UI 装�
 
 为了避免把路线图误认为现有能力，当前版本有以下明确限制：
 
-- Agent Harness 仍运行在 Electron 主进程中，尚未拆分为独立 Worker 或服务；
+- Agent Harness 已从 Electron 主进程拆分为独立本地 Runtime 子进程，但尚未提取成可独立部署的服务；
 - 同一应用实例当前只运行一个主 Agent 任务；
 - 内置子 Agent 是只读、同进程、内存 Session；
-- 应用可以恢复历史会话，但不能在进程崩溃后自动续跑未完成的工具调用；
+- Runtime 崩溃后会保留任务恢复记录并提供“安全继续”；为避免重复副作用，不会自动重放崩溃瞬间尚未完成的工具调用；
 - 沙箱是本机命令执行边界，还没有可 Provision 的远程执行环境；
 - 暂无云端同步、团队控制面、组织级策略和分布式调度；
 - 当前参考实现面向桌面开发工作流，不是完整 IDE。
@@ -117,10 +118,10 @@ Pi Forge 将事件协议和执行轨迹视为运行时能力，而不是 UI 装�
                            │ Typed IPC
 ┌──────────────────────────▼──────────────────────────────┐
 │ Electron Main                                           │
-│ Agent Service · Session · Policy · Resource Management  │
+│ Window · Credentials · Browser · MCP Host               │
 ├─────────────────────────────────────────────────────────┤
-│ Pi Coding Agent                                         │
-│ Model Runtime · Agent Session · Context · Tools          │
+│ Independent Agent Runtime                               │
+│ Pi Session · Policy · Context · Tools · Recovery Journal │
 ├────────────────┬────────────────┬───────────────────────┤
 │ Local Sandbox  │ MCP Servers    │ OS Keychain / PTY     │
 └────────────────┴────────────────┴───────────────────────┘
@@ -252,10 +253,11 @@ packages/
 
 ### 阶段二：提取 Pi Forge Runtime
 
-- [ ] 从 Electron 主进程提取独立 Agent Worker
+- [x] 从 Electron 主进程提取独立 Agent Worker
 - [ ] 定义稳定的 Runtime、Session、Event 和 Hand 契约
 - [ ] 将完整运行事件持久化为可查询、可重放的事件流
-- [ ] 支持进程崩溃后的任务恢复和幂等工具调用
+- [x] 支持 Runtime 崩溃检测、自动重启和中断任务安全续跑
+- [ ] 支持未完成工具调用的幂等重放与完全透明恢复
 - [ ] 提供用于定制 Agent 的 SDK 和示例模板
 
 ### 阶段三：多 Agent 与远程执行

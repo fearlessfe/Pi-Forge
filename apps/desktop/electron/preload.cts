@@ -117,6 +117,9 @@ const api: PiDesktopApi = {
     revealChange: (changeId) => ipcRenderer.invoke("agent:reveal-change", changeId),
     reset: () => ipcRenderer.invoke("agent:reset"),
     answerQuestion: (callId: string, answer: string) => ipcRenderer.invoke("agent:answer-question", callId, answer),
+    listRecoveries: () => ipcRenderer.invoke("agent:list-recoveries"),
+    retryRecovery: (id: string) => ipcRenderer.invoke("agent:retry-recovery", id),
+    discardRecovery: (id: string) => ipcRenderer.invoke("agent:discard-recovery", id),
     onEvent: (listener: (event: AgentEvent) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: AgentEvent) => listener(payload);
       ipcRenderer.on("agent:event", handler);

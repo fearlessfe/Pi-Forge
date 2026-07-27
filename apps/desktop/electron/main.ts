@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { AgentEvent, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ResourceSettings, SaveMcpServerInput, SaveModelSettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
-import { AgentService } from "./agent-service.js";
+import { AgentRuntimeClient } from "./agent-runtime-client.js";
 import { AuthService } from "./auth-service.js";
 import { CapabilityStore } from "./capability-store.js";
 import { EncryptedCredentialStore } from "./credential-store.js";
@@ -21,7 +21,7 @@ import { BrowserService } from "./browser-service.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
-let agentService: AgentService | undefined;
+let agentService: AgentRuntimeClient | undefined;
 let authService: AuthService | undefined;
 let pluginService: PluginService | undefined;
 let mcpService: McpService | undefined;
@@ -140,7 +140,7 @@ function requireMcpServerInput(value: unknown): SaveMcpServerInput {
 function registerIpc(
   settings: SettingsStore,
   credentials: EncryptedCredentialStore,
-  agent: AgentService,
+  agent: AgentRuntimeClient,
   auth: AuthService,
   plugins: PluginService,
   capabilities: CapabilityStore,
@@ -161,22 +161,23 @@ function registerIpc(
       requireString(modelId, "模型 ID 无效。"),
       value as ModelMetadataOverride,
     );
-    agent.reset();
+    await agent.reset();
     return agent.getModelCatalog(false);
   });
   ipcMain.handle("settings:reset-metadata", async (_event, providerId: unknown, modelId: unknown) => {
     modelMetadata.reset(requireString(providerId, "模型提供商无效。"), requireString(modelId, "模型 ID 无效。"));
-    agent.reset();
+    await agent.reset();
     return agent.getModelCatalog(false);
   });
   ipcMain.handle("settings:discover-models", (_event, value: unknown) => agent.discoverModels(requireSettings(value)));
   ipcMain.handle("settings:save", async (_event, value: unknown) => {
-    agent.reset();
+    await agent.reset();
     const input = requireSettings(value);
     settings.save({ ...input, apiKey: undefined });
     if (input.apiKey?.trim()) {
       await credentials.modify(input.provider, async () => ({ type: "api_key", key: input.apiKey?.trim() }));
     }
+    await agent.updateConfiguration();
     return settingsWithCredentials(settings, credentials);
   });
   ipcMain.handle("settings:test", async (_event, value: unknown) => {
@@ -184,20 +185,20 @@ function registerIpc(
     return { ok: true as const, response };
   });
   ipcMain.handle("permissions:get", () => agent.getPermissionRuntime());
-  ipcMain.handle("permissions:save", (_event, value: unknown) => {
+  ipcMain.handle("permissions:save", async (_event, value: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改权限模式。");
     permissions.save(requirePermissionSettings(value));
     return agent.getPermissionRuntime();
   });
   ipcMain.handle("system-prompt:get", () => systemPrompt.get());
-  ipcMain.handle("system-prompt:save", (_event, value: unknown) => {
+  ipcMain.handle("system-prompt:save", async (_event, value: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改系统提示词。");
     const saved = systemPrompt.save(requireSystemPromptSettings(value));
-    agent.reset();
+    await agent.reset();
     return saved;
   });
   ipcMain.handle("auth:login", async (_event, providerId: unknown) => {
-    agent.reset();
+    await agent.reset();
     return { loginId: await auth.login(requireString(providerId, "模型提供商无效。")) };
   });
   ipcMain.handle("auth:answer", (_event, requestId: unknown, value: unknown) => {
@@ -207,7 +208,7 @@ function registerIpc(
     auth.cancel(requireString(loginId, "登录任务无效。"));
   });
   ipcMain.handle("auth:logout", async (_event, providerId: unknown) => {
-    agent.reset();
+    await agent.reset();
     await auth.logout(requireString(providerId, "模型提供商无效。"));
   });
   ipcMain.handle("workspace:choose", async () => {
@@ -221,18 +222,18 @@ function registerIpc(
     return { name: path.basename(selectedPath), ...resources.getTrustStatus(selectedPath) };
   });
   ipcMain.handle("workspace:trust-status", (_event, value: unknown) => resources.getTrustStatus(requireString(value, "工作区路径无效。")));
-  ipcMain.handle("workspace:set-trusted", (_event, value: unknown, trusted: unknown) => {
+  ipcMain.handle("workspace:set-trusted", async (_event, value: unknown, trusted: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改项目信任状态。");
     if (typeof trusted !== "boolean") throw new Error("项目信任状态无效。");
     const status = resources.setProjectTrusted(requireString(value, "工作区路径无效。"), trusted);
-    agent.reset();
+    await agent.reset();
     return status;
   });
   ipcMain.handle("resources:get-settings", () => resources.getSettings());
-  ipcMain.handle("resources:save-settings", (_event, value: unknown) => {
+  ipcMain.handle("resources:save-settings", async (_event, value: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改资源设置。");
     const saved = resources.saveSettings(requireResourceSettings(value));
-    agent.reset();
+    await agent.reset();
     return saved;
   });
   ipcMain.handle("resources:inventory", (_event, cwd: unknown) => agent.getResourceInventory(cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
@@ -245,7 +246,7 @@ function registerIpc(
       ? current.disabledSkills.filter((entry) => entry !== skillName)
       : [...new Set([...current.disabledSkills, skillName])];
     resources.saveSettings({ ...current, disabledSkills });
-    agent.reset();
+    await agent.reset();
     return agent.getResourceInventory(cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。"));
   });
   ipcMain.handle("resources:execute-extension-command", async (_event, value: unknown) => {
@@ -257,16 +258,16 @@ function registerIpc(
     return { handled: await agent.executeExtensionCommand(input.prompt, input.cwd, input.conversationId) };
   });
   ipcMain.handle("mcp:overview", (_event, cwd: unknown) => mcp.overview(cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
-  ipcMain.handle("mcp:save", (_event, value: unknown) => {
+  ipcMain.handle("mcp:save", async (_event, value: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改 MCP 配置。");
     const overview = mcp.save(requireMcpServerInput(value));
-    agent.reset();
+    await agent.reset();
     return overview;
   });
   ipcMain.handle("mcp:remove", async (_event, key: unknown, cwd: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再删除 MCP Server。");
     const overview = await mcp.remove(requireString(key, "MCP Server 无效。"), cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。"));
-    agent.reset();
+    await agent.reset();
     return overview;
   });
   ipcMain.handle("mcp:connect", (_event, key: unknown, cwd: unknown) => mcp.connect(requireString(key, "MCP Server 无效。"), cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
@@ -324,7 +325,7 @@ function registerIpc(
       requireString(version, "插件版本无效。"),
     );
     const reloaded = await agent.reloadPackages();
-    return { installed, reloaded, runtime: agent.getPluginRuntime() };
+    return { installed, reloaded, runtime: await agent.getPluginRuntime() };
   });
   ipcMain.handle("plugins:remove", async (_event, source: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再卸载插件。");
@@ -341,11 +342,11 @@ function registerIpc(
     }
     const installed = await plugins.remove(packageSource);
     const reloaded = await agent.reloadPackages();
-    return { installed, reloaded, runtime: agent.getPluginRuntime() };
+    return { installed, reloaded, runtime: await agent.getPluginRuntime() };
   });
   ipcMain.handle("plugins:reload", async () => {
     const reloaded = await agent.reloadPackages();
-    return { reloaded, runtime: agent.getPluginRuntime() };
+    return { reloaded, runtime: await agent.getPluginRuntime() };
   });
   ipcMain.handle("plugins:set-enabled", async (_event, source: unknown, enabled: unknown, cwd: unknown, scope: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再切换插件状态。");
@@ -361,10 +362,10 @@ function registerIpc(
       if (currentCapabilities.learning.kind === "plugin" && currentCapabilities.learning.source === packageSource) capabilities.savePackageCapability("learning", { kind: "none" });
     }
     const reloaded = await agent.reloadPackages();
-    return { installed, reloaded, runtime: agent.getPluginRuntime() };
+    return { installed, reloaded, runtime: await agent.getPluginRuntime() };
   });
   ipcMain.handle("plugins:runtime", () => agent.getPluginRuntime());
-  ipcMain.handle("plugins:set-subagent-provider", (_event, value: unknown) => {
+  ipcMain.handle("plugins:set-subagent-provider", async (_event, value: unknown) => {
     if (!value || typeof value !== "object") throw new Error("Subagent 能力配置无效。");
     const input = value as Record<string, unknown>;
     let provider: SubagentProvider;
@@ -373,23 +374,22 @@ function registerIpc(
       provider = { kind: "plugin", source: input.source, toolName: input.toolName };
     } else throw new Error("Subagent 能力配置无效。");
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再切换能力提供者。");
-    if (provider.kind === "plugin" && !agent.getPluginRuntime().hasSession) {
+    if (provider.kind === "plugin" && !(await agent.getPluginRuntime()).hasSession) {
       throw new Error("请先创建一次 Agent 会话，再 Reload 并选择实际加载的第三方工具。");
     }
     const previous = capabilities.get().subagent;
     capabilities.saveSubagent(provider);
-    return agent.reloadPackages().then(async (reloaded) => {
-      const status = agent.getPluginRuntime();
-      if (!reloaded || provider.kind !== "plugin") return status;
-      const matches = status.effectiveSubagent.kind === "plugin"
-        && status.effectiveSubagent.source === provider.source
-        && status.effectiveSubagent.toolName === provider.toolName;
-      if (matches) return status;
-      const reason = status.fallbackReason ?? `${provider.source} 没有成功提供 ${provider.toolName}。`;
-      capabilities.saveSubagent(previous);
-      await agent.reloadPackages();
-      return { ...agent.getPluginRuntime(), fallbackReason: `${reason} 已恢复上一个 Subagent 提供者。` };
-    });
+    const reloaded = await agent.reloadPackages();
+    const status = await agent.getPluginRuntime();
+    if (!reloaded || provider.kind !== "plugin") return status;
+    const matches = status.effectiveSubagent.kind === "plugin"
+      && status.effectiveSubagent.source === provider.source
+      && status.effectiveSubagent.toolName === provider.toolName;
+    if (matches) return status;
+    const reason = status.fallbackReason ?? `${provider.source} 没有成功提供 ${provider.toolName}。`;
+    capabilities.saveSubagent(previous);
+    await agent.reloadPackages();
+    return { ...await agent.getPluginRuntime(), fallbackReason: `${reason} 已恢复上一个 Subagent 提供者。` };
   });
   ipcMain.handle("plugins:set-package-capability", async (_event, slotValue: unknown, value: unknown) => {
     if (slotValue !== "memory" && slotValue !== "learning") throw new Error("能力槽无效。");
@@ -400,13 +400,13 @@ function registerIpc(
     else if (input.kind === "plugin" && typeof input.source === "string") provider = { kind: "plugin", source: input.source };
     else throw new Error("能力提供者配置无效。");
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再切换能力提供者。");
-    if (provider.kind === "plugin" && !agent.getPluginRuntime().hasSession) {
+    if (provider.kind === "plugin" && !(await agent.getPluginRuntime()).hasSession) {
       throw new Error("请先创建一次 Agent 会话，再 Reload 并验证该插件后切换能力提供者。");
     }
     const previous = capabilities.get()[slotValue];
     capabilities.savePackageCapability(slotValue, provider);
     const reloaded = await agent.reloadPackages();
-    const status = agent.getPluginRuntime();
+    const status = await agent.getPluginRuntime();
     const effective = slotValue === "memory" ? status.effectiveMemory : status.effectiveLearning;
     if (!reloaded || provider.kind !== "plugin") return status;
     const matches = effective.kind === "plugin" && effective.source === provider.source;
@@ -414,7 +414,7 @@ function registerIpc(
     capabilities.savePackageCapability(slotValue, previous);
     await agent.reloadPackages();
     return {
-      ...agent.getPluginRuntime(),
+      ...await agent.getPluginRuntime(),
       fallbackReason: `${provider.source} 没有成功加载，已恢复上一个${slotValue === "memory" ? "记忆" : "自学习"}提供者。`,
     };
   });
@@ -472,18 +472,21 @@ function registerIpc(
     return agent.revertChanges(changeIds as string[] | undefined);
   });
   ipcMain.handle("agent:open-change", async (_event, changeId: unknown) => {
-    const filePath = agent.changePath(requireString(changeId, "文件变更 ID 无效。"));
+    const filePath = await agent.changePath(requireString(changeId, "文件变更 ID 无效。"));
     const failure = await shell.openPath(filePath);
     if (failure) throw new Error(`无法打开文件：${failure}`);
   });
-  ipcMain.handle("agent:reveal-change", (_event, changeId: unknown) => {
-    shell.showItemInFolder(agent.changePath(requireString(changeId, "文件变更 ID 无效。")));
+  ipcMain.handle("agent:reveal-change", async (_event, changeId: unknown) => {
+    shell.showItemInFolder(await agent.changePath(requireString(changeId, "文件变更 ID 无效。")));
   });
   ipcMain.handle("agent:answer-question", (_event, callId: unknown, answer: unknown) => {
     if (typeof callId !== "string" || typeof answer !== "string") throw new Error("回答格式无效。");
-    agent.answerQuestion(callId, answer);
+    return agent.answerQuestion(callId, answer);
   });
   ipcMain.handle("agent:reset", () => agent.reset());
+  ipcMain.handle("agent:list-recoveries", () => agent.listRecoveries());
+  ipcMain.handle("agent:retry-recovery", async (_event, id: unknown) => ({ runId: await agent.retryRecovery(requireString(id, "恢复任务无效。")) }));
+  ipcMain.handle("agent:discard-recovery", (_event, id: unknown) => agent.discardRecovery(requireString(id, "恢复任务无效。")));
 }
 
 if (isPrimaryInstance) void app.whenReady().then(async () => {
@@ -511,22 +514,18 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   } catch (error) {
     console.error("Credential migration failed:", error instanceof Error ? error.message : String(error));
   }
-  agentService = new AgentService(
+  agentService = new AgentRuntimeClient({
+    workerPath: path.join(currentDir, "agent-runtime-worker.js"),
+    userDataPath: userData,
+    agentDir: path.join(userData, "pi-agent"),
+    fallbackCwd: chatSandbox,
+    sessionDir: path.join(piDesktopHome, "sessions"),
     settings,
-    path.join(userData, "pi-agent"),
-    chatSandbox,
-    sendAgentEvent,
     credentials,
-    capabilities,
-    path.join(piDesktopHome, "sessions"),
-    permissions,
-    undefined,
-    modelMetadata,
-    resources,
-    mcpService,
-    pluginSecurity,
-    browserService,
-  );
+    mcp: mcpService,
+    browser: browserService,
+    emit: sendAgentEvent,
+  });
   authService = new AuthService(
     credentials,
     path.join(userData, "pi-agent"),
