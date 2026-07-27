@@ -3,7 +3,6 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Select from "@radix-ui/react-select";
 import {
   ArrowUp,
-  BrainCircuit,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -25,6 +24,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { CommandInfo, ContextUsageInfo, ProviderCatalogEntry, ProviderId, QueuedMessages, ResponseUsage, TaskFileChange } from "../contracts";
 import { normalizeVisibleActivities } from "../conversation-activity";
 import { fileExtension, isArtifactChange } from "../file-changes";
@@ -334,21 +335,6 @@ function InitialComposer(props: NewChatViewProps) {
   );
 }
 
-function ThinkingActivity({ activity }: { activity: Extract<ChatActivity, { type: "thinking" }> }) {
-  const { t } = useI18n();
-  return (
-    <Collapsible.Root className="agent-activity thinking-activity">
-      <Collapsible.Trigger className="activity-trigger">
-        <BrainCircuit size={14} />
-        <span>{t("分析过程")}</span>
-        <small>{t("按需查看")}</small>
-        <ChevronDown size={13} className="activity-chevron" />
-      </Collapsible.Trigger>
-      <Collapsible.Content className="thinking-content">{activity.text}</Collapsible.Content>
-    </Collapsible.Root>
-  );
-}
-
 function ToolActivity({ activity }: { activity: Extract<ChatActivity, { type: "tool" }> }) {
   const { t } = useI18n();
   const isSubagent = activity.name === "spawn_subagent" || activity.name === "pi_desktop_subagent";
@@ -461,7 +447,51 @@ function QuestionActivity({
 
 function MessageActivity({ text }: { text: string }) {
   if (!text) return null;
-  return <div className="answer-content"><p>{text}</p></div>;
+  return <div className="answer-content markdown-content"><Markdown remarkPlugins={[remarkGfm]} skipHtml>{text}</Markdown></div>;
+}
+
+function formatElapsedTime(seconds: number, t: ReturnType<typeof useI18n>["t"]): string {
+  if (seconds < 60) return t("已运行 {seconds} 秒", { seconds });
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder > 0
+    ? t("已运行 {minutes} 分 {seconds} 秒", { minutes, seconds: remainder })
+    : t("已运行 {minutes} 分", { minutes });
+}
+
+function RunningTaskStatus({ turn, onStop }: { turn: ChatTurn; onStop: () => void }) {
+  const { t } = useI18n();
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const visible = normalizeVisibleActivities(Array.isArray(turn.activities) ? turn.activities : []);
+  const lastActivity = visible.at(-1);
+  const waitingForAnswer = visible.some((activity) => activity.type === "question" && activity.status === "pending");
+
+  useEffect(() => {
+    const startedAt = Date.now();
+    setElapsedSeconds(0);
+    const timer = window.setInterval(() => setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1_000)), 1_000);
+    return () => window.clearInterval(timer);
+  }, [turn.id]);
+
+  let phase = t("正在准备下一步");
+  if (waitingForAnswer) phase = t("需要你的回答才能继续");
+  else if (lastActivity?.type === "thinking") phase = t("正在分析与组织回复");
+  else if (lastActivity?.type === "message") phase = t("正在生成回复");
+  else if (lastActivity?.type === "tool") {
+    phase = lastActivity.status === "running"
+      ? t("正在使用工具：{tool}", { tool: t(toolLabel(lastActivity.name)) })
+      : t("正在整理工具结果");
+  } else if (lastActivity?.type === "question") phase = t("正在继续任务");
+
+  return <div className={`task-status-bar ${waitingForAnswer ? "is-waiting" : ""}`}>
+    <span className="task-status-signal" aria-hidden="true"><i /><i /><i /></span>
+    <span className="task-status-copy" role="status" aria-live="polite">
+      <small>{t(waitingForAnswer ? "等待你的输入" : "任务进行中")}</small>
+      <strong>{phase}</strong>
+    </span>
+    <time title={t("任务运行时长")} aria-hidden="true">{formatElapsedTime(elapsedSeconds, t)}</time>
+    <button type="button" onClick={onStop}><CircleStop size={14} />{t("停止任务")}</button>
+  </div>;
 }
 
 function ActivityTimeline({
@@ -507,7 +537,7 @@ function ActivityTimeline({
       {timeline.map((item) => {
         if (item.type === "tools") return <ToolGroup key={item.key} tools={item.tools} />;
         if (item.activity.type === "message") return <MessageActivity key={item.activity.id} text={item.activity.text} />;
-        if (item.activity.type === "thinking") return <ThinkingActivity key={item.activity.id} activity={item.activity} />;
+        if (item.activity.type === "thinking") return <MessageActivity key={item.activity.id} text={item.activity.text} />;
         return <QuestionActivity key={item.activity.id} turnId={turn.id} activity={item.activity} onAnswer={onAnswerQuestion} />;
       })}
       {!hasMessages && turn.answer && <MessageActivity text={turn.answer} />}
@@ -644,6 +674,7 @@ function FileChangeInspector({ change, onClose }: { change: TaskFileChange; onCl
 function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: TaskFileChange) => void }) {
   const { t } = useI18n();
   const palette = useCommandPalette(props);
+  const runningTurn = [...props.turns].reverse().find((turn) => turn.status === "running");
   return (
     <section className="active-conversation" aria-label={t("当前对话")}>
       <div className="conversation-scroll" aria-live="polite">
@@ -652,6 +683,7 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
         </div>
       </div>
       <footer className="conversation-dock">
+        {props.isRunning && runningTurn && <RunningTaskStatus turn={runningTurn} onStop={props.onStop} />}
         {(props.queuedMessages.steering.length > 0 || props.queuedMessages.followUp.length > 0) && <div className="queued-messages"><span>{t("已排队 {count} 条消息", { count: props.queuedMessages.steering.length + props.queuedMessages.followUp.length })}</span>{props.queuedMessages.steering.map((message) => <em key={`steer:${message}`}>{t("立即调整")} · {message}</em>)}{props.queuedMessages.followUp.map((message) => <em key={`follow:${message}`}>{t("稍后继续")} · {message}</em>)}<button type="button" onClick={props.onClearQueue}>{t("清空队列")}</button></div>}
         <form className="compact-composer" onSubmit={(event) => {
           event.preventDefault();
