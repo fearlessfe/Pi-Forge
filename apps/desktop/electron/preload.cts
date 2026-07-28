@@ -126,6 +126,7 @@ const api: PiDesktopApi = {
     listRecoveries: () => ipcRenderer.invoke("agent:list-recoveries"),
     retryRecovery: (id: string) => ipcRenderer.invoke("agent:retry-recovery", id),
     discardRecovery: (id: string) => ipcRenderer.invoke("agent:discard-recovery", id),
+    retryRuntime: () => ipcRenderer.invoke("agent:retry-runtime"),
     onEvent: (listener: (event: AgentEvent) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: AgentEvent) => listener(payload);
       ipcRenderer.on("agent:event", handler);

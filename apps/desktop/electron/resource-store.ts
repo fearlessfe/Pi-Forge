@@ -5,6 +5,7 @@ import type { ResourceSettings, WorkspaceTrustStatus } from "../src/contracts.js
 type StoredResources = ResourceSettings & {
   version: 1;
   trustedProjects: string[];
+  knownWorkspaces: string[];
 };
 
 const defaults: StoredResources = {
@@ -12,6 +13,7 @@ const defaults: StoredResources = {
   workspaceContextEnabled: true,
   disabledSkills: [],
   trustedProjects: [],
+  knownWorkspaces: [],
 };
 
 const skillNamePattern = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
@@ -78,6 +80,19 @@ export class ResourceStore {
     return this.getTrustStatus(projectPath);
   }
 
+  addKnownWorkspace(cwd: string): string {
+    const workspacePath = canonicalPath(cwd);
+    const current = this.read();
+    if (!current.knownWorkspaces.includes(workspacePath)) {
+      this.write({ ...current, knownWorkspaces: [...current.knownWorkspaces, workspacePath] });
+    }
+    return workspacePath;
+  }
+
+  isKnownWorkspace(cwd: string): boolean {
+    return this.read().knownWorkspaces.includes(canonicalPath(cwd));
+  }
+
   private projectResourcePaths(cwd: string): string[] {
     const candidates = [
       ".pi/settings.json",
@@ -110,6 +125,7 @@ export class ResourceStore {
         version: 1,
         ...settings,
         trustedProjects: uniqueStrings(value.trustedProjects, (entry) => path.isAbsolute(entry)).map(canonicalPath),
+        knownWorkspaces: uniqueStrings(value.knownWorkspaces, (entry) => path.isAbsolute(entry)).map(canonicalPath),
       };
     } catch {
       return { ...defaults };

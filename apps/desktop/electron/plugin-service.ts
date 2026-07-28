@@ -4,6 +4,7 @@ import {
   type PackageManager,
   type ProgressEvent,
 } from "@earendil-works/pi-coding-agent";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -38,7 +39,7 @@ type RegistryPackage = {
   downloads?: { weekly?: unknown; monthly?: unknown };
   insecure?: unknown;
   pi?: unknown;
-  dist?: { integrity?: unknown; shasum?: unknown };
+  dist?: { integrity?: unknown; shasum?: unknown; tarball?: unknown };
 };
 
 type RegistrySearchResponse = {
@@ -130,6 +131,18 @@ function validateManifest(value: unknown): PluginManifest {
     });
   }
   return manifest;
+}
+
+function integrityMatches(integrity: string, bytes: Buffer): boolean {
+  const entries = integrity.trim().split(/\s+/).flatMap((entry) => {
+    const separator = entry.indexOf("-");
+    if (separator <= 0) return [];
+    const algorithm = entry.slice(0, separator).toLowerCase();
+    if (algorithm !== "sha512" && algorithm !== "sha1") return [];
+    return [{ algorithm, digest: entry.slice(separator + 1) }];
+  });
+  if (entries.length === 0) return false;
+  return entries.some(({ algorithm, digest }) => crypto.createHash(algorithm).update(bytes).digest("base64") === digest);
 }
 
 function riskTier(resources: PluginResourceType[], insecure: boolean, hasIntegrity: boolean): PluginRiskTier {
@@ -234,17 +247,21 @@ export class PluginService {
   }
 
   async details(name: string, version = "latest"): Promise<PluginPackage> {
+    return (await this.registryMetadata(name, version)).metadata;
+  }
+
+  private async registryMetadata(name: string, version: string): Promise<{ metadata: PluginPackage; tarballUrl?: string }> {
     this.validatePackage(name, version);
     const response = await this.fetchImpl(`${this.registryUrl}/${encodeURIComponent(name)}/${encodeURIComponent(version)}`);
     if (response.status === 404) throw new Error("没有找到这个插件或版本。");
     if (!response.ok) throw new Error(`插件详情请求失败（HTTP ${response.status}）。`);
     const value = await response.json() as RegistryPackage;
     if (!isPiPackage(value)) throw new Error("该 npm 包没有声明 pi-package，已拒绝安装。");
-    const normalized = normalizePackage(value);
-    if (!normalized) throw new Error("插件元数据不完整，无法安装。");
-    if (normalized.name !== name) throw new Error("插件注册表返回了不匹配的包名，已拒绝安装。");
-    if (version !== "latest" && normalized.version !== version) throw new Error("插件注册表返回了不匹配的版本，已拒绝安装。");
-    return normalized;
+    const metadata = normalizePackage(value);
+    if (!metadata) throw new Error("插件元数据不完整，无法安装。");
+    if (metadata.name !== name) throw new Error("插件注册表返回了不匹配的包名，已拒绝安装。");
+    if (version !== "latest" && metadata.version !== version) throw new Error("插件注册表返回了不匹配的版本，已拒绝安装。");
+    return { metadata, tarballUrl: text(value.dist?.tarball) };
   }
 
   listInstalled(cwd?: string): InstalledPlugin[] {
@@ -279,15 +296,21 @@ export class PluginService {
 
   async install(name: string, version: string): Promise<InstalledPlugin[]> {
     return this.withOperation("安装", async () => {
-      const metadata = await this.details(name, version);
+      const { metadata, tarballUrl } = await this.registryMetadata(name, version);
       if (metadata.riskTier === "blocked") throw new Error("该版本被标记为存在安全风险，已阻止安装。");
       const source = `npm:${metadata.name}@${metadata.version}`;
       await this.packageManager.installAndPersist(source);
       const installedPath = this.packageManager.getInstalledPath(source, "user")
         ?? this.packageManager.listConfiguredPackages().find((entry) => entry.source === source)?.installedPath;
-      if (!installedPath || !this.verifyInstalled(installedPath, metadata.name, metadata.version, metadata.manifest)) {
+      const failure = !installedPath
+        ? "插件安装后的包名、版本或资源清单校验失败，已移除该插件。"
+        : await this.verifyTarballIntegrity(metadata, tarballUrl)
+          ?? (this.verifyInstalled(installedPath, metadata.name, metadata.version, metadata.manifest)
+            ? undefined
+            : "插件安装后的包名、版本或资源清单校验失败，已移除该插件。");
+      if (failure) {
         await this.packageManager.removeAndPersist(source);
-        throw new Error("插件安装后的包名、版本或资源清单校验失败，已移除该插件。");
+        throw new Error(failure);
       }
       this.securityStore.save({
         source,
@@ -331,6 +354,22 @@ export class PluginService {
   private validatePackage(name: string, version: string): void {
     if (!packageNamePattern.test(name)) throw new Error("插件包名无效。");
     if (version !== "latest" && !versionPattern.test(version)) throw new Error("插件版本无效。");
+  }
+
+  private async verifyTarballIntegrity(metadata: PluginPackage, tarballUrl: string | undefined): Promise<string | undefined> {
+    if (!metadata.integrity) return "插件注册表未提供完整性校验值（dist.integrity），无法确认安装包未被篡改，已移除该插件。";
+    if (!tarballUrl) return "插件注册表未提供安装包下载地址，无法校验安装包完整性，已移除该插件。";
+    let bytes: Buffer;
+    try {
+      const response = await this.fetchImpl(tarballUrl);
+      if (!response.ok) return `插件安装包下载失败（HTTP ${response.status}），无法校验完整性，已移除该插件。`;
+      bytes = Buffer.from(await response.arrayBuffer());
+    } catch {
+      return "插件安装包下载失败，无法校验完整性，已移除该插件。";
+    }
+    return integrityMatches(metadata.integrity, bytes)
+      ? undefined
+      : "插件安装包完整性校验失败，与 npm 注册表记录不一致，可能已被篡改，已移除该插件。";
   }
 
   private verifyInstalled(packageRoot: string, expectedName: string, expectedVersion: string, manifest: PluginManifest): boolean {

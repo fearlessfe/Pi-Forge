@@ -74,6 +74,8 @@ function historyConversation(item: ConversationHistoryItem, t: (message: string)
 }
 
 function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[] {
+  // Runtime lifecycle events are handled as app-level state, not chat turns.
+  if (event.type === "runtime.status") return turns;
   let targetIndex = turns.findIndex((turn) => turn.runId === event.runId);
   if (targetIndex < 0) {
     for (let index = turns.length - 1; index >= 0; index -= 1) {
@@ -216,6 +218,7 @@ export function App() {
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
   const [runtimeRecoveries, setRuntimeRecoveries] = useState<RuntimeRecoveryInfo[]>([]);
+  const [runtimeCrashLooping, setRuntimeCrashLooping] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -245,6 +248,7 @@ export function App() {
     void refreshConversationHistory();
     void refreshRuntimeRecoveries();
     const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => {
+      if (event.type === "runtime.status") setRuntimeCrashLooping(event.status === "crash-looping");
       if (event.type === "context.updated") setContextUsage(event.usage);
       if (event.type === "queue.updated") setQueuedMessages(event.queue);
       setTurns((current) => applyAgentEvent(current, event));
@@ -753,6 +757,16 @@ export function App() {
     }
   }
 
+  async function retryRuntime() {
+    if (!window.piDesktop?.agent.retryRuntime) return;
+    try {
+      await window.piDesktop.agent.retryRuntime();
+      setRuntimeCrashLooping(false);
+    } catch (error) {
+      setNotice({ title: t("无法重启 Agent Runtime"), message: eventError(error), type: "info" });
+    }
+  }
+
   async function stopAgent() {
     await window.piDesktop?.agent.abort();
   }
@@ -1015,6 +1029,14 @@ export function App() {
             />
             <div className="workspace-main">
               {view === "chat" ? <main className="chat-main">
+                {runtimeCrashLooping && <section className="runtime-recovery-banner runtime-crash-banner" aria-live="assertive">
+                  <AlertTriangle size={17} />
+                  <span>
+                    <strong>{t("Agent Runtime 连续崩溃")}</strong>
+                    <small>{t("Runtime 在一分钟内多次异常退出，已停止自动重启。请检查模型配置或查看日志后重试。")}</small>
+                  </span>
+                  <button type="button" onClick={() => void retryRuntime()}><RotateCcw size={13} />{t("重试")}</button>
+                </section>}
                 {runtimeRecoveries.length > 0 && <section className="runtime-recovery-banner" aria-live="polite">
                   <AlertTriangle size={17} />
                   <span>

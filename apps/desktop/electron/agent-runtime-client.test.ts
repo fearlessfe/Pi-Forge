@@ -1,0 +1,474 @@
+import { fork, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CredentialStore } from "@earendil-works/pi-ai";
+import type { AgentEvent } from "../src/contracts.js";
+import { AgentRuntimeClient } from "./agent-runtime-client.js";
+import { agentRuntimeProtocolVersion, type ParentToRuntimeMessage, type RuntimeToParentMessage } from "./agent-runtime-protocol.js";
+import type { BrowserDebugPort } from "./browser-service.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:child_process")>();
+  return { ...original, fork: vi.fn() };
+});
+
+const forkMock = vi.mocked(fork);
+
+class FakeChildProcess extends EventEmitter {
+  readonly sent: ParentToRuntimeMessage[] = [];
+  readonly stdout = null;
+  readonly stderr = null;
+  connected = true;
+
+  send(message: ParentToRuntimeMessage, callback?: (error: Error | null) => void): boolean {
+    this.sent.push(message);
+    callback?.(null);
+    return true;
+  }
+
+  kill(): boolean {
+    return true;
+  }
+
+  disconnect(): void {
+    this.connected = false;
+  }
+}
+
+const temporaryDirectories: string[] = [];
+const clients: AgentRuntimeClient[] = [];
+let children: FakeChildProcess[] = [];
+
+function temporaryDirectory(): string {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-runtime-client-test-"));
+  temporaryDirectories.push(directory);
+  return directory;
+}
+
+function lastChild(): FakeChildProcess {
+  const child = children.at(-1);
+  if (!child) throw new Error("expected the runtime worker to be forked");
+  return child;
+}
+
+function emitReady(child: FakeChildProcess, protocolVersion: number = agentRuntimeProtocolVersion): void {
+  child.emit("message", { kind: "runtime.ready", protocolVersion, pid: 4242 } as RuntimeToParentMessage);
+}
+
+function lastRequest(child: FakeChildProcess): Extract<ParentToRuntimeMessage, { kind: "runtime.request" }> {
+  const request = child.sent.filter((message) => message.kind === "runtime.request").at(-1);
+  if (!request || request.kind !== "runtime.request") throw new Error("expected a runtime request");
+  return request;
+}
+
+type ClientOptions = ConstructorParameters<typeof AgentRuntimeClient>[0];
+
+function baseOptions(events: AgentEvent[]): ClientOptions {
+  return {
+    workerPath: path.join(temporaryDirectory(), "agent-runtime-worker.js"),
+    userDataPath: temporaryDirectory(),
+    agentDir: temporaryDirectory(),
+    fallbackCwd: temporaryDirectory(),
+    sessionDir: temporaryDirectory(),
+    settings: {
+      resolve: () => ({ provider: "openai", baseUrl: "https://example.com", modelId: "gpt-test", thinkingLevel: "off" }),
+    },
+    credentials: {
+      read: vi.fn(async () => ({ type: "api_key", key: "test-key" })),
+      list: vi.fn(async () => []),
+      modify: vi.fn(async (_provider: string, update: (current: unknown) => Promise<unknown>) => update(undefined)),
+      delete: vi.fn(async () => undefined),
+    } as unknown as CredentialStore,
+    mcp: { tools: vi.fn(async () => []), callTool: vi.fn(async () => ({ text: "", details: undefined })) },
+    browser: { startAnnotation: vi.fn() } as unknown as BrowserDebugPort,
+    emit: (event) => events.push(event),
+  };
+}
+
+function createClient(events: AgentEvent[] = [], overrides?: Partial<ClientOptions>): AgentRuntimeClient {
+  const client = new AgentRuntimeClient({ ...baseOptions(events), ...overrides });
+  clients.push(client);
+  return client;
+}
+
+beforeEach(() => {
+  children = [];
+  forkMock.mockReset();
+  forkMock.mockImplementation(() => {
+    const child = new FakeChildProcess();
+    children.push(child);
+    return child as unknown as ChildProcess;
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  for (const client of clients.splice(0)) client.dispose();
+  for (const directory of temporaryDirectories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+});
+
+describe("AgentRuntimeClient", () => {
+  it("rejects ready when the worker protocol version mismatches", async () => {
+    const client = createClient();
+    emitReady(lastChild(), agentRuntimeProtocolVersion + 1);
+
+    await expect(client.getModelCatalog()).rejects.toThrow("协议版本不兼容");
+  });
+
+  it("rejects pending requests when the child exits", async () => {
+    const client = createClient();
+    const child = lastChild();
+    emitReady(child);
+
+    const pending = client.getModelCatalog();
+    await vi.waitFor(() => {
+      expect(child.sent.some((message) => message.kind === "runtime.request")).toBe(true);
+    });
+    child.emit("exit", 1, null);
+
+    await expect(pending).rejects.toThrow("Agent Runtime exited (1).");
+  });
+
+  it("increases the restart backoff exponentially until it plateaus", () => {
+    vi.useFakeTimers();
+    createClient();
+
+    for (const delay of [250, 500, 1000, 2000, 4000, 4000]) {
+      const forksBefore = forkMock.mock.calls.length;
+      lastChild().emit("exit", 1, null);
+      vi.advanceTimersByTime(delay - 1);
+      expect(forkMock.mock.calls.length).toBe(forksBefore);
+      vi.advanceTimersByTime(1);
+      expect(forkMock.mock.calls.length).toBe(forksBefore + 1);
+      // Age the crash out of the breaker window so this test stays below the threshold.
+      vi.advanceTimersByTime(60_000);
+    }
+  });
+
+  it("trips the circuit breaker after three crashes within a minute", async () => {
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const client = createClient(events);
+
+    for (const delay of [250, 500]) {
+      lastChild().emit("exit", 1, null);
+      vi.advanceTimersByTime(delay);
+    }
+    expect(forkMock.mock.calls.length).toBe(3);
+
+    lastChild().emit("exit", 1, null);
+    vi.advanceTimersByTime(60_000);
+
+    expect(forkMock.mock.calls.length).toBe(3);
+    expect(events).toContainEqual({ type: "runtime.status", status: "crash-looping" });
+    await expect(client.getModelCatalog()).rejects.toThrow("已停止自动重启");
+  });
+
+  it("resets the breaker and forks a fresh worker on manual retry", async () => {
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const client = createClient(events);
+
+    for (const delay of [250, 500]) {
+      lastChild().emit("exit", 1, null);
+      vi.advanceTimersByTime(delay);
+    }
+    lastChild().emit("exit", 1, null);
+    expect(events).toContainEqual({ type: "runtime.status", status: "crash-looping" });
+
+    const retry = client.retryAfterCrashLoop();
+    emitReady(lastChild());
+    await retry;
+
+    expect(forkMock.mock.calls.length).toBe(4);
+    expect(events).toContainEqual({ type: "runtime.status", status: "running" });
+
+    // The crash counter was reset, so a single new crash restarts normally.
+    const forksBefore = forkMock.mock.calls.length;
+    lastChild().emit("exit", 1, null);
+    vi.advanceTimersByTime(250);
+    expect(forkMock.mock.calls.length).toBe(forksBefore + 1);
+    expect(events.filter((event) => event.type === "runtime.status" && event.status === "crash-looping")).toHaveLength(1);
+  });
+
+  it("routes host requests to the injected handlers and sends the response back", async () => {
+    createClient();
+    const child = lastChild();
+    emitReady(child);
+
+    child.emit("message", { kind: "host.request", id: "host-1", method: "credential.read", args: ["openai"] });
+
+    await vi.waitFor(() => {
+      expect(child.sent.some((message) => message.kind === "host.response")).toBe(true);
+    });
+    expect(child.sent.find((message) => message.kind === "host.response")).toMatchObject({
+      id: "host-1",
+      result: { type: "api_key", key: "test-key" },
+    });
+  });
+
+  it("resolves requests with worker responses and rejects on error results", async () => {
+    const client = createClient();
+    const child = lastChild();
+    emitReady(child);
+
+    const catalog = client.getModelCatalog();
+    await vi.waitFor(() => {
+      expect(child.sent.some((message) => message.kind === "runtime.request")).toBe(true);
+    });
+    child.emit("message", { kind: "runtime.response", id: lastRequest(child).id, result: [{ id: "openai" }] });
+    await expect(catalog).resolves.toEqual([{ id: "openai" }]);
+
+    const failing = client.listConversations();
+    await vi.waitFor(() => {
+      expect(child.sent.filter((message) => message.kind === "runtime.request")).toHaveLength(2);
+    });
+    child.emit("message", { kind: "runtime.response", id: lastRequest(child).id, error: { message: "boom", stack: "trace" } });
+    await expect(failing).rejects.toThrow("boom");
+  });
+
+  it("sends prompts, tracks the active run, and records an interrupted recovery on exit", async () => {
+    const events: AgentEvent[] = [];
+    const client = createClient(events);
+    const child = lastChild();
+    emitReady(child);
+
+    const sending = client.send("hello", "/tmp/workspace", "conversation-1");
+    await vi.waitFor(() => {
+      expect(child.sent.some((message) => message.kind === "runtime.request")).toBe(true);
+    });
+    const request = lastRequest(child);
+    expect(request.method).toBe("send");
+    expect(request.args).toEqual(["hello", "/tmp/workspace", "conversation-1"]);
+    child.emit("message", { kind: "runtime.response", id: request.id, result: "run-1" });
+    await expect(sending).resolves.toBe("run-1");
+    expect(client.isRunning()).toBe(true);
+
+    child.emit("exit", 2, null);
+
+    expect(events).toContainEqual({ type: "run.error", runId: "run-1", message: expect.stringContaining("异常退出") });
+    expect(client.listRecoveries()).toEqual([expect.objectContaining({ runId: "run-1", status: "interrupted" })]);
+    expect(client.isRunning()).toBe(false);
+  });
+
+  it("forwards runtime events and updates the active run state", () => {
+    const events: AgentEvent[] = [];
+    const client = createClient(events);
+    const child = lastChild();
+    emitReady(child);
+    expect(client.isRunning()).toBe(false);
+
+    child.emit("message", { kind: "runtime.event", event: { type: "run.started", runId: "run-1", conversationId: "c-1", provider: "openai", model: "gpt-test", cwd: "/tmp" } });
+    expect(client.isRunning()).toBe(true);
+    child.emit("message", { kind: "runtime.event", event: { type: "run.completed", runId: "run-1" } });
+    expect(client.isRunning()).toBe(false);
+    expect(events.map((event) => event.type)).toEqual(["run.started", "run.completed"]);
+  });
+
+  it("rejects new requests while the worker is down", async () => {
+    const client = createClient();
+    const child = lastChild();
+    emitReady(child);
+    child.emit("exit", 1, null);
+
+    await expect(client.getModelCatalog()).rejects.toThrow("当前不可用");
+  });
+
+  it("rejects pending requests and forks a new worker on restart", async () => {
+    const client = createClient();
+    const first = lastChild();
+    emitReady(first);
+    const pending = client.getModelCatalog();
+    await vi.waitFor(() => {
+      expect(first.sent.some((message) => message.kind === "runtime.request")).toBe(true);
+    });
+
+    const restarting = client.restart();
+    await expect(pending).rejects.toThrow("已重新启动");
+    expect(forkMock.mock.calls.length).toBe(2);
+    emitReady(lastChild());
+    await restarting;
+  });
+
+  it("aborts in-flight host requests on host.cancel", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const client = createClient([], {
+      mcp: {
+        tools: vi.fn(async () => []),
+        callTool: vi.fn((_descriptor: unknown, _args: Record<string, unknown>, signal?: AbortSignal) => {
+          observedSignal = signal;
+          return new Promise<{ text: string; details: unknown }>(() => undefined);
+        }),
+      },
+    });
+    const child = lastChild();
+    emitReady(child);
+
+    child.emit("message", { kind: "host.request", id: "host-9", method: "mcp.callTool", args: [{ serverKey: "server", name: "tool" }, {}] });
+    await vi.waitFor(() => {
+      expect(observedSignal).toBeDefined();
+    });
+    child.emit("message", { kind: "host.cancel", id: "host-9" });
+
+    expect(observedSignal?.aborted).toBe(true);
+    expect(client.isRunning()).toBe(false);
+  });
+
+  it("returns host handler errors back to the worker", async () => {
+    createClient([], {
+      credentials: {
+        read: vi.fn(async () => {
+          throw new Error("credential missing");
+        }),
+      } as unknown as CredentialStore,
+    });
+    const child = lastChild();
+    emitReady(child);
+
+    child.emit("message", { kind: "host.request", id: "host-2", method: "credential.read", args: ["openai"] });
+
+    await vi.waitFor(() => {
+      expect(child.sent.some((message) => message.kind === "host.response")).toBe(true);
+    });
+    expect(child.sent.find((message) => message.kind === "host.response")).toMatchObject({
+      id: "host-2",
+      error: { message: "credential missing" },
+    });
+  });
+
+  it("routes every host method to its injected handler", async () => {
+    const browser = { startAnnotation: vi.fn(async () => ({ success: true })) };
+    const mcp = { tools: vi.fn(async () => [{ name: "tool" }]), callTool: vi.fn(async () => ({ text: "", details: undefined })) };
+    createClient([], { browser: browser as unknown as BrowserDebugPort, mcp: mcp as unknown as ClientOptions["mcp"] });
+    const child = lastChild();
+    emitReady(child);
+
+    const hostRequests: Array<[string, string, unknown[]]> = [
+      ["host-list", "credential.list", []],
+      ["host-write", "credential.write", ["openai", { type: "api_key", key: "k" }]],
+      ["host-delete", "credential.delete", ["openai"]],
+      ["host-tools", "mcp.tools", []],
+      ["host-annotation", "browser.startAnnotation", []],
+    ];
+    for (const [id, method, args] of hostRequests) {
+      child.emit("message", { kind: "host.request", id, method, args });
+    }
+    await vi.waitFor(() => {
+      expect(child.sent.filter((message) => message.kind === "host.response")).toHaveLength(hostRequests.length);
+    });
+    const responses = child.sent.filter((message) => message.kind === "host.response");
+    expect(responses.every((message) => !("error" in message && message.error))).toBe(true);
+    expect(mcp.tools).toHaveBeenCalledOnce();
+    expect(browser.startAnnotation).toHaveBeenCalledOnce();
+  });
+
+  it("delegates simple method calls to the worker", async () => {
+    const client = createClient();
+    const child = lastChild();
+    emitReady(child);
+
+    const settings = { provider: "openai", baseUrl: "https://example.com", modelId: "gpt-test", thinkingLevel: "off" as const };
+    const cases: Array<[() => Promise<unknown>, unknown]> = [
+      [() => client.discoverModels(settings), []],
+      [() => client.executeExtensionCommand("/review", "/tmp", "c-1"), true],
+      [() => client.loadConversation("c-1"), { id: "c-1" }],
+      [() => client.forkConversation("c-1", "entry-1"), { id: "c-2" }],
+      [() => client.exportConversation("c-1", "markdown"), { filename: "c-1.md" }],
+      [() => client.setConversationArchived("c-1", true), undefined],
+      [() => client.setConversationTags("c-1", ["tag"]), undefined],
+      [() => client.renameConversation("c-1", "title"), undefined],
+      [() => client.deleteConversation("c-1"), undefined],
+      [() => client.abort(), undefined],
+      [() => client.queueMessage("later", "steer"), { steering: ["later"], followUp: [] }],
+      [() => client.clearQueue(), { steering: [], followUp: [] }],
+      [() => client.listChanges("run-1"), []],
+      [() => client.changePath("change-1"), "/tmp/file"],
+      [() => client.acceptChanges(["change-1"]), []],
+      [() => client.revertChanges(["change-1"]), []],
+      [() => client.getPermissionRuntime(), { mode: "balanced" }],
+      [() => client.getResourceInventory("/tmp"), { cwd: "/tmp" }],
+      [() => client.reloadPackages(), true],
+      [() => client.refreshCapabilities(), { hasSession: true }],
+      [() => client.getPluginRuntime(), { hasSession: true }],
+      [() => client.answerQuestion("call-1", "answer"), undefined],
+      [() => client.reset(), undefined],
+      [() => client.testConfiguration(settings), "ok"],
+      [() => client.updateConfiguration(), undefined],
+    ];
+    for (const [invoke, result] of cases) {
+      const promise = invoke();
+      const sentBefore = child.sent.length;
+      await vi.waitFor(() => {
+        expect(child.sent.length).toBeGreaterThan(sentBefore);
+      });
+      child.emit("message", { kind: "runtime.response", id: lastRequest(child).id, result });
+      await expect(promise).resolves.toEqual(result);
+    }
+  });
+
+  it("discards recovery records", async () => {
+    const client = createClient();
+    const child = lastChild();
+    emitReady(child);
+
+    const sending = client.send("do work", "/tmp", "c-1");
+    await vi.waitFor(() => {
+      expect(child.sent.some((message) => message.kind === "runtime.request")).toBe(true);
+    });
+    child.emit("message", { kind: "runtime.response", id: lastRequest(child).id, result: "run-1" });
+    await sending;
+    child.emit("exit", 1, null);
+
+    const [record] = client.listRecoveries();
+    expect(record).toMatchObject({ runId: "run-1", status: "interrupted" });
+    client.discardRecovery(record.id);
+    expect(client.listRecoveries()).toEqual([]);
+  });
+
+  it("retries an interrupted recovery as a continuation prompt", async () => {
+    const client = createClient();
+    emitReady(lastChild());
+
+    const sending = client.send("original task", "/tmp", "c-1");
+    await vi.waitFor(() => {
+      expect(lastChild().sent.some((message) => message.kind === "runtime.request")).toBe(true);
+    });
+    lastChild().emit("message", { kind: "runtime.response", id: lastRequest(lastChild()).id, result: "run-1" });
+    await sending;
+    lastChild().emit("exit", 1, null);
+    const [record] = client.listRecoveries();
+
+    await vi.waitFor(() => {
+      expect(children).toHaveLength(2);
+    });
+    emitReady(lastChild());
+    const retrying = client.retryRecovery(record.id);
+    await vi.waitFor(() => {
+      expect(lastChild().sent.some((message) => message.kind === "runtime.request")).toBe(true);
+    });
+    const request = lastRequest(lastChild());
+    expect(request.method).toBe("send");
+    expect(request.args[0]).toContain("original task");
+    expect(request.args[0]).toContain("interrupted");
+    lastChild().emit("message", { kind: "runtime.response", id: request.id, result: "run-2" });
+    lastChild().emit("message", { kind: "runtime.event", event: { type: "run.completed", runId: "run-2" } });
+    await expect(retrying).resolves.toBe("run-2");
+    expect(client.listRecoveries()).toEqual([]);
+  });
+
+  it("interrupts the active run and disconnects the worker when disposed", () => {
+    const client = createClient();
+    const child = lastChild();
+    emitReady(child);
+    child.emit("message", { kind: "runtime.event", event: { type: "run.started", runId: "run-1", conversationId: "c-1", provider: "openai", model: "gpt-test", cwd: "/tmp" } });
+    expect(client.isRunning()).toBe(true);
+
+    client.dispose();
+
+    expect(child.connected).toBe(false);
+    expect(client.isRunning()).toBe(true);
+  });
+});

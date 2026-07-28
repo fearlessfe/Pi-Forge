@@ -36,6 +36,9 @@ type PendingRequest = {
   reject(error: Error): void;
 };
 
+const crashLoopWindowMs = 60_000;
+const crashLoopThreshold = 3;
+
 type RuntimeClientOptions = {
   workerPath: string;
   userDataPath: string;
@@ -70,6 +73,8 @@ export class AgentRuntimeClient {
   private restartTimer?: NodeJS.Timeout;
   private restartAttempt = 0;
   private pendingPrompt?: string;
+  private crashTimestamps: number[] = [];
+  private crashLooping = false;
 
   constructor(private readonly options: RuntimeClientOptions) {
     this.recovery = new RuntimeRecoveryStore(options.userDataPath);
@@ -163,6 +168,20 @@ export class AgentRuntimeClient {
     await this.ready;
   }
 
+  async retryAfterCrashLoop(): Promise<void> {
+    this.crashTimestamps = [];
+    this.crashLooping = false;
+    this.restartAttempt = 0;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = undefined;
+    }
+    this.stopChild(true);
+    this.start();
+    await this.ready;
+    this.options.emit({ type: "runtime.status", status: "running" });
+  }
+
   dispose(): void {
     this.disposing = true;
     if (this.restartTimer) clearTimeout(this.restartTimer);
@@ -176,6 +195,9 @@ export class AgentRuntimeClient {
       this.resolveReady = resolve;
       this.rejectReady = reject;
     });
+    // Requests await this promise; mark it handled so a worker exit without
+    // pending requests is not reported as an unhandled rejection.
+    void this.ready.catch(() => undefined);
     const child = this.options.forkProcess?.(this.options.workerPath, [], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -203,6 +225,7 @@ export class AgentRuntimeClient {
   }
 
   private async request<T>(method: AgentRuntimeMethod, ...args: unknown[]): Promise<T> {
+    if (this.crashLooping) throw new Error("Agent Runtime 连续崩溃，已停止自动重启。请点击界面中的“重试”按钮重新启动。");
     await this.ready;
     const child = this.child;
     if (!child?.connected) throw new Error("Agent Runtime 当前不可用，正在重新启动。");
@@ -310,12 +333,25 @@ export class AgentRuntimeClient {
       this.options.emit({ type: "run.error", runId: interruptedRunId, message });
     }
     if (this.disposing) return;
+    if (this.recordCrash()) {
+      this.options.emit({ type: "runtime.status", status: "crash-looping" });
+      return;
+    }
     this.restartAttempt += 1;
     const delay = Math.min(5_000, 250 * 2 ** Math.min(this.restartAttempt - 1, 4));
     this.restartTimer = setTimeout(() => {
       this.restartTimer = undefined;
       this.start();
     }, delay);
+  }
+
+  private recordCrash(): boolean {
+    const now = Date.now();
+    this.crashTimestamps = this.crashTimestamps.filter((timestamp) => now - timestamp < crashLoopWindowMs);
+    this.crashTimestamps.push(now);
+    if (this.crashTimestamps.length < crashLoopThreshold) return false;
+    this.crashLooping = true;
+    return true;
   }
 
   private stopChild(disconnect: boolean): void {

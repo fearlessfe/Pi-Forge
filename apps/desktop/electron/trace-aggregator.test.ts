@@ -114,4 +114,131 @@ describe("AgentTraceAggregator", () => {
       nested: { api_key: "[REDACTED]", command: "curl '?token=[REDACTED]'" },
     });
   });
+
+  it("records question requests, retries, and cancelled runs", () => {
+    const spans: TraceSpanRecord[] = [];
+    const trace = new AgentTraceAggregator({ add: (span) => spans.push(span) });
+    const runId = "run-4";
+    trace.record({ type: "run.started", runId, conversationId: "c", provider: "openai", model: "gpt", cwd: "/w" });
+    trace.record(raw(runId, "turn_start", 10));
+    trace.record(raw(runId, "turn_start", 20));
+    trace.record({ type: "question.requested", runId, callId: "ask-1", question: "continue?", options: [{ label: "yes" }, { label: "no" }] });
+    trace.record(raw(runId, "auto_retry_start", 30));
+    trace.record(raw(runId, "auto_retry_end", 40));
+    trace.record(raw(runId, "summarization_retry_attempt_start", 50));
+    trace.record(raw(runId, "summarization_retry_finished", 60));
+    trace.record(raw(runId, "compaction_end", 70));
+    trace.record({ type: "run.stopped", runId });
+
+    const retries = spans.filter((span) => span.name === "agent.retry");
+    expect(retries).toHaveLength(2);
+    expect(retries.map((span) => span.attributes["agent.retry.kind"])).toEqual(["auto_retry_start", "summarization_retry_attempt_start"]);
+    const root = spans.find((span) => span.name === "agent.run")!;
+    expect(root.attributes["agent.run.outcome"]).toBe("cancelled");
+    expect(root.status).toEqual({ code: "error", message: "Agent run stopped" });
+    const turn = spans.filter((span) => span.name === "agent.turn").at(-1)!;
+    expect(turn.events).toContainEqual(expect.objectContaining({
+      name: "agent.question.requested",
+      attributes: expect.objectContaining({ "agent.question.option_count": 2 }),
+    }));
+    // The second turn_start closes the first turn; both turns are recorded.
+    expect(spans.filter((span) => span.name === "agent.turn")).toHaveLength(2);
+  });
+
+  it("truncates captured generation output beyond the capture limit", () => {
+    const spans: TraceSpanRecord[] = [];
+    const trace = new AgentTraceAggregator({ add: (span) => spans.push(span) });
+    const runId = "run-5";
+    trace.record({ type: "run.started", runId, conversationId: "c", provider: "openai", model: "gpt", cwd: "/w" }, { prompt: "", captureContent: "full" });
+    trace.record(raw(runId, "message_start", 10, { message: { role: "assistant" } }));
+    trace.record({ type: "message.delta", runId, text: "x".repeat(150_000) });
+    trace.record({ type: "message.delta", runId, text: "more" });
+    trace.record({ type: "response.usage", runId, usage });
+    trace.record({ type: "run.completed", runId });
+
+    const generation = spans.find((span) => span.name === "gen_ai.chat")!;
+    expect(generation.attributes["gen_ai.output.size"]).toBe(150_004);
+    expect(String(generation.attributes["gen_ai.output"])).toHaveLength(100_000);
+    expect(generation.attributes["gen_ai.output.truncated"]).toBe(true);
+  });
+
+  it("ignores events without a run, non-assistant payloads, and unknown tool completions", () => {
+    const spans: TraceSpanRecord[] = [];
+    const trace = new AgentTraceAggregator({ add: (span) => spans.push(span) });
+    trace.record({ type: "runtime.status", status: "ready" } as unknown as AgentEvent);
+    trace.record({ type: "message.delta", runId: "missing", text: "ignored" });
+    trace.record({ type: "run.completed", runId: "missing" });
+
+    const runId = "run-6";
+    trace.record({ type: "run.started", runId, conversationId: "c", provider: "openai", model: "gpt", cwd: "/w" });
+    trace.record(raw(runId, "message_start", 10, null));
+    trace.record(raw(runId, "message_start", 11, { message: "not-an-object" }));
+    trace.record(raw(runId, "turn_end", 12));
+    trace.record({ type: "tool.completed", runId, callId: "unknown", name: "read", output: "", isError: false });
+    trace.record({ type: "response.usage", runId, usage });
+    trace.record({ type: "thinking.delta", runId, text: "hmm" });
+    trace.record({ type: "run.completed", runId });
+
+    expect(spans).toHaveLength(1);
+    expect(spans[0].name).toBe("agent.run");
+  });
+
+  it("finishes a previous run when the same run id starts again", () => {
+    const spans: TraceSpanRecord[] = [];
+    const trace = new AgentTraceAggregator({ add: (span) => spans.push(span) });
+    const runId = "run-7";
+    trace.record({ type: "run.started", runId, conversationId: "c", provider: "openai", model: "gpt", cwd: "/w" });
+    trace.record({ type: "run.started", runId, conversationId: "c", provider: "openai", model: "gpt", cwd: "/w" });
+    trace.finishOpenRuns();
+
+    expect(spans.filter((span) => span.name === "agent.run")).toHaveLength(2);
+    expect(spans[0].status).toEqual({ code: "error", message: "Duplicate run start" });
+    expect(spans[1].status.message).toBe("Application exited before the run completed");
+  });
+
+  it("omits optional subagent attributes when they are absent", () => {
+    const spans: TraceSpanRecord[] = [];
+    const trace = new AgentTraceAggregator({ add: (span) => spans.push(span) });
+    const runId = "run-8";
+    trace.record({ type: "run.started", runId, conversationId: "c", provider: "openai", model: "gpt", cwd: "/w" });
+    trace.record({ type: "tool.started", runId, callId: "call-1", name: "subagent", args: {} });
+    const subagent = {
+      id: "child-1",
+      parentConversationId: "c",
+      toolCallId: "call-1",
+      role: "reviewer",
+      task: "review",
+      cwd: "/w",
+      sessionId: "child-session",
+      status: "failed",
+      startedAt: new Date(1).toISOString(),
+      updatedAt: new Date(2).toISOString(),
+    } as unknown as SubagentRunInfo;
+    trace.record({ type: "tool.completed", runId, callId: "call-1", name: "subagent", output: "", isError: true, details: { subagent } });
+    trace.record({ type: "run.completed", runId });
+
+    const tool = spans.find((span) => span.name === "execute_tool subagent")!;
+    expect(tool.status).toEqual({ code: "error", message: "Tool execution failed" });
+    expect(tool.attributes["agent.subagent.parent_run.id"]).toBeUndefined();
+    expect(tool.attributes["gen_ai.usage.input_tokens"]).toBeUndefined();
+  });
+
+  it("redacts arrays, marks circular references, and survives unserializable arguments", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(redactTraceValue({ list: ["sk-abcdefghijklmnop"], circular })).toEqual({
+      list: ["[REDACTED]"],
+      circular: { self: "[Circular]" },
+    });
+
+    const spans: TraceSpanRecord[] = [];
+    const trace = new AgentTraceAggregator({ add: (span) => spans.push(span) });
+    const runId = "run-9";
+    trace.record({ type: "run.started", runId, conversationId: "c", provider: "openai", model: "gpt", cwd: "/w" }, { prompt: "", captureContent: "metadata" });
+    trace.record({ type: "tool.started", runId, callId: "call-1", name: "bash", args: { value: 10n } });
+    trace.record({ type: "run.completed", runId });
+
+    const tool = spans.find((span) => span.name === "execute_tool bash")!;
+    expect(typeof tool.attributes["gen_ai.tool.call.arguments.sha256"]).toBe("string");
+  });
 });

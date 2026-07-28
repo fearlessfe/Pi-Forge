@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, session, shell } from "electron";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -14,6 +14,7 @@ import { SettingsStore } from "./settings-store.js";
 import { ModelMetadataStore } from "./model-metadata-store.js";
 import { SystemPromptStore } from "./system-prompt-store.js";
 import { ResourceStore } from "./resource-store.js";
+import { requireKnownWorkspace, seedKnownWorkspacesFromSessions } from "./workspace-guard.js";
 import { McpStore } from "./mcp-store.js";
 import { McpService } from "./mcp-service.js";
 import { TerminalService } from "./terminal-service.js";
@@ -41,6 +42,21 @@ if (!isPrimaryInstance) app.quit();
 
 function sendAgentEvent(event: AgentEvent): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("agent:event", event);
+}
+
+function installContentSecurityPolicy(): void {
+  // Dev is intentionally looser: Vite's React preamble is an inline script and HMR needs the websocket.
+  const policy = process.env.VITE_DEV_SERVER_URL
+    ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws://127.0.0.1:4173 http://127.0.0.1:4173"
+    : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'";
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [policy],
+      },
+    });
+  });
 }
 
 function createWindow(): BrowserWindow {
@@ -170,6 +186,12 @@ function registerIpc(
   browser: BrowserService,
   observability: ObservabilityService,
 ): void {
+  const optionalKnownWorkspace = (value: unknown, message = "工作区路径无效。"): string | undefined => {
+    if (value === undefined) return undefined;
+    const resolved = requireString(value, message);
+    requireKnownWorkspace(resources, resolved);
+    return resolved;
+  };
   ipcMain.handle("settings:get", () => settingsWithCredentials(settings, credentials));
   ipcMain.handle("settings:catalog", () => agent.getModelCatalog());
   ipcMain.handle("settings:refresh-metadata", () => agent.getModelCatalog(true));
@@ -246,14 +268,20 @@ function registerIpc(
       properties: ["openDirectory", "createDirectory"],
     });
     if (result.canceled || !result.filePaths[0]) return null;
-    const selectedPath = result.filePaths[0];
+    const selectedPath = resources.addKnownWorkspace(result.filePaths[0]);
     return { name: path.basename(selectedPath), ...resources.getTrustStatus(selectedPath) };
   });
-  ipcMain.handle("workspace:trust-status", (_event, value: unknown) => resources.getTrustStatus(requireString(value, "工作区路径无效。")));
+  ipcMain.handle("workspace:trust-status", (_event, value: unknown) => {
+    const workspacePath = requireString(value, "工作区路径无效。");
+    requireKnownWorkspace(resources, workspacePath);
+    return resources.getTrustStatus(workspacePath);
+  });
   ipcMain.handle("workspace:set-trusted", async (_event, value: unknown, trusted: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改项目信任状态。");
     if (typeof trusted !== "boolean") throw new Error("项目信任状态无效。");
-    const status = resources.setProjectTrusted(requireString(value, "工作区路径无效。"), trusted);
+    const workspacePath = requireString(value, "工作区路径无效。");
+    requireKnownWorkspace(resources, workspacePath);
+    const status = resources.setProjectTrusted(workspacePath, trusted);
     await agent.reset();
     return status;
   });
@@ -264,7 +292,7 @@ function registerIpc(
     await agent.reset();
     return saved;
   });
-  ipcMain.handle("resources:inventory", (_event, cwd: unknown) => agent.getResourceInventory(cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
+  ipcMain.handle("resources:inventory", (_event, cwd: unknown) => agent.getResourceInventory(optionalKnownWorkspace(cwd)));
   ipcMain.handle("resources:set-skill-enabled", async (_event, name: unknown, enabled: unknown, cwd: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改 Skill。");
     const skillName = requireString(name, "Skill 名称无效。");
@@ -275,7 +303,7 @@ function registerIpc(
       : [...new Set([...current.disabledSkills, skillName])];
     resources.saveSettings({ ...current, disabledSkills });
     await agent.reset();
-    return agent.getResourceInventory(cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。"));
+    return agent.getResourceInventory(optionalKnownWorkspace(cwd));
   });
   ipcMain.handle("resources:execute-extension-command", async (_event, value: unknown) => {
     if (!value || typeof value !== "object") throw new Error("命令格式无效。");
@@ -283,9 +311,10 @@ function registerIpc(
     if (typeof input.prompt !== "string" || (input.cwd !== undefined && typeof input.cwd !== "string") || (input.conversationId !== undefined && typeof input.conversationId !== "string")) {
       throw new Error("命令字段无效。");
     }
+    if (input.cwd !== undefined) requireKnownWorkspace(resources, input.cwd);
     return { handled: await agent.executeExtensionCommand(input.prompt, input.cwd, input.conversationId) };
   });
-  ipcMain.handle("mcp:overview", (_event, cwd: unknown) => mcp.overview(cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
+  ipcMain.handle("mcp:overview", (_event, cwd: unknown) => mcp.overview(optionalKnownWorkspace(cwd)));
   ipcMain.handle("mcp:save", async (_event, value: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改 MCP 配置。");
     const overview = mcp.save(requireMcpServerInput(value));
@@ -294,15 +323,15 @@ function registerIpc(
   });
   ipcMain.handle("mcp:remove", async (_event, key: unknown, cwd: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再删除 MCP Server。");
-    const overview = await mcp.remove(requireString(key, "MCP Server 无效。"), cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。"));
+    const overview = await mcp.remove(requireString(key, "MCP Server 无效。"), optionalKnownWorkspace(cwd));
     await agent.reset();
     return overview;
   });
-  ipcMain.handle("mcp:connect", (_event, key: unknown, cwd: unknown) => mcp.connect(requireString(key, "MCP Server 无效。"), cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
-  ipcMain.handle("mcp:disconnect", (_event, key: unknown, cwd: unknown) => mcp.disconnect(requireString(key, "MCP Server 无效。"), cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
-  ipcMain.handle("mcp:reconnect", (_event, key: unknown, cwd: unknown) => mcp.reconnect(requireString(key, "MCP Server 无效。"), cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
+  ipcMain.handle("mcp:connect", (_event, key: unknown, cwd: unknown) => mcp.connect(requireString(key, "MCP Server 无效。"), optionalKnownWorkspace(cwd)));
+  ipcMain.handle("mcp:disconnect", (_event, key: unknown, cwd: unknown) => mcp.disconnect(requireString(key, "MCP Server 无效。"), optionalKnownWorkspace(cwd)));
+  ipcMain.handle("mcp:reconnect", (_event, key: unknown, cwd: unknown) => mcp.reconnect(requireString(key, "MCP Server 无效。"), optionalKnownWorkspace(cwd)));
   ipcMain.handle("terminal:create", (_event, cwd: unknown, cols: unknown, rows: unknown) => terminal.create(
-    cwd === undefined ? undefined : requireString(cwd, "终端工作目录无效。"),
+    optionalKnownWorkspace(cwd, "终端工作目录无效。"),
     typeof cols === "number" ? cols : undefined,
     typeof rows === "number" ? rows : undefined,
   ));
@@ -345,7 +374,7 @@ function registerIpc(
       version === undefined ? undefined : requireString(version, "插件版本无效。"),
     );
   });
-  ipcMain.handle("plugins:list", (_event, cwd: unknown) => plugins.listInstalled(cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。")));
+  ipcMain.handle("plugins:list", (_event, cwd: unknown) => plugins.listInstalled(optionalKnownWorkspace(cwd)));
   ipcMain.handle("plugins:install", async (_event, name: unknown, version: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再安装插件。");
     const installed = await plugins.install(
@@ -381,7 +410,7 @@ function registerIpc(
     if (typeof enabled !== "boolean") throw new Error("插件启停状态无效。");
     if (scope !== undefined && scope !== "user" && scope !== "project") throw new Error("插件启停范围无效。");
     const packageSource = requireString(source, "插件安装来源无效。");
-    const projectPath = cwd === undefined ? undefined : requireString(cwd, "工作区路径无效。");
+    const projectPath = optionalKnownWorkspace(cwd);
     const installed = plugins.setEnabled(packageSource, enabled, projectPath, scope === "project" ? "project" : "user");
     if (!enabled) {
       const currentCapabilities = capabilities.get();
@@ -456,6 +485,7 @@ function registerIpc(
     ) {
       throw new Error("消息字段无效。");
     }
+    if (input.cwd !== undefined) requireKnownWorkspace(resources, input.cwd);
     const runId = await agent.send(input.prompt, input.cwd, input.conversationId);
     return { runId };
   });
@@ -515,12 +545,14 @@ function registerIpc(
   ipcMain.handle("agent:list-recoveries", () => agent.listRecoveries());
   ipcMain.handle("agent:retry-recovery", async (_event, id: unknown) => ({ runId: await agent.retryRecovery(requireString(id, "恢复任务无效。")) }));
   ipcMain.handle("agent:discard-recovery", (_event, id: unknown) => agent.discardRecovery(requireString(id, "恢复任务无效。")));
+  ipcMain.handle("agent:retry-runtime", () => agent.retryAfterCrashLoop());
 }
 
 if (isPrimaryInstance) void app.whenReady().then(async () => {
   const userData = app.getPath("userData");
   const piDesktopHome = path.join(os.homedir(), ".pi-desktop");
   const chatSandbox = path.join(piDesktopHome, "workspace");
+  const sessionDir = path.join(piDesktopHome, "sessions");
   const settings = new SettingsStore(userData);
   const observabilityStore = new ObservabilityStore(userData);
   observabilityService = new ObservabilityService(observabilityStore, userData);
@@ -549,7 +581,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
     userDataPath: userData,
     agentDir: path.join(userData, "pi-agent"),
     fallbackCwd: chatSandbox,
-    sessionDir: path.join(piDesktopHome, "sessions"),
+    sessionDir,
     settings,
     credentials,
     mcp: mcpService,
@@ -569,7 +601,12 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
     (event) => mainWindow?.webContents.send("plugins:event", event),
     { securityStore: pluginSecurity },
   );
+  // The fallback workspace is always allowed; seed the rest from existing sessions
+  // so conversations created before the workspace restriction keep loading.
+  resources.addKnownWorkspace(chatSandbox);
+  seedKnownWorkspacesFromSessions(resources, [sessionDir]);
   registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata, resources, mcpService, terminalService, browserService, observabilityService);
+  installContentSecurityPolicy();
   mainWindow = createWindow();
 
   app.on("second-instance", () => {

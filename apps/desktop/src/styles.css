@@ -864,6 +864,14 @@ textarea:focus-visible,
 .runtime-recovery-banner button:disabled { opacity: .45; cursor: not-allowed; }
 .runtime-recovery-banner .runtime-recovery-discard { width: 29px; padding: 0; justify-content: center; color: var(--muted); }
 
+.runtime-crash-banner {
+  border-color: rgb(255 133 133 / 40%);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--panel) 94%, #7a2020 6%);
+}
+
+.runtime-crash-banner + .runtime-recovery-banner { top: 74px; }
+
 .workspace-main {
   min-width: 0;
   min-height: 0;

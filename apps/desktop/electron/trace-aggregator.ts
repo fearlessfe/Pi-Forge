@@ -145,6 +145,8 @@ export class AgentTraceAggregator {
       this.startRun(event, now, context);
       return;
     }
+    // Runtime lifecycle events are not tied to a run and produce no spans.
+    if (event.type === "runtime.status") return;
     const run = this.runs.get(event.runId);
     if (!run) return;
 
