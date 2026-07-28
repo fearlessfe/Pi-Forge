@@ -2889,8 +2889,9 @@ textarea:focus-visible,
   margin: 0 auto 8px;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 8%);
 }
 
 .file-changes-panel > header,
@@ -2903,18 +2904,20 @@ textarea:focus-visible,
 }
 
 .file-changes-panel > header {
-  min-height: 38px;
+  min-height: 42px;
   justify-content: space-between;
-  padding: 0 8px 0 10px;
+  gap: 12px;
+  padding: 0 9px 0 12px;
 }
 
 .file-changes-trigger {
   gap: 7px;
+  min-width: 0;
   border: 0;
   color: var(--text-2);
   background: transparent;
   cursor: pointer;
-  font-size: 10px;
+  font-size: 10.5px;
 }
 
 .file-changes-trigger > svg:first-child {
@@ -2950,6 +2953,17 @@ textarea:focus-visible,
   background: transparent;
   cursor: pointer;
   font-size: 8.5px;
+  transition: border-color .18s ease, background .18s ease, color .18s ease, transform .18s ease;
+}
+
+.file-changes-panel > header > div button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.file-changes-panel > header > div button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .file-changes-panel button:disabled {
@@ -2958,34 +2972,43 @@ textarea:focus-visible,
 }
 
 .file-changes-content {
-  max-height: 320px;
-  padding: 0 8px 8px;
+  max-height: min(42vh, 392px);
   overflow: auto;
+  border-top: 1px solid var(--border-soft);
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-3) transparent;
 }
 
 .turn-file-changes {
-  margin-top: -18px;
-  margin-bottom: 34px;
+  margin-top: 16px;
+  margin-bottom: 0;
 }
 
 .file-change-row {
-  overflow: hidden;
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
-  background: var(--bg);
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  position: relative;
+  background: transparent;
+  transition: background .18s ease;
 }
 
 .file-change-row + .file-change-row {
-  margin-top: 6px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.file-change-row:hover {
+  background: var(--surface-2);
 }
 
 .file-change-open {
-  width: 100%;
-  min-height: 36px;
+  min-width: 0;
+  min-height: 42px;
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 0 9px;
+  padding: 0 6px 0 12px;
   border: 0;
   color: var(--muted);
   background: transparent;
@@ -2995,7 +3018,6 @@ textarea:focus-visible,
 
 .file-change-open:hover {
   color: var(--text-2);
-  background: var(--surface-2);
 }
 
 .file-change-open > svg {
@@ -3008,7 +3030,7 @@ textarea:focus-visible,
   flex: 1;
   overflow: hidden;
   color: var(--text-2);
-  font: 9px var(--mono);
+  font: 9.5px var(--mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3017,7 +3039,7 @@ textarea:focus-visible,
 .file-change-open > em {
   flex: 0 0 auto;
   color: var(--muted);
-  font-size: 8px;
+  font-size: 8.5px;
   font-style: normal;
 }
 
@@ -3035,11 +3057,17 @@ textarea:focus-visible,
 
 .file-change-actions {
   display: flex;
+  align-items: center;
   gap: 5px;
-  padding: 0 9px 8px 29px;
+  padding: 0 10px 0 4px;
 }
 
 .file-change-actions button {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   padding: 4px 8px;
   border: 1px solid var(--border-soft);
   border-radius: 6px;
@@ -3047,16 +3075,38 @@ textarea:focus-visible,
   background: var(--surface);
   cursor: pointer;
   font-size: 8.5px;
+  transition: border-color .18s ease, background .18s ease, transform .18s ease;
 }
 
 .file-change-actions button:hover:not(:disabled) {
   border-color: var(--border-strong);
-  background: var(--surface-2);
+  background: var(--surface-3);
+}
+
+.file-change-actions button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.file-change-actions .file-change-revert {
+  width: 26px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+}
+
+.file-change-revert-unavailable {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  opacity: .42;
 }
 
 .file-change-row > p {
+  grid-column: 1 / -1;
   margin: 0;
-  padding: 0 9px 8px 29px;
+  padding: 0 12px 9px 32px;
   font-size: 8.5px;
 }
 

@@ -163,6 +163,23 @@ const compatibleProviderDefinitions: Record<string, CompatibleProviderDefinition
   },
 };
 
+const initProjectPrompt = `Initialize the current project for future coding-agent sessions by creating or updating AGENTS.md at the workspace root.
+
+Work autonomously and make the file change directly:
+1. Inspect the repository's existing AGENTS.md (if any), README files, package/build configuration, directory structure, and representative source and test files.
+2. Preserve useful, accurate existing instructions. Update stale content instead of blindly replacing the file.
+3. Document only verified, project-specific information that helps another coding agent work effectively: project purpose and architecture, important directories, setup and common build/test/lint/typecheck commands, coding conventions, validation expectations, and non-obvious pitfalls.
+4. Keep AGENTS.md concise and actionable. Do not add generic advice, invented commands, secrets, or a verbose inventory of every file.
+5. After writing the file, briefly summarize what you created or changed and mention any important gaps you could not verify.`;
+
+function expandDesktopCommand(prompt: string): string {
+  return prompt.trim() === "/init" ? initProjectPrompt : prompt;
+}
+
+function displayUserPrompt(prompt: string): string {
+  return prompt.trim() === initProjectPrompt ? "/init" : prompt;
+}
+
 const questionParameters = Type.Object({
   question: Type.String({ description: "A concise question for the user" }),
   options: Type.Optional(Type.Array(Type.Object({
@@ -488,7 +505,7 @@ export class AgentService {
     });
     this.emitContextUsage(runId, session);
 
-    void session.prompt(prompt.trim()).then(() => {
+    void session.prompt(expandDesktopCommand(prompt.trim())).then(() => {
       if (this.activeRunId !== runId) return;
       const modelError = session.agent.state.errorMessage;
       this.persistFileChanges(runId);
@@ -562,7 +579,7 @@ export class AgentService {
       const record = entry.message as unknown as Record<string, unknown>;
       const role = typeof record.role === "string" ? record.role : "";
       if (role === "user") {
-        const question = this.messageText(record.content);
+        const question = displayUserPrompt(this.messageText(record.content));
         if (question) turns.push({ id: entry.id, question, answer: "", activities: [] });
         continue;
       }
@@ -1101,7 +1118,7 @@ export class AgentService {
 
   private historyItem(session: SessionInfo, metadata: ConversationMetadata = { tags: [], archived: false }, parentConversationId?: string): ConversationHistoryItem {
     const isProject = Boolean(session.cwd) && path.resolve(session.cwd) !== path.resolve(this.fallbackCwd);
-    const title = session.name?.trim() || session.firstMessage.trim().replace(/\s+/g, " ") || "未命名对话";
+    const title = session.name?.trim() || displayUserPrompt(session.firstMessage).trim().replace(/\s+/g, " ") || "未命名对话";
     return {
       id: session.id,
       title: title.length > 60 ? `${title.slice(0, 60)}…` : title,

@@ -624,9 +624,9 @@ export function App() {
     return conversationId;
   }
 
-  async function sendQuestion(question: string) {
+  async function sendQuestion(question: string, skipExtensionCommand = false) {
     if (!question.trim() || isRunning) return;
-    if (question.trimStart().startsWith("/") && window.piDesktop?.resources?.executeExtensionCommand) {
+    if (!skipExtensionCommand && question.trimStart().startsWith("/") && window.piDesktop?.resources?.executeExtensionCommand) {
       setCommandRunning(true);
       try {
         const result = await window.piDesktop.resources.executeExtensionCommand({ prompt: question.trim(), cwd: project?.path, conversationId: selectedConversationId ?? undefined });
@@ -682,6 +682,14 @@ export function App() {
 
   function submitPrompt() {
     const command = prompt.trim();
+    if (command === "/init") {
+      if (!project) {
+        setNotice({ title: t("请选择工作目录"), message: t("/init 需要一个项目目录来生成 AGENTS.md。"), type: "info" });
+        return;
+      }
+      void sendQuestion(command, true);
+      return;
+    }
     if (command === "/new") {
       startNewChat();
       return;

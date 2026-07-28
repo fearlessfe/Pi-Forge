@@ -385,6 +385,46 @@ describe("AgentService with a real Pi session", () => {
     }
   });
 
+  it("expands /init into an AGENTS.md initialization task while keeping the command in conversation history", async () => {
+    const requests: ChatRequest[] = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (part) => { body += part; });
+      req.on("end", () => {
+        requests.push(JSON.parse(body) as ChatRequest);
+        writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "initialized" }), chunk({}, "stop")]);
+      });
+    });
+    const port = await listen(server);
+    const cwd = createDirectory("init-command-workspace");
+    const agentDir = createDirectory("init-command-agent");
+    const events: AgentEvent[] = [];
+    const service = new AgentService({
+      resolve: () => ({
+        provider: "openai-compatible",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        modelId: "mock-model",
+        thinkingLevel: "off" as const,
+        apiKey: "init-key",
+      }),
+    }, agentDir, cwd, (event) => events.push(event));
+
+    try {
+      const runId = await service.send("/init", cwd, "init-conversation");
+      await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
+
+      expect(JSON.stringify(requests[0]?.messages)).toContain("creating or updating AGENTS.md");
+      await expect(service.loadConversation("init-conversation")).resolves.toEqual(expect.objectContaining({
+        title: "/init",
+        turns: [expect.objectContaining({ question: "/init", answer: "initialized" })],
+      }));
+    } finally {
+      service.dispose();
+      await close(server);
+    }
+  });
+
   it("restores historical thinking, tool calls, per-answer model usage, and context", async () => {
     const cwd = createDirectory("usage-history-workspace");
     const agentDir = createDirectory("usage-history-agent");

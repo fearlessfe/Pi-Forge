@@ -62,6 +62,7 @@ type NewChatViewProps = {
 };
 
 const desktopCommands: CommandInfo[] = [
+  { name: "/init", description: "生成或更新项目 AGENTS.md", source: "desktop", sourceLabel: "Pi Desktop" },
   { name: "/new", description: "开始新对话", source: "desktop", sourceLabel: "Pi Desktop" },
   { name: "/settings", description: "打开设置", source: "desktop", sourceLabel: "Pi Desktop" },
   { name: "/plugins", description: "打开插件管理", source: "desktop", sourceLabel: "Pi Desktop" },
@@ -629,7 +630,12 @@ function FileChangesPanel({ changes, running, onOpen, onAccept, onRevert }: {
           {isArtifactChange(change) && <span className="file-change-type">{t("成果物")}</span>}
           <span>{t(change.kind === "created" ? "新建" : "修改")}</span><em>{t(change.status)}</em>
         </button>
-        {change.status === "pending" && <div className="file-change-actions"><button type="button" onClick={() => onAccept([change.id])}>{t("接受")}</button><button type="button" disabled={running || !change.revertible} onClick={() => onRevert([change.id])}>{t(change.revertible ? "回退" : "无法自动回退")}</button></div>}
+        {change.status === "pending" && <div className="file-change-actions">
+          <button type="button" onClick={() => onAccept([change.id])}><Check size={11} />{t("接受")}</button>
+          {change.revertible
+            ? <button className="file-change-revert" type="button" disabled={running} onClick={() => onRevert([change.id])} aria-label={t("回退")} title={t("回退")}><Undo2 size={12} /></button>
+            : <span className="file-change-revert-unavailable" aria-label={t("无法自动回退")} title={t("无法自动回退")}><Undo2 size={12} /></span>}
+        </div>}
         {change.error && <p>{change.error}</p>}
       </div>)}
     </Collapsible.Content>
