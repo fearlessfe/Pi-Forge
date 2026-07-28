@@ -163,14 +163,42 @@ const compatibleProviderDefinitions: Record<string, CompatibleProviderDefinition
   },
 };
 
-const initProjectPrompt = `Initialize the current project for future coding-agent sessions by creating or updating AGENTS.md at the workspace root.
+const initProjectPrompt = `Initialize the current workspace for future coding-agent sessions by creating or updating AGENTS.md at the workspace root.
 
-Work autonomously and make the file change directly:
-1. Inspect the repository's existing AGENTS.md (if any), README files, package/build configuration, directory structure, and representative source and test files.
-2. Preserve useful, accurate existing instructions. Update stale content instead of blindly replacing the file.
-3. Document only verified, project-specific information that helps another coding agent work effectively: project purpose and architecture, important directories, setup and common build/test/lint/typecheck commands, coding conventions, validation expectations, and non-obvious pitfalls.
-4. Keep AGENTS.md concise and actionable. Do not add generic advice, invented commands, secrets, or a verbose inventory of every file.
-5. After writing the file, briefly summarize what you created or changed and mention any important gaps you could not verify.`;
+Work autonomously and make the file change directly.
+
+Goal:
+Create a compact, high-signal instruction file that helps future agents avoid mistakes and become productive quickly. Every line should answer: "Would an agent likely miss or guess this incorrectly without help?" If not, omit it.
+
+Investigation:
+1. Read the existing AGENTS.md, if present, before editing it. Preserve accurate project-specific and manually added guidance.
+2. Inspect the highest-value sources first:
+   - README and contribution documentation;
+   - root manifests, workspace configuration, lockfiles, and task-runner files;
+   - build, development, test, lint, format, typecheck, code-generation, and migration configuration;
+   - CI workflows and pre-commit configuration;
+   - existing agent instructions such as CLAUDE.md, GEMINI.md, .cursor/rules, .cursorrules, and .github/copilot-instructions.md.
+3. If the architecture or workflow remains unclear, inspect a small number of representative entrypoints, core modules, and tests. Prefer files that explain how the system is wired together over random leaf files.
+4. Prefer executable sources of truth over prose. If documentation conflicts with scripts, configuration, or CI, trust the executable source and document the discrepancy only when it affects agent work.
+5. Ask the user only when an important convention cannot be determined from the workspace. Ask at most one concise batch of questions; otherwise proceed autonomously.
+
+What to document:
+- the project's purpose and non-obvious architecture, package, process, or ownership boundaries;
+- important directories and real entrypoints, without an exhaustive file inventory;
+- exact setup, development, build, lint, format, typecheck, test, and packaging commands that are actually available;
+- focused commands for one test, package, or verification step, plus required command ordering or prerequisites when relevant;
+- repository-specific coding, testing, security, persistence, localization, or workflow conventions that differ from tool defaults;
+- generated files, code generation, migrations, fixtures, snapshots, environment loading, required external services, expensive suites, platform limitations, and other verified pitfalls.
+
+Writing rules:
+- Update stale claims instead of blindly appending or replacing the file.
+- Include only verified, project-specific guidance that changes how an agent should work.
+- Do not invent commands, architecture, conventions, prerequisites, or secrets.
+- Do not include generic software advice, long tutorials, speculative recommendations, or content already obvious from filenames.
+- Prefer short sections and actionable bullets. Keep a simple workspace simple.
+- For a non-code workspace, describe its purpose, key files, and how its contents are used instead of inventing software-development sections.
+
+After writing AGENTS.md, briefly summarize what changed, which important sources were checked, which validation commands were run, and any gaps that could not be verified.`;
 
 function expandDesktopCommand(prompt: string): string {
   return prompt.trim() === "/init" ? initProjectPrompt : prompt;
