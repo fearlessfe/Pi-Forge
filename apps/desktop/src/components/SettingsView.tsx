@@ -18,6 +18,7 @@ import {
   Search,
   Settings2,
   Sparkles,
+  Activity,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type {
@@ -39,6 +40,7 @@ import type { AuthFlowState } from "../types";
 import { useI18n } from "../i18n";
 import { SkillsPanel } from "./SkillsPanel";
 import { McpPanel } from "./McpPanel";
+import { ObservabilityPanel } from "./ObservabilityPanel";
 
 type SettingsViewProps = {
   activeSection: SettingsSection;
@@ -77,6 +79,7 @@ const sections: Array<{
 }> = [
   { group: "AI", items: [{ id: "models", label: "大模型", icon: Sparkles }, { id: "model-metadata", label: "模型元信息", icon: Database }, { id: "permissions", label: "权限", icon: LockKeyhole }] },
   { group: "扩展", items: [{ id: "skills", label: "Skills", icon: BookOpen }, { id: "mcp", label: "MCP", icon: Cable }] },
+  { group: "可观测性", items: [{ id: "observability", label: "Trace", icon: Activity }] },
   { group: "应用", items: [{ id: "general", label: "通用", icon: Settings2 }, { id: "appearance", label: "外观", icon: Palette }] },
 ];
 
@@ -849,6 +852,7 @@ export function SettingsView(props: SettingsViewProps) {
         {props.activeSection === "skills" && <SkillsPanel cwd={props.workspaceTrust?.path} agentRunning={props.agentRunning} />}
         {props.activeSection === "mcp" && <McpPanel cwd={props.workspaceTrust?.path} projectTrusted={Boolean(props.workspaceTrust?.trusted)} agentRunning={props.agentRunning} />}
         {props.activeSection === "permissions" && <PermissionsPanel runtime={props.permissionRuntime} agentRunning={props.agentRunning} onSave={props.onSavePermissions} />}
+        {props.activeSection === "observability" && <ObservabilityPanel agentRunning={props.agentRunning} />}
         {props.activeSection === "general" && <GeneralPanel systemPrompt={props.systemPrompt} resourceSettings={props.resourceSettings} workspaceTrust={props.workspaceTrust} agentRunning={props.agentRunning} onSaveSystemPrompt={props.onSaveSystemPrompt} onSaveResourceSettings={props.onSaveResourceSettings} onSetWorkspaceTrusted={props.onSetWorkspaceTrusted} />}
         {props.activeSection === "appearance" && <AppearancePanel theme={props.theme} onThemeChange={props.onThemeChange} />}
       </main>

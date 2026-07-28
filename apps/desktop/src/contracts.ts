@@ -272,6 +272,42 @@ export type ResponseUsage = {
   cost: number;
 };
 
+export type TraceCaptureContent = "none" | "metadata" | "full";
+
+export type OtlpTraceExporterSettings = {
+  id: string;
+  name: string;
+  endpoint: string;
+  enabled: boolean;
+  hasHeaders: boolean;
+};
+
+export type SaveOtlpTraceExporterSettings = Omit<OtlpTraceExporterSettings, "id" | "hasHeaders"> & {
+  id?: string;
+  /** Omit to preserve existing encrypted headers for this exporter. */
+  headers?: Record<string, string>;
+};
+
+export type ObservabilitySettings = {
+  enabled: boolean;
+  serviceName: string;
+  captureContent: TraceCaptureContent;
+  localFileEnabled: boolean;
+  exporters: OtlpTraceExporterSettings[];
+};
+
+export type SaveObservabilitySettings = Omit<ObservabilitySettings, "exporters"> & {
+  exporters: SaveOtlpTraceExporterSettings[];
+};
+
+export type TraceRuntimeStatus = {
+  enabled: boolean;
+  localTracePath?: string;
+  queuedSpanCount: number;
+  lastExportAt?: string;
+  lastError?: string;
+};
+
 export type SubagentRunInfo = {
   id: string;
   parentRunId?: string;
@@ -332,7 +368,7 @@ export type AgentTraceEvent = {
 };
 
 export type AgentEvent =
-  | { type: "run.started"; runId: string }
+  | { type: "run.started"; runId: string; conversationId: string; provider: string; model: string; cwd: string }
   | { type: "message.delta"; runId: string; text: string }
   | { type: "thinking.delta"; runId: string; text: string }
   | { type: "tool.started"; runId: string; callId: string; name: string; args: unknown }
@@ -578,6 +614,12 @@ export type PiDesktopApi = {
   systemPrompt: {
     get(): Promise<SystemPromptSettings>;
     save(settings: SystemPromptSettings): Promise<SystemPromptSettings>;
+  };
+  observability: {
+    get(): Promise<ObservabilitySettings>;
+    save(settings: SaveObservabilitySettings): Promise<ObservabilitySettings>;
+    status(): Promise<TraceRuntimeStatus>;
+    flush(): Promise<TraceRuntimeStatus>;
   };
   auth: {
     login(providerId: ProviderId): Promise<{ loginId: string }>;

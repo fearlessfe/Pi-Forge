@@ -47,6 +47,7 @@ type RuntimeClientOptions = {
   mcp: Pick<McpService, "tools" | "callTool">;
   browser: BrowserDebugPort;
   emit(event: AgentEvent): void;
+  observe?(event: AgentEvent, prompt?: string): void;
   forkProcess?: typeof fork;
 };
 
@@ -68,6 +69,7 @@ export class AgentRuntimeClient {
   private disposing = false;
   private restartTimer?: NodeJS.Timeout;
   private restartAttempt = 0;
+  private pendingPrompt?: string;
 
   constructor(private readonly options: RuntimeClientOptions) {
     this.recovery = new RuntimeRecoveryStore(options.userDataPath);
@@ -89,6 +91,7 @@ export class AgentRuntimeClient {
   async send(prompt: string, cwd?: string, conversationId?: string): Promise<string> {
     const input: SendPromptInput = { prompt, cwd, conversationId };
     const recovery = this.recovery.begin(input);
+    this.pendingPrompt = prompt;
     try {
       const runId = await this.request<string>("send", prompt, cwd, conversationId);
       this.activeRunId = runId;
@@ -97,6 +100,8 @@ export class AgentRuntimeClient {
     } catch (error) {
       this.recovery.interruptRun(undefined, error instanceof Error ? error.message : String(error));
       throw error;
+    } finally {
+      this.pendingPrompt = undefined;
     }
   }
 
@@ -248,6 +253,7 @@ export class AgentRuntimeClient {
   }
 
   private handleEvent(event: AgentEvent): void {
+    this.options.observe?.(event, event.type === "run.started" ? this.pendingPrompt : undefined);
     if (event.type === "run.started") this.activeRunId = event.runId;
     if (event.type === "run.completed" || event.type === "run.stopped" || event.type === "run.error") {
       this.activeRunId = undefined;

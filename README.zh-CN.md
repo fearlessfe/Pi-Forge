@@ -174,6 +174,14 @@ pnpm dev
 
 Renderer 只能读取凭据是否已配置以及凭据类型，不能读取 API Key、access token 或 refresh token 明文。
 
+### 配置 Agent Trace
+
+打开“**设置 → Trace**”即可查看并导出 Agent Trace。Pi Forge 默认以“仅元数据”模式，将 Trace 按日期写入受保护的本地 JSONL 文件。每条 Trace 会关联 Agent Run、Turn、模型 Generation、工具调用、上下文压缩、重试、Token 用量、成本、错误以及委派子 Agent 元数据。
+
+可以添加一个或多个 OTLP HTTP Exporter，将同一批 Span 同时发送到 Langfuse、Tempo、Jaeger、Datadog 或其他兼容 OTLP 的平台。填写平台提供的 OTLP 基础 Endpoint 即可；Pi Forge 会在需要时自动补全 `/v1/traces`。可选请求头使用操作系统安全存储加密，Renderer 无法读取其明文。
+
+内容采集支持三档：不采集内容、仅记录长度与哈希（默认）、完整记录 Prompt/输出/工具内容。所有模式都会脱敏已知凭据字段和行内 Token。任一导出平台故障只会进入独立重试队列，不会中断 Agent 执行。
+
 ## 开发与验证
 
 ```bash

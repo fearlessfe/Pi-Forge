@@ -478,7 +478,14 @@ export class AgentService {
     this.runPermissionGrants.clear();
     this.lastChangeRunId = runId;
     this.emit({ type: "changes.updated", runId, changes: [] });
-    this.emit({ type: "run.started", runId });
+    this.emit({
+      type: "run.started",
+      runId,
+      conversationId: session.sessionManager.getSessionId(),
+      provider: config.provider,
+      model: config.modelId,
+      cwd: resolvedCwd,
+    });
     this.emitContextUsage(runId, session);
 
     void session.prompt(prompt.trim()).then(() => {

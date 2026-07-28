@@ -174,6 +174,14 @@ The development command first compiles the Electron main process, then starts th
 
 The renderer can read only whether credentials are configured and their type. It cannot read plaintext API keys, access tokens, or refresh tokens.
 
+### Configure agent tracing
+
+Open **Settings → Trace** to inspect and export agent traces. Pi Forge records metadata-only traces to a protected, date-partitioned local JSONL file by default. Each trace correlates the agent run, turns, model generations, tool calls, compaction, retries, token usage, cost, errors, and delegated subagent metadata.
+
+Add one or more OTLP HTTP exporter endpoints to send the same spans to Langfuse, Tempo, Jaeger, Datadog, or another OTLP-compatible backend. Enter the provider's OTLP base endpoint; Pi Forge appends `/v1/traces` when needed. Optional request headers are encrypted with the operating system secure storage and are never exposed back to the renderer.
+
+Content capture has three modes: no content, lengths and hashes only (the default), or full prompt/output/tool content. Known credential fields and inline tokens are redacted in every mode. Export failures are queued independently and never interrupt an agent run.
+
 ## Development and verification
 
 ```bash

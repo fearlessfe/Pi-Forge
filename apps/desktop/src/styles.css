@@ -5212,6 +5212,178 @@ textarea:focus-visible,
   transform: translateX(15px);
 }
 
+.settings-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.settings-success {
+  margin-top: 12px;
+  padding: 9px 11px;
+  border: 1px solid rgb(101 217 141 / 18%);
+  border-radius: 8px;
+  color: var(--success);
+  background: rgb(101 217 141 / 5%);
+  font-size: 9.5px;
+}
+
+.trace-inline-field > input,
+.trace-inline-field > select {
+  width: 260px;
+  min-height: 35px;
+  flex: 0 0 260px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface-2);
+  font: 10px var(--mono);
+}
+
+.trace-exporters-card {
+  margin-top: 14px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.trace-exporters-card > header,
+.trace-settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.trace-exporters-card > header strong,
+.trace-exporters-card > header small {
+  display: block;
+}
+
+.trace-exporters-card > header strong { font-size: 11.5px; }
+.trace-exporters-card > header small {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.trace-exporters-card .secondary-button,
+.trace-settings-footer button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.trace-exporter-row {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.trace-exporter-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.trace-exporter-heading > input,
+.trace-exporter-row label > input,
+.trace-exporter-row textarea {
+  width: 100%;
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--bg);
+  font: 9.5px/1.5 var(--mono);
+}
+
+.trace-exporter-heading > input {
+  border-color: transparent;
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.trace-exporter-heading > button:last-child {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.trace-exporter-heading > button:last-child:hover { color: var(--danger); background: rgb(255 133 133 / 7%); }
+.trace-exporter-row label > span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-2);
+  font-size: 9px;
+  font-weight: 600;
+}
+.trace-exporter-row textarea { min-height: 64px; resize: vertical; }
+.trace-secret-note { color: var(--success); font-size: 8.5px; }
+
+.trace-empty {
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 14px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+.trace-empty strong { color: var(--text-2); font-size: 10.5px; }
+.trace-empty small { max-width: 440px; font-size: 9px; line-height: 1.5; }
+
+.trace-runtime-status {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 5px 12px;
+  margin-top: 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+}
+.trace-runtime-status > span { display: flex; align-items: center; gap: 7px; font-size: 9.5px; }
+.trace-runtime-status > span > i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.trace-runtime-status > span > i.is-ready { color: var(--success); background: currentColor; box-shadow: 0 0 0 3px rgb(101 217 141 / 8%); }
+.trace-runtime-status > span > i.is-error { color: var(--danger); background: currentColor; box-shadow: 0 0 0 3px rgb(255 133 133 / 8%); }
+.trace-runtime-status > small { justify-self: end; color: var(--muted); font-size: 8.5px; }
+.trace-runtime-status > em { grid-column: 1 / -1; color: var(--danger); font: 8.5px/1.5 var(--mono); }
+
+.trace-settings-footer {
+  align-items: flex-end;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+.trace-settings-footer > small { max-width: 440px; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.trace-settings-footer > div { display: flex; gap: 8px; flex: 0 0 auto; }
+
 .skills-panel {
   width: min(980px, 100%);
 }

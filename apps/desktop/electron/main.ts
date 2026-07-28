@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { AgentEvent, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ResourceSettings, SaveMcpServerInput, SaveModelSettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
+import type { AgentEvent, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ResourceSettings, SaveMcpServerInput, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
 import { AgentRuntimeClient } from "./agent-runtime-client.js";
 import { AuthService } from "./auth-service.js";
 import { CapabilityStore } from "./capability-store.js";
@@ -18,6 +18,8 @@ import { McpStore } from "./mcp-store.js";
 import { McpService } from "./mcp-service.js";
 import { TerminalService } from "./terminal-service.js";
 import { BrowserService } from "./browser-service.js";
+import { ObservabilityStore } from "./observability-store.js";
+import { ObservabilityService } from "./observability-service.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
@@ -27,6 +29,8 @@ let pluginService: PluginService | undefined;
 let mcpService: McpService | undefined;
 let terminalService: TerminalService | undefined;
 let browserService: BrowserService | undefined;
+let observabilityService: ObservabilityService | undefined;
+let applicationShutdownStarted = false;
 
 app.setName("Pi Forge");
 app.setPath("userData", process.env.PI_DESKTOP_USER_DATA
@@ -128,6 +132,19 @@ function requireResourceSettings(value: unknown): ResourceSettings {
   return value as ResourceSettings;
 }
 
+function requireObservabilitySettings(value: unknown): SaveObservabilitySettings {
+  if (!value || typeof value !== "object") throw new Error("Trace 设置格式无效。");
+  const input = value as Record<string, unknown>;
+  if (
+    typeof input.enabled !== "boolean"
+    || typeof input.serviceName !== "string"
+    || typeof input.captureContent !== "string"
+    || typeof input.localFileEnabled !== "boolean"
+    || !Array.isArray(input.exporters)
+  ) throw new Error("Trace 设置字段无效。");
+  return value as SaveObservabilitySettings;
+}
+
 function requireMcpServerInput(value: unknown): SaveMcpServerInput {
   if (!value || typeof value !== "object") throw new Error("MCP Server 配置格式无效。");
   const input = value as Record<string, unknown>;
@@ -151,6 +168,7 @@ function registerIpc(
   mcp: McpService,
   terminal: TerminalService,
   browser: BrowserService,
+  observability: ObservabilityService,
 ): void {
   ipcMain.handle("settings:get", () => settingsWithCredentials(settings, credentials));
   ipcMain.handle("settings:catalog", () => agent.getModelCatalog());
@@ -183,6 +201,16 @@ function registerIpc(
   ipcMain.handle("settings:test", async (_event, value: unknown) => {
     const response = await agent.testConfiguration(requireSettings(value));
     return { ok: true as const, response };
+  });
+  ipcMain.handle("observability:get", () => observability.getSettings());
+  ipcMain.handle("observability:status", () => observability.status());
+  ipcMain.handle("observability:save", (_event, value: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待当前任务结束后再修改 Trace 设置。");
+    return observability.saveSettings(requireObservabilitySettings(value));
+  });
+  ipcMain.handle("observability:flush", async () => {
+    await observability.flush();
+    return observability.status();
   });
   ipcMain.handle("permissions:get", () => agent.getPermissionRuntime());
   ipcMain.handle("permissions:save", async (_event, value: unknown) => {
@@ -494,6 +522,8 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   const piDesktopHome = path.join(os.homedir(), ".pi-desktop");
   const chatSandbox = path.join(piDesktopHome, "workspace");
   const settings = new SettingsStore(userData);
+  const observabilityStore = new ObservabilityStore(userData);
+  observabilityService = new ObservabilityService(observabilityStore, userData);
   const capabilities = new CapabilityStore(userData);
   const permissions = new PermissionStore(userData);
   const credentials = new EncryptedCredentialStore(userData);
@@ -525,6 +555,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
     mcp: mcpService,
     browser: browserService,
     emit: sendAgentEvent,
+    observe: (event, prompt) => observabilityService?.record(event, prompt),
   });
   authService = new AuthService(
     credentials,
@@ -538,7 +569,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
     (event) => mainWindow?.webContents.send("plugins:event", event),
     { securityStore: pluginSecurity },
   );
-  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata, resources, mcpService, terminalService, browserService);
+  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata, resources, mcpService, terminalService, browserService, observabilityService);
   mainWindow = createWindow();
 
   app.on("second-instance", () => {
@@ -559,7 +590,20 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (!applicationShutdownStarted && observabilityService) {
+    event.preventDefault();
+    applicationShutdownStarted = true;
+    authService?.dispose();
+    pluginService?.dispose();
+    agentService?.dispose();
+    void mcpService?.dispose();
+    terminalService?.dispose();
+    browserService?.dispose();
+    void observabilityService.shutdown().finally(() => app.quit());
+    return;
+  }
+  if (applicationShutdownStarted) return;
   authService?.dispose();
   pluginService?.dispose();
   agentService?.dispose();

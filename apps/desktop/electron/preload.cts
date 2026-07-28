@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentEvent, AuthEvent, BrowserEvent, ModelMetadataOverride, PiDesktopApi, PluginProgressEvent, SaveModelSettings, SendPromptInput, TerminalEvent } from "../src/contracts.js";
+import type { AgentEvent, AuthEvent, BrowserEvent, ModelMetadataOverride, PiDesktopApi, PluginProgressEvent, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, TerminalEvent } from "../src/contracts.js";
 
 const api: PiDesktopApi = {
   settings: {
@@ -19,6 +19,12 @@ const api: PiDesktopApi = {
   systemPrompt: {
     get: () => ipcRenderer.invoke("system-prompt:get"),
     save: (settings) => ipcRenderer.invoke("system-prompt:save", settings),
+  },
+  observability: {
+    get: () => ipcRenderer.invoke("observability:get"),
+    save: (settings: SaveObservabilitySettings) => ipcRenderer.invoke("observability:save", settings),
+    status: () => ipcRenderer.invoke("observability:status"),
+    flush: () => ipcRenderer.invoke("observability:flush"),
   },
   auth: {
     login: (providerId) => ipcRenderer.invoke("auth:login", providerId),
