@@ -26,7 +26,7 @@ await page.screenshot({ path: path.join(outputDir, "implementation-02-project-da
 await page.getByRole("button", { name: /Pengzhen/ }).click();
 await page.getByRole("menuitem", { name: /^设置/ }).click();
 await page.getByRole("heading", { name: "大模型" }).waitFor();
-if (await page.locator(".conversation-sidebar").count()) throw new Error("Settings view still contains the conversation sidebar.");
+if (await page.locator(".material-sidebar").count()) throw new Error("Settings view still contains the conversation sidebar.");
 await page.screenshot({ path: path.join(outputDir, "implementation-03-settings-dark.png") });
 
 await page.getByRole("button", { name: "外观" }).click();

@@ -2,6 +2,18 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import { NewChatView } from "./NewChatView";
+import { parseModelValue } from "./model-selector-value";
+
+describe("parseModelValue", () => {
+  it("accepts a complete provider and model tuple", () => {
+    expect(parseModelValue('["anthropic","claude-sonnet-4-6"]')).toEqual(["anthropic", "claude-sonnet-4-6"]);
+  });
+
+  it.each(["", "not-json", "[]", '["anthropic"]', '["anthropic",""]', '{"provider":"anthropic"}'])(
+    "ignores an invalid Radix Select value: %s",
+    (value) => expect(parseModelValue(value)).toBeNull(),
+  );
+});
 
 describe("NewChatView analysis presentation", () => {
   it("renders thinking content directly as response text without an analysis wrapper", () => {

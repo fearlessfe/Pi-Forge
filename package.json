@@ -10,10 +10,19 @@
     "package:dir": "pnpm --filter @pi-desktop/renderer package:dir",
     "test": "pnpm --filter @pi-desktop/renderer test",
     "test:coverage": "pnpm --filter @pi-desktop/renderer test:coverage",
-    "typecheck": "pnpm --filter @pi-desktop/renderer typecheck"
+    "typecheck": "pnpm --filter @pi-desktop/renderer typecheck",
+    "verify:setup": "PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium",
+    "verify:tokens": "node docs/design/verify-tokens.mjs",
+    "verify:renderer": "node docs/design/verify-renderer-lane.mjs",
+    "verify:electron": "node docs/design/verify-electron-lane.mjs",
+    "verify:a11y": "node docs/design/verify-a11y.mjs",
+    "verify:golden": "node docs/design/verify-golden.mjs"
   },
   "devDependencies": {
-    "oxlint": "^1.75.0"
+    "oxlint": "^1.75.0",
+    "pixelmatch": "^7.2.0",
+    "playwright": "^1.62.0",
+    "pngjs": "^7.0.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

@@ -19,6 +19,17 @@ type Notice = {
   type: "success" | "info";
 };
 
+/* notice 是运行期按类型拼接的动态语义类，基础类与修饰类保留在 styles.css 定制层
+   （docs/design-refresh-apple.md 3.5 规则 2），此处用静态映射代替字符串拼接。 */
+const noticeToneClass: Record<Notice["type"], string> = {
+  success: "notice notice--success",
+  info: "notice notice--info",
+};
+
+/* Runtime 横幅（shell 浮层）：半透明 chrome + 语义色描边，布局部分工具类化。 */
+const runtimeBannerClass = "absolute left-1/2 z-10 grid min-h-12.5 w-[min(680px,calc(100%-40px))] -translate-x-1/2 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-loose rounded-lg border bg-material-chrome py-base pr-base pl-loose shadow-2 backdrop-blur-xl";
+const runtimeBannerButtonClass = "inline-flex h-control-sm cursor-pointer items-center gap-tight rounded-sm border border-separator bg-fill px-loose text-caption text-label transition-colors duration-150 ease-apple hover:bg-fill-2 disabled:pointer-events-none disabled:opacity-40";
+
 const initialModelSettings: ModelSettings = {
   provider: "anthropic",
   baseUrl: "https://api.anthropic.com",
@@ -224,6 +235,11 @@ export function App() {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
     window.localStorage.setItem("pi-theme", theme);
+    // 跨进程主题同步（docs/design-refresh-apple.md 3.6）：主进程据此切换窗口/原生视图背景并持久化。
+    // IPC 失败不阻塞渲染层主题切换，仅告警；下一次主题切换时本 effect 会自然重试。
+    void window.piDesktop?.appearance.setTheme(theme).catch((error: unknown) => {
+      console.warn("[appearance] 主题同步到主进程失败，将在下次切换主题时重试。", error);
+    });
   }, [theme]);
 
   useEffect(() => {
@@ -994,16 +1010,16 @@ export function App() {
   }, [isRunning]);
 
   return (
-    <div className="desktop-page">
-      <section className="desktop-window" aria-label="Pi Desktop">
-        <header className="window-bar">
-          <span className="window-drag-spacer" aria-hidden="true" />
-          <span className="window-title">Pi Desktop — {title}</span>
-          <span className="window-shortcut" title={t("搜索对话或项目")}>{shortcutLabel("K")}</span>
+    <div className="grid h-screen w-screen place-items-center">
+      <section className="relative flex h-screen w-screen min-h-170 flex-col overflow-hidden bg-bg" aria-label="Pi Desktop">
+        <header className="material-chrome grid h-11 shrink-0 select-none grid-cols-[180px_1fr_180px] items-center px-card [app-region:drag] [-webkit-app-region:drag]">
+          <span className="min-h-px min-w-px" aria-hidden="true" />
+          <span className="justify-self-center text-callout text-label-2">Pi Desktop — {title}</span>
+          <span className="justify-self-end font-mono text-mini text-label-3" title={t("搜索对话或项目")}>{shortcutLabel("K")}</span>
         </header>
 
         {view !== "settings" ? (
-          <div className={`chat-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
+          <div className={`grid min-h-0 flex-1 ${sidebarCollapsed ? "grid-cols-[60px_minmax(0,1fr)]" : "grid-cols-[304px_minmax(0,1fr)] max-[1100px]:grid-cols-[280px_minmax(0,1fr)]"}`}>
             <ConversationSidebar
               activePrimary={view}
               collapsed={sidebarCollapsed}
@@ -1028,23 +1044,23 @@ export function App() {
               onOpenPet={() => setNotice({ title: t("Pi 宠物"), message: t("陪伴模式将在后续版本接入。"), type: "info" })}
             />
             <div className="workspace-main">
-              {view === "chat" ? <main className="chat-main">
-                {runtimeCrashLooping && <section className="runtime-recovery-banner runtime-crash-banner" aria-live="assertive">
-                  <AlertTriangle size={17} />
-                  <span>
-                    <strong>{t("Agent Runtime 连续崩溃")}</strong>
-                    <small>{t("Runtime 在一分钟内多次异常退出，已停止自动重启。请检查模型配置或查看日志后重试。")}</small>
+              {view === "chat" ? <main className="chat-main relative h-full w-full min-h-0 min-w-0 overflow-hidden bg-bg">
+                {runtimeCrashLooping && <section className={`${runtimeBannerClass} top-loose border-red/32 text-red`} aria-live="assertive">
+                  <AlertTriangle size={16} className="shrink-0" />
+                  <span className="block min-w-0">
+                    <strong className="block text-caption font-medium text-label">{t("Agent Runtime 连续崩溃")}</strong>
+                    <small className="mt-tight block truncate text-caption text-label-2">{t("Runtime 在一分钟内多次异常退出，已停止自动重启。请检查模型配置或查看日志后重试。")}</small>
                   </span>
-                  <button type="button" onClick={() => void retryRuntime()}><RotateCcw size={13} />{t("重试")}</button>
+                  <button type="button" className={runtimeBannerButtonClass} onClick={() => void retryRuntime()}><RotateCcw size={14} />{t("重试")}</button>
                 </section>}
-                {runtimeRecoveries.length > 0 && <section className="runtime-recovery-banner" aria-live="polite">
-                  <AlertTriangle size={17} />
-                  <span>
-                    <strong>{t("检测到中断的 Runtime 任务")}</strong>
-                    <small>{runtimeRecoveries[0].input.prompt}{runtimeRecoveries.length > 1 ? t(" · 另有 {count} 项", { count: runtimeRecoveries.length - 1 }) : ""}</small>
+                {runtimeRecoveries.length > 0 && <section className={`${runtimeBannerClass} ${runtimeCrashLooping ? "top-[74px]" : "top-loose"} border-orange/32 text-orange`} aria-live="polite">
+                  <AlertTriangle size={16} className="shrink-0" />
+                  <span className="block min-w-0">
+                    <strong className="block text-caption font-medium text-label">{t("检测到中断的 Runtime 任务")}</strong>
+                    <small className="mt-tight block truncate text-caption text-label-2">{runtimeRecoveries[0].input.prompt}{runtimeRecoveries.length > 1 ? t(" · 另有 {count} 项", { count: runtimeRecoveries.length - 1 }) : ""}</small>
                   </span>
-                  <button type="button" disabled={isRunning} onClick={() => void retryRuntimeRecovery(runtimeRecoveries[0])}><RotateCcw size={13} />{t("安全继续")}</button>
-                  <button className="runtime-recovery-discard" type="button" disabled={isRunning} onClick={() => void discardRuntimeRecovery(runtimeRecoveries[0].id)} aria-label={t("丢弃恢复记录")}><Trash2 size={13} /></button>
+                  <button type="button" className={runtimeBannerButtonClass} disabled={isRunning} onClick={() => void retryRuntimeRecovery(runtimeRecoveries[0])}><RotateCcw size={14} />{t("安全继续")}</button>
+                  <button className={`${runtimeBannerButtonClass} w-control-sm justify-center px-0 text-label-3`} type="button" disabled={isRunning} onClick={() => void discardRuntimeRecovery(runtimeRecoveries[0].id)} aria-label={t("丢弃恢复记录")}><Trash2 size={14} /></button>
                 </section>}
                 <NewChatView
                   project={project}
@@ -1071,7 +1087,7 @@ export function App() {
                   onForkTurn={(entryId) => selectedConversationId ? void forkConversation(selectedConversationId, project ?? undefined, entryId) : undefined}
                   onAnswerQuestion={(turnId, callId, answer) => void answerQuestion(turnId, callId, answer)}
                 />
-                {terminalOpen && <Suspense fallback={<div className="terminal-panel terminal-loading">{t("正在启动终端…")}</div>}><TerminalPanel cwd={project?.path} onClose={() => setTerminalOpen(false)} onOpenInBrowser={openBuiltInBrowser} /></Suspense>}
+                {terminalOpen && <Suspense fallback={<div className="absolute inset-x-3.5 bottom-3.5 z-40 grid h-[min(46%,430px)] min-h-[260px] place-items-center overflow-hidden rounded-lg border border-separator bg-bg-grouped text-caption text-label-3 shadow-3">{t("正在启动终端…")}</div>}><TerminalPanel cwd={project?.path} onClose={() => setTerminalOpen(false)} onOpenInBrowser={openBuiltInBrowser} /></Suspense>}
               </main>
               : <PluginCenterView agentRunning={isRunning} workspaceCwd={workspaceTrust?.path} />}
               {browserOpen && <BrowserWorkbench
@@ -1118,8 +1134,8 @@ export function App() {
         )}
 
         {notice && (
-          <div className={`notice notice--${notice.type}`} role="status">
-            <span className="notice-icon">{notice.type === "success" ? <CheckCircle2 size={17} /> : notice.title.includes(t("插件")) ? <Package size={17} /> : <Sparkles size={17} />}</span>
+          <div className={noticeToneClass[notice.type]} role="status">
+            <span className="notice-icon">{notice.type === "success" ? <CheckCircle2 size={16} /> : notice.title.includes(t("插件")) ? <Package size={16} /> : <Sparkles size={16} />}</span>
             <span><strong>{notice.title}</strong><small>{notice.message}</small></span>
             <button type="button" onClick={() => setNotice(null)} aria-label={t("关闭提示")}><X size={14} /></button>
           </div>

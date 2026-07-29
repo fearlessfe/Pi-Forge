@@ -11,6 +11,9 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 
 export type PermissionMode = "balanced" | "strict";
 
+/** 界面主题；跨进程同步给主进程（窗口/原生视图背景），见 docs/design-refresh-apple.md 3.6。 */
+export type AppearanceTheme = "dark" | "light";
+
 export type PermissionSettings = {
   mode: PermissionMode;
 };
@@ -600,6 +603,9 @@ export type PluginRuntimeStatus = {
 };
 
 export type PiDesktopApi = {
+  appearance: {
+    setTheme(theme: AppearanceTheme): Promise<void>;
+  };
   settings: {
     get(): Promise<ModelSettings>;
     catalog(): Promise<ProviderCatalogEntry[]>;

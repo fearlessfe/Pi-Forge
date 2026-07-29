@@ -34,7 +34,7 @@ if (answerBeforeRetry === answerAfterRetry) {
   throw new Error("Retry did not update the Agent answer.");
 }
 
-const compactComposer = await page.locator(".compact-composer").boundingBox();
+const compactComposer = await page.getByLabel("继续对话").locator("..").boundingBox();
 if (!compactComposer || compactComposer.height >= 184) {
   throw new Error("The active conversation composer did not shrink.");
 }

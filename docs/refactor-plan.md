@@ -97,8 +97,9 @@
 这两项是路线决策，不预设结论：
 
 1. **样式二选一**（P11）
-   - 方案 A（推荐）：保留手写 CSS，移除 Tailwind 依赖与 Vite 插件；把 `styles.css` 按组件域拆分为 `styles/` 下多文件（tokens、layout、chat、settings…），CSS 变量设计令牌不动。理由：7025 行已是事实上的设计系统，迁移 Tailwind 成本大收益小。
-   - 方案 B：逐步迁移 Tailwind 工具类，冻结 `styles.css` 新增。仅在团队明确偏好 Tailwind 时选择。
+   - 方案 A：保留手写 CSS，移除 Tailwind 依赖与 Vite 插件；把 `styles.css` 按组件域拆分为 `styles/` 下多文件（tokens、layout、chat、settings…），CSS 变量设计令牌不动。
+   - 方案 B：迁移 Tailwind 工具类，冻结 `styles.css` 新增。
+   - **决策（2026-07-28）：采用方案 B**，与苹果设计语言 redesign 合并执行，详见 `docs/design-refresh-apple.md`（Tailwind v4 重构版，含 token v2、双主题变量策略、`appearance:set-theme` 跨进程主题链路、双验收车道与 D0~D5 实施阶段，经三轮评审修订，约 13.5 天）。
 2. **UI 测试二选一**（P9）
    - 方案 A（推荐，成本低）：Vitest + happy-dom/jsdom + Testing Library，覆盖关键交互组件（`NewChatView` 消息流、`SettingsView` 表单、`PluginsPanel`），借助阶段 3 的 `api.ts` mock 桥接。
    - 方案 B：把 `docs/design/` 的 Playwright 脚本正规化为 E2E 车道并接入 CI。成本高，建议作为后续增强。

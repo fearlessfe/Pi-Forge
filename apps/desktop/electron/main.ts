@@ -2,8 +2,9 @@ import { app, BrowserWindow, dialog, ipcMain, session, shell } from "electron";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { AgentEvent, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ResourceSettings, SaveMcpServerInput, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
+import type { AgentEvent, AppearanceTheme, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ResourceSettings, SaveMcpServerInput, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
 import { AgentRuntimeClient } from "./agent-runtime-client.js";
+import { AppearanceStore } from "./appearance-store.js";
 import { AuthService } from "./auth-service.js";
 import { CapabilityStore } from "./capability-store.js";
 import { EncryptedCredentialStore } from "./credential-store.js";
@@ -24,6 +25,7 @@ import { ObservabilityService } from "./observability-service.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
+let appearanceStore: AppearanceStore | undefined;
 let agentService: AgentRuntimeClient | undefined;
 let authService: AuthService | undefined;
 let pluginService: PluginService | undefined;
@@ -32,6 +34,15 @@ let terminalService: TerminalService | undefined;
 let browserService: BrowserService | undefined;
 let observabilityService: ObservabilityService | undefined;
 let applicationShutdownStarted = false;
+
+/* 窗口/原生视图背景随主题切换，对齐 token v2 --bg-window（docs/design-refresh-apple.md 3.2/3.6）。
+   初始背景取 AppearanceStore 里最近一次持久化的主题（无记录默认深色），避免浅色用户启动闪深色；
+   渲染进程主题变化时经 appearance:set-theme 同步纠正并持久化。 */
+const windowBackground: Record<AppearanceTheme, string> = { dark: "#1C1C1E", light: "#F5F5F7" };
+
+function initialWindowBackground(): string {
+  return windowBackground[appearanceStore?.get() ?? "dark"];
+}
 
 app.setName("Pi Forge");
 app.setPath("userData", process.env.PI_DESKTOP_USER_DATA
@@ -67,7 +78,7 @@ function createWindow(): BrowserWindow {
     minWidth: 960,
     minHeight: 680,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
-    backgroundColor: "#090c11",
+    backgroundColor: initialWindowBackground(),
     webPreferences: {
       preload: path.join(currentDir, "preload.cjs"),
       contextIsolation: true,
@@ -185,6 +196,7 @@ function registerIpc(
   terminal: TerminalService,
   browser: BrowserService,
   observability: ObservabilityService,
+  appearance: AppearanceStore,
 ): void {
   const optionalKnownWorkspace = (value: unknown, message = "工作区路径无效。"): string | undefined => {
     if (value === undefined) return undefined;
@@ -192,8 +204,13 @@ function registerIpc(
     requireKnownWorkspace(resources, resolved);
     return resolved;
   };
-  ipcMain.handle("settings:get", () => settingsWithCredentials(settings, credentials));
-  ipcMain.handle("settings:catalog", () => agent.getModelCatalog());
+  ipcMain.handle("appearance:set-theme", (_event, value: unknown) => {
+    if (value !== "dark" && value !== "light") throw new Error("主题设置无效。");
+    appearance.save(value);
+    browser.setTheme(value);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(windowBackground[value]);
+  });
+  ipcMain.handle("settings:get", () => settingsWithCredentials(settings, credentials));  ipcMain.handle("settings:catalog", () => agent.getModelCatalog());
   ipcMain.handle("settings:refresh-metadata", () => agent.getModelCatalog(true));
   ipcMain.handle("settings:save-metadata", async (_event, providerId: unknown, modelId: unknown, value: unknown) => {
     modelMetadata.save(
@@ -554,6 +571,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   const chatSandbox = path.join(piDesktopHome, "workspace");
   const sessionDir = path.join(piDesktopHome, "sessions");
   const settings = new SettingsStore(userData);
+  appearanceStore = new AppearanceStore(userData);
   const observabilityStore = new ObservabilityStore(userData);
   observabilityService = new ObservabilityService(observabilityStore, userData);
   const capabilities = new CapabilityStore(userData);
@@ -605,7 +623,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   // so conversations created before the workspace restriction keep loading.
   resources.addKnownWorkspace(chatSandbox);
   seedKnownWorkspacesFromSessions(resources, [sessionDir]);
-  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata, resources, mcpService, terminalService, browserService, observabilityService);
+  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata, resources, mcpService, terminalService, browserService, observabilityService, appearanceStore);
   installContentSecurityPolicy();
   mainWindow = createWindow();
 

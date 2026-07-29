@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { AgentEvent, AuthEvent, BrowserEvent, ModelMetadataOverride, PiDesktopApi, PluginProgressEvent, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, TerminalEvent } from "../src/contracts.js";
 
 const api: PiDesktopApi = {
+  appearance: {
+    setTheme: (theme) => ipcRenderer.invoke("appearance:set-theme", theme),
+  },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
     catalog: () => ipcRenderer.invoke("settings:catalog"),

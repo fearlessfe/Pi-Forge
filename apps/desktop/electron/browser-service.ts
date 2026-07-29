@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { BrowserWindow, session, WebContentsView } from "electron";
 import type {
+  AppearanceTheme,
   BrowserAnnotationCapture,
   BrowserAnnotationElement,
   BrowserAnnotationResult,
@@ -19,6 +20,10 @@ import { formatBrowserAnnotation, normalizeBrowserUrl } from "./browser-utils.js
 
 const annotationWorldId = 999;
 const maxElements = 20;
+
+/* 原生 WebContentsView 背景随主题切换（docs/design-refresh-apple.md 3.6），
+   深色对齐 token v2 --bg-window，浅色对齐浅色 --bg-window。 */
+const viewBackground: Record<AppearanceTheme, string> = { dark: "#1C1C1E", light: "#F5F5F7" };
 
 type BrowserEventSink = (event: BrowserEvent) => void;
 
@@ -114,6 +119,7 @@ export class BrowserService {
   private annotating = false;
   private error?: string;
   private bounds: BrowserBounds = { x: 0, y: 0, width: 1, height: 1 };
+  private theme: AppearanceTheme = "dark";
 
   constructor(
     private readonly window: () => BrowserWindow | null,
@@ -201,6 +207,12 @@ export class BrowserService {
     return this.state();
   }
 
+  /** 主题同步：记录主题并应用到已存在的原生视图；视图延迟创建时在 ensureView 里取当前主题。 */
+  setTheme(theme: AppearanceTheme): void {
+    this.theme = theme;
+    this.view?.setBackgroundColor(viewBackground[theme]);
+  }
+
   async startAnnotation(url?: string, prompt = "", signal?: AbortSignal): Promise<BrowserAnnotationCapture> {
     if (this.annotating) throw new Error("已经有一个页面标注任务正在进行。");
     const view = this.ensureView();
@@ -219,7 +231,7 @@ export class BrowserService {
       await view.webContents.executeJavaScriptInIsolatedWorld(annotationWorldId, [{ code: browserAnnotationBootstrap }], true);
       const raw = await view.webContents.executeJavaScriptInIsolatedWorld(
         annotationWorldId,
-        [{ code: startBrowserAnnotationScript(prompt) }],
+        [{ code: startBrowserAnnotationScript(prompt, this.theme) }],
         true,
       );
       const result = parseAnnotation(raw, view.webContents.getURL(), view.webContents.getTitle());
@@ -283,7 +295,7 @@ export class BrowserService {
         navigateOnDragDrop: false,
       },
     });
-    view.setBackgroundColor("#0b0f15");
+    view.setBackgroundColor(viewBackground[this.theme]);
     view.setBounds(this.bounds);
     view.setVisible(false);
     parent.contentView.addChildView(view);
