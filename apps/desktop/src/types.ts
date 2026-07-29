@@ -1,4 +1,4 @@
-import type { AppearancePreference, AuthPrompt, ConversationActivity, ProviderId, ResponseUsage, TaskFileChange } from "./contracts.js";
+import type { AppearancePreference, AuthPrompt, ConversationActivity, ProviderId, ResponseUsage, TaskFileChange, TurnAttachment } from "./contracts.js";
 
 export type Theme = AppearancePreference;
 
@@ -45,6 +45,7 @@ export type ChatTurn = {
   question: string;
   answer: string;
   activities: ChatActivity[];
+  attachments?: TurnAttachment[];
   fileChanges?: TaskFileChange[];
   usage?: ResponseUsage;
   status: "running" | "completed" | "error" | "stopped";

@@ -1,4 +1,4 @@
-import type { ContextUsageInfo, ConversationActivity, ResponseUsage, SubagentRunInfo, TaskFileChange, ToolActivityDetails } from "./contracts.js";
+import type { ContextUsageInfo, ConversationActivity, ResponseUsage, SubagentRunInfo, TaskFileChange, ToolActivityDetails, TurnAttachment } from "./contracts.js";
 import type { ChatTurn } from "./types.js";
 
 function finiteNumber(value: unknown): number {
@@ -142,6 +142,17 @@ function normalizeFileChange(value: unknown): TaskFileChange | undefined {
   };
 }
 
+function normalizeTurnAttachment(value: unknown): TurnAttachment | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const attachment = value as Record<string, unknown>;
+  if ((attachment.kind !== "image" && attachment.kind !== "file") || typeof attachment.name !== "string") return undefined;
+  return {
+    kind: attachment.kind,
+    name: attachment.name,
+    dataUrl: typeof attachment.dataUrl === "string" ? attachment.dataUrl : undefined,
+  };
+}
+
 export function normalizeHistoryTurn(value: unknown, index: number): ChatTurn {
   const turn = value && typeof value === "object" ? value as Record<string, unknown> : {};
   return {
@@ -152,6 +163,9 @@ export function normalizeHistoryTurn(value: unknown, index: number): ChatTurn {
     activities: Array.isArray(turn.activities)
       ? turn.activities.map(normalizeActivity).filter((activity): activity is ConversationActivity => Boolean(activity))
       : [],
+    attachments: Array.isArray(turn.attachments)
+      ? turn.attachments.map(normalizeTurnAttachment).filter((attachment): attachment is TurnAttachment => Boolean(attachment))
+      : undefined,
     fileChanges: Array.isArray(turn.fileChanges)
       ? turn.fileChanges.map(normalizeFileChange).filter((change): change is TaskFileChange => Boolean(change))
       : undefined,

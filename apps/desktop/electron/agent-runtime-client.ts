@@ -18,6 +18,7 @@ import type {
 import type { SettingsStore } from "./settings-store.js";
 import type { McpService, McpToolDescriptor } from "./mcp-service.js";
 import type { BrowserDebugPort } from "./browser-service.js";
+import type { PromptExtras } from "./agent-service.js";
 import {
   agentRuntimeProtocolVersion,
   type AgentRuntimeInit,
@@ -93,12 +94,15 @@ export class AgentRuntimeClient {
     return this.request<Awaited<ReturnType<import("./agent-service.js").AgentService["discoverModels"]>>>("discoverModels", input);
   }
 
-  async send(prompt: string, cwd?: string, conversationId?: string): Promise<string> {
-    const input: SendPromptInput = { prompt, cwd, conversationId };
+  async send(prompt: string, cwd?: string, conversationId?: string, extras?: PromptExtras): Promise<string> {
+    const input: SendPromptInput = { prompt, cwd, conversationId, images: extras?.images, attachments: extras?.attachments };
     const recovery = this.recovery.begin(input);
     this.pendingPrompt = prompt;
     try {
-      const runId = await this.request<string>("send", prompt, cwd, conversationId);
+      // extras 仅在有附件时追加，保持旧协议调用的参数形状不变。
+      const args: unknown[] = [prompt, cwd, conversationId];
+      if (extras?.images?.length || extras?.attachments?.length) args.push(extras);
+      const runId = await this.request<string>("send", ...args);
       this.activeRunId = runId;
       this.recovery.attachRun(recovery.id, runId);
       return runId;
@@ -123,7 +127,11 @@ export class AgentRuntimeClient {
   renameConversation(id: string, title: string): Promise<void> { return this.request("renameConversation", id, title); }
   deleteConversation(id: string): Promise<void> { return this.request("deleteConversation", id); }
   abort(): Promise<void> { return this.request("abort"); }
-  queueMessage(prompt: string, mode: "steer" | "followUp"): Promise<QueuedMessages> { return this.request("queueMessage", prompt, mode); }
+  queueMessage(prompt: string, mode: "steer" | "followUp", extras?: PromptExtras): Promise<QueuedMessages> {
+    const args: unknown[] = [prompt, mode];
+    if (extras?.images?.length || extras?.attachments?.length) args.push(extras);
+    return this.request("queueMessage", ...args);
+  }
   clearQueue(): Promise<QueuedMessages> { return this.request("clearQueue"); }
   listChanges(runId?: string): Promise<TaskFileChange[]> { return this.request("listChanges", runId); }
   changePath(changeId: string): Promise<string> { return this.request("changePath", changeId); }

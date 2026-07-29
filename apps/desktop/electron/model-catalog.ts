@@ -112,10 +112,34 @@ function parseDiscoveredModels(payload: unknown, protocol: string): ModelCatalog
     const advertisedContextWindow = [entry.contextWindow, entry.context_window, entry.max_context_length]
       .find((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
     const matched = fixedProtocolModelMetadata(protocol, id);
-    return [{ id, name, reasoning: true, protocol, contextWindow: advertisedContextWindow ?? matched?.contextWindow ?? 0 }];
+    return [{
+      id,
+      name,
+      reasoning: true,
+      protocol,
+      contextWindow: advertisedContextWindow ?? matched?.contextWindow ?? 0,
+      ...(endpointDeclaresTextOnly(entry) ? { supportsImages: false } : {}),
+    }];
   });
   return [...new Map(models.map((model) => [model.id, model])).values()]
     .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+// OpenRouter-style `architecture.input_modalities` or a `modalities.input` array
+// explicitly listing modalities without "image" means the endpoint is text-only.
+function endpointDeclaresTextOnly(entry: Record<string, unknown>): boolean {
+  const architecture = entry.architecture;
+  const inputModalities = architecture && typeof architecture === "object"
+    ? (architecture as Record<string, unknown>).input_modalities
+    : undefined;
+  const modalities = entry.modalities;
+  const modalitiesInput = modalities && typeof modalities === "object"
+    ? (modalities as Record<string, unknown>).input
+    : undefined;
+  for (const value of [inputModalities, modalitiesInput]) {
+    if (Array.isArray(value) && value.every((item) => typeof item === "string") && !value.includes("image")) return true;
+  }
+  return false;
 }
 
 export class ModelCatalog {
@@ -149,6 +173,7 @@ export class ModelCatalog {
         contextWindow: model.contextWindow,
         maxOutputTokens: model.maxTokens,
         pricing: { ...model.cost },
+        supportsImages: model.input.includes("image"),
         metadataSource: "official",
         metadataSourceUrl: officialMetadataSources[provider.id],
       })),
@@ -172,20 +197,25 @@ export class ModelCatalog {
         kind: "compatible",
         supportsApiKey: true,
         supportsOAuth: false,
-        models: models.map((model) => ({
-          ...model,
-          protocol: definition.api,
-          contextWindow: model.contextWindow || matchProtocolModelMetadata(protocolMetadata, definition.api, model.id)?.contextWindow || 0,
-          maxOutputTokens: model.maxOutputTokens
-            || matchProtocolModelMetadata(protocolMetadata, definition.api, model.id)?.maxOutputTokens
-            || 0,
-          pricing: matchProtocolModelMetadata(protocolMetadata, definition.api, model.id)?.pricing
-            ?? model.pricing
-            ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          metadataSource: matchProtocolModelMetadata(protocolMetadata, definition.api, model.id) ? "official" : "endpoint",
-          metadataSourceUrl: matchProtocolModelMetadata(protocolMetadata, definition.api, model.id)?.sourceUrl,
-          metadataUpdatedAt: discovered?.updatedAt,
-        })),
+        models: models.map((model) => {
+          const matched = matchProtocolModelMetadata(protocolMetadata, definition.api, model.id);
+          return {
+            ...model,
+            protocol: definition.api,
+            contextWindow: model.contextWindow || matched?.contextWindow || 0,
+            maxOutputTokens: model.maxOutputTokens
+              || matched?.maxOutputTokens
+              || 0,
+            pricing: matched?.pricing
+              ?? model.pricing
+              ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            // Unknown custom endpoints stay allowed; the API error surfaces if wrong.
+            supportsImages: model.supportsImages ?? matched?.supportsImages ?? true,
+            metadataSource: matched ? "official" : "endpoint",
+            metadataSourceUrl: matched?.sourceUrl,
+            metadataUpdatedAt: discovered?.updatedAt,
+          };
+        }),
       };
     });
     return this.modelMetadata.apply([...builtins, ...compatible]);

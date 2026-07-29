@@ -1140,4 +1140,178 @@ describe("AgentService with a real Pi session", () => {
       await close(server);
     }
   });
+
+  it("sends image and text attachments to the model and rebuilds them in history", async () => {
+    const requests: ChatRequest[] = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (part) => { body += part; });
+      req.on("end", () => {
+        requests.push(JSON.parse(body) as ChatRequest);
+        writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "seen" }), chunk({}, "stop")]);
+      });
+    });
+    const port = await listen(server);
+    const cwd = createDirectory("attachments-workspace");
+    const agentDir = createDirectory("attachments-agent");
+    const events: AgentEvent[] = [];
+    const service = new AgentService({
+      resolve: () => ({
+        provider: "openai-compatible",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        modelId: "mock-model",
+        thinkingLevel: "off" as const,
+        apiKey: "attachments-key",
+      }),
+    }, agentDir, cwd, (event) => events.push(event));
+
+    try {
+      const runId = await service.send("describe this", cwd, "attachments-conversation", {
+        images: [{ name: "shot.png", mimeType: "image/png", data: "QUJD" }],
+        attachments: [{ name: "notes.txt", content: "some notes" }],
+      });
+      await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
+
+      const payload = JSON.stringify(requests[0]?.messages);
+      expect(payload).toContain("QUJD");
+      expect(payload).toContain('<file name=\\"notes.txt\\">');
+      expect(payload).toContain("some notes");
+
+      const detail = await service.loadConversation("attachments-conversation");
+      expect(detail.turns[0]).toMatchObject({
+        question: "describe this",
+        attachments: [
+          { kind: "image", name: "图片 1", dataUrl: "data:image/png;base64,QUJD" },
+          { kind: "file", name: "notes.txt" },
+        ],
+      });
+    } finally {
+      service.dispose();
+      await close(server);
+    }
+  });
+
+  it("rejects images when the catalog marks the model text-only and preserves the flag on disk", async () => {
+    const requests: ChatRequest[] = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (part) => { body += part; });
+      req.on("end", () => {
+        requests.push(JSON.parse(body) as ChatRequest);
+        writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "done" }), chunk({}, "stop")]);
+      });
+    });
+    const port = await listen(server);
+    const agentDir = createDirectory("text-only-agent");
+    fs.writeFileSync(path.join(agentDir, "discovered-models.json"), JSON.stringify({
+      version: 2,
+      providers: {
+        "openai-compatible": {
+          baseUrl: `http://127.0.0.1:${port}/v1`,
+          updatedAt: new Date().toISOString(),
+          models: [{ id: "text-only-model", name: "Text Only", reasoning: true, contextWindow: 128_000, supportsImages: false }],
+        },
+      },
+    }));
+    const cwd = createDirectory("text-only-workspace");
+    const events: AgentEvent[] = [];
+    const service = new AgentService({
+      resolve: () => ({
+        provider: "openai-compatible",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        modelId: "text-only-model",
+        thinkingLevel: "off" as const,
+        apiKey: "text-only-key",
+      }),
+    }, agentDir, cwd, (event) => events.push(event));
+
+    try {
+      const catalog = await service.getModelCatalog(false);
+      expect(catalog.find((provider) => provider.id === "openai-compatible")?.models[0]?.supportsImages).toBe(false);
+      await expect(service.send("look at this", cwd, undefined, {
+        images: [{ name: "a.png", mimeType: "image/png", data: "QUJD" }],
+      })).rejects.toThrow("当前模型不支持图片输入");
+      // 纯文本附件不受图片能力限制，仍会正常发送并拼入 <file> 块。
+      const runId = await service.send("summarize", cwd, undefined, {
+        attachments: [{ name: "a.txt", content: "text" }],
+      });
+      await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
+      expect(JSON.stringify(requests[0]?.messages)).toContain('<file name=\\"a.txt\\">');
+    } finally {
+      service.dispose();
+      await close(server);
+    }
+  });
+
+  it("marks discovered models text-only when the endpoint declares modalities without image", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [
+      { id: "text-model", architecture: { input_modalities: ["text"] } },
+      { id: "vision-model", architecture: { input_modalities: ["text", "image"] } },
+      { id: "modalities-model", modalities: { input: ["text"] } },
+      { id: "plain-model" },
+    ] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new AgentService(
+      { resolve: () => ({ provider: "openai-compatible", baseUrl: "https://models.example/v1", modelId: "plain-model", thinkingLevel: "off" }) },
+      createDirectory("modalities-agent"),
+      createDirectory("modalities-workspace"),
+      () => {},
+    );
+
+    try {
+      const models = await service.discoverModels({
+        provider: "openai-compatible",
+        baseUrl: "https://models.example/v1",
+        modelId: "plain-model",
+        thinkingLevel: "off",
+      });
+      const byId = new Map(models.map((model) => [model.id, model.supportsImages]));
+      expect(byId.get("text-model")).toBe(false);
+      expect(byId.get("modalities-model")).toBe(false);
+      expect(byId.get("vision-model")).toBeUndefined();
+      expect(byId.get("plain-model")).toBeUndefined();
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("composes queued steering messages with file attachment blocks", async () => {
+    let requestStarted!: () => void;
+    let finishRequest!: () => void;
+    const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+    const server = http.createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        requestStarted();
+        finishRequest = () => writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "finished" }), chunk({}, "stop")]);
+      });
+    });
+    const port = await listen(server);
+    const cwd = createDirectory("queue-attachments-workspace");
+    const configuration: SaveModelSettings = {
+      provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      modelId: "mock-model",
+      thinkingLevel: "off",
+      apiKey: "queue-attachments-key",
+    };
+    const events: AgentEvent[] = [];
+    const service = new AgentService({ resolve: () => ({ ...configuration }) }, createDirectory("queue-attachments-agent"), cwd, (event) => events.push(event));
+
+    try {
+      const runId = await service.send("start a long task", cwd);
+      await started;
+      await expect(service.queueMessage("adjust plan", "steer", {
+        attachments: [{ name: "spec.md", content: "# spec" }],
+      })).resolves.toEqual({ steering: ['adjust plan\n\n<file name="spec.md">\n# spec\n</file>'], followUp: [] });
+      expect(service.clearQueue()).toEqual({ steering: [], followUp: [] });
+      finishRequest();
+      await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
+    } finally {
+      service.dispose();
+      await close(server);
+    }
+  });
 });

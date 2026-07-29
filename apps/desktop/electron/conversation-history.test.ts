@@ -6,7 +6,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, ToolResultMessage, Usage, UserMessage } from "@earendil-works/pi-ai";
 import type { ProviderCatalogEntry, SubagentRunInfo, TaskFileChange } from "../src/contracts.js";
 import type { SubagentRunStore } from "./subagent-run-store.js";
-import { ConversationHistory, displayUserPrompt, initProjectPrompt, type ConversationHistoryDeps } from "./conversation-history.js";
+import { ConversationHistory, displayUserPrompt, extractFileAttachments, initProjectPrompt, type ConversationHistoryDeps } from "./conversation-history.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -70,6 +70,38 @@ describe("displayUserPrompt", () => {
   it("collapses the init prompt to the slash command", () => {
     expect(displayUserPrompt(initProjectPrompt)).toBe("/init");
     expect(displayUserPrompt("hello")).toBe("hello");
+  });
+});
+
+describe("extractFileAttachments", () => {
+  it("strips well-formed trailing file blocks and keeps the remaining text", () => {
+    expect(extractFileAttachments('do this\n\n<file name="a.txt">\nhello\n</file>')).toEqual({
+      text: "do this",
+      attachments: [{ kind: "file", name: "a.txt" }],
+    });
+    expect(extractFileAttachments('look\n\n<file name="a.txt">\nhello\n</file>\n\n<file name="b.md">\n# doc\n</file>')).toEqual({
+      text: "look",
+      attachments: [{ kind: "file", name: "a.txt" }, { kind: "file", name: "b.md" }],
+    });
+    expect(extractFileAttachments('\n\n<file name="only.txt">\ncontent\n</file>')).toEqual({
+      text: "",
+      attachments: [{ kind: "file", name: "only.txt" }],
+    });
+  });
+
+  it("keeps non-trailing or malformed blocks in the text", () => {
+    expect(extractFileAttachments('<file name="a.txt">\nhello\n</file>\n\nafter')).toEqual({
+      text: '<file name="a.txt">\nhello\n</file>\n\nafter',
+      attachments: [],
+    });
+    expect(extractFileAttachments('text\n\n<file name="a.txt">\nunclosed')).toEqual({
+      text: 'text\n\n<file name="a.txt">\nunclosed',
+      attachments: [],
+    });
+    expect(extractFileAttachments('prefix <file name="a.txt">\nhello\n</file>')).toEqual({
+      text: 'prefix <file name="a.txt">\nhello\n</file>',
+      attachments: [],
+    });
   });
 });
 
@@ -231,6 +263,32 @@ describe("ConversationHistory", () => {
     const sessionDir = createDirectory("missing-sessions");
     const history = new ConversationHistory(sessionDir, createDirectory("missing-fallback"), createDeps());
     await expect(history.loadConversation("nope")).rejects.toThrow("找不到该会话");
+  });
+
+  it("rebuilds image and file attachments from stored user messages", async () => {
+    const sessionDir = createDirectory("attachments-sessions");
+    const fallbackCwd = createDirectory("attachments-fallback");
+    const manager = SessionManager.create(fallbackCwd, sessionDir, { id: "conv-attachments" });
+    manager.appendMessage({
+      role: "user",
+      content: [
+        { type: "text", text: 'look at this\n\n<file name="notes.txt">\nsome notes\n</file>' },
+        { type: "image", data: "QUJD", mimeType: "image/png" },
+        { type: "image" },
+      ],
+      timestamp: 1,
+    } as unknown as UserMessage);
+    manager.appendMessage(assistant([{ type: "text", text: "answer" }], 2));
+
+    const history = new ConversationHistory(sessionDir, fallbackCwd, createDeps());
+    const detail = await history.loadConversation("conv-attachments");
+
+    expect(detail.turns).toHaveLength(1);
+    expect(detail.turns[0].question).toBe("look at this");
+    expect(detail.turns[0].attachments).toEqual([
+      { kind: "image", name: "图片 1", dataUrl: "data:image/png;base64,QUJD" },
+      { kind: "file", name: "notes.txt" },
+    ]);
   });
 
   it("forks a conversation and copies its tags", async () => {

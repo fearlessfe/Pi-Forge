@@ -42,4 +42,23 @@ describe("protocol + model metadata matching", () => {
     });
     expect(matchProtocolModelMetadata(index, "other-protocol", "vendor-model")).toBeUndefined();
   });
+
+  it("propagates the image capability flag from catalog entries", () => {
+    const vision: ModelCatalogEntry = {
+      id: "vision-model",
+      name: "Vision Model",
+      reasoning: true,
+      protocol: "vendor-protocol",
+      contextWindow: 100_000,
+      supportsImages: true,
+    };
+    const textOnly: ModelCatalogEntry = { ...vision, id: "text-model", supportsImages: false };
+    const unknown: ModelCatalogEntry = { ...vision, id: "unknown-model", supportsImages: undefined };
+    const index = buildProtocolModelMetadataIndex([vision, textOnly, unknown]);
+
+    expect(matchProtocolModelMetadata(index, "vendor-protocol", "vision-model")?.supportsImages).toBe(true);
+    expect(matchProtocolModelMetadata(index, "vendor-protocol", "text-model")?.supportsImages).toBe(false);
+    expect(matchProtocolModelMetadata(index, "vendor-protocol", "unknown-model")?.supportsImages).toBeUndefined();
+    expect(matchProtocolModelMetadata(index, "openai-responses", "gpt-5.6-sol")?.supportsImages).toBeUndefined();
+  });
 });

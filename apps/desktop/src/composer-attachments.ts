@@ -1,0 +1,75 @@
+import type { PromptFileAttachment, PromptImage, TurnAttachment } from "./contracts.js";
+
+/** 输入框中待发送的图片附件（dataUrl 用于预览，发送时只带裸 base64）。 */
+export type ComposerImage = {
+  id: string;
+  name: string;
+  mimeType: string;
+  data: string;
+  dataUrl: string;
+};
+
+/** 输入框中待发送的文本文件附件。 */
+export type ComposerFile = {
+  id: string;
+  name: string;
+  content: string;
+};
+
+export type ComposerAttachments = {
+  images: ComposerImage[];
+  files: ComposerFile[];
+};
+
+export const emptyComposerAttachments: ComposerAttachments = { images: [], files: [] };
+
+export const maxImageBytes = 10 * 1024 * 1024;
+export const maxTextFileBytes = 1024 * 1024;
+
+const textFileMimeTypes = new Set([
+  "application/json",
+  "application/xml",
+  "application/javascript",
+  "application/typescript",
+  "application/x-yaml",
+  "application/yaml",
+  "application/toml",
+  "application/x-sh",
+  "application/sql",
+]);
+
+const textFileExtensions = new Set([
+  "txt", "md", "markdown", "json", "js", "jsx", "ts", "tsx", "mts", "cts",
+  "css", "scss", "less", "html", "htm", "xml", "svg", "yaml", "yml", "toml",
+  "csv", "tsv", "sh", "bash", "zsh", "py", "rb", "go", "rs", "java", "c", "h",
+  "cpp", "hpp", "cc", "cs", "php", "swift", "kt", "kts", "sql", "ini", "cfg",
+  "conf", "log", "vue", "svelte", "env", "gitignore", "dockerfile", "makefile",
+]);
+
+export type AttachmentFileKind = "image" | "text" | "unsupported";
+
+export function classifyAttachmentFile(name: string, mimeType: string): AttachmentFileKind {
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("text/") || textFileMimeTypes.has(mimeType)) return "text";
+  const extension = name.includes(".") ? name.split(".").pop()!.toLocaleLowerCase() : name.toLocaleLowerCase();
+  return textFileExtensions.has(extension) ? "text" : "unsupported";
+}
+
+export function hasComposerAttachments(attachments: ComposerAttachments): boolean {
+  return attachments.images.length > 0 || attachments.files.length > 0;
+}
+
+export function promptImagesOf(attachments: ComposerAttachments): PromptImage[] {
+  return attachments.images.map((image) => ({ name: image.name, mimeType: image.mimeType, data: image.data }));
+}
+
+export function promptFileAttachmentsOf(attachments: ComposerAttachments): PromptFileAttachment[] {
+  return attachments.files.map((file) => ({ name: file.name, content: file.content }));
+}
+
+export function turnAttachmentsOf(attachments: ComposerAttachments): TurnAttachment[] {
+  return [
+    ...attachments.images.map((image): TurnAttachment => ({ kind: "image", name: image.name, dataUrl: image.dataUrl })),
+    ...attachments.files.map((file): TurnAttachment => ({ kind: "file", name: file.name })),
+  ];
+}

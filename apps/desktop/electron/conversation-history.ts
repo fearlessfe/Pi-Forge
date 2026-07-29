@@ -10,6 +10,7 @@ import type {
   ResponseUsage,
   TaskFileChange,
   ToolActivityDetails,
+  TurnAttachment,
 } from "../src/contracts.js";
 import { mergeAnswerUsage } from "../src/response-usage.js";
 import { fixedProtocolModelMetadata } from "./model-metadata-catalog.js";
@@ -73,6 +74,26 @@ export function displayUserPrompt(prompt: string): string {
   return prompt.trim() === initProjectPrompt ? "/init" : prompt;
 }
 
+// 从消息正文末尾解析 AgentService.composePromptText 生成的 <file name="..."> 块。
+// 只剥离结构完整且位于末尾的块；正文中间出现的同名字符串保持原样。
+export function extractFileAttachments(text: string): { text: string; attachments: TurnAttachment[] } {
+  const attachments: TurnAttachment[] = [];
+  let rest = text;
+  while (rest.endsWith("\n</file>")) {
+    const openIndex = rest.lastIndexOf("<file name=\"");
+    if (openIndex < 0) break;
+    if (openIndex > 0 && !rest.slice(0, openIndex).endsWith("\n\n")) break;
+    const header = rest.slice(openIndex + "<file name=\"".length);
+    const nameEnd = header.indexOf("\">\n");
+    if (nameEnd < 0) break;
+    const name = header.slice(0, nameEnd);
+    if (!name || name.includes("\n")) break;
+    attachments.unshift({ kind: "file", name });
+    rest = openIndex > 0 ? rest.slice(0, openIndex - 2) : "";
+  }
+  return { text: rest.trim(), attachments };
+}
+
 export function responseUsage(message: AssistantMessage): ResponseUsage {
   return {
     provider: message.provider,
@@ -130,8 +151,11 @@ export class ConversationHistory {
       const record = entry.message as unknown as Record<string, unknown>;
       const role = typeof record.role === "string" ? record.role : "";
       if (role === "user") {
-        const question = displayUserPrompt(this.messageText(record.content));
-        if (question) turns.push({ id: entry.id, question, answer: "", activities: [] });
+        const { text, attachments } = this.userMessageContent(record.content);
+        const question = displayUserPrompt(text);
+        if (question || attachments.length > 0) {
+          turns.push({ id: entry.id, question, answer: "", activities: [], ...(attachments.length > 0 ? { attachments } : {}) });
+        }
         continue;
       }
       const current = turns.at(-1);
@@ -350,6 +374,28 @@ export class ConversationHistory {
       ? activeSession.sessionManager
       : SessionManager.open(info.path, this.sessionDir, info.cwd || this.fallbackCwd);
     manager.appendCustomEntry("pi-desktop:conversation-metadata", { ...this.conversationMetadata(manager), ...patch });
+  }
+
+  private userMessageContent(content: unknown): { text: string; attachments: TurnAttachment[] } {
+    const attachments: TurnAttachment[] = [];
+    let text = "";
+    if (typeof content === "string") {
+      text = content;
+    } else if (Array.isArray(content)) {
+      let imageIndex = 0;
+      for (const item of content) {
+        if (!item || typeof item !== "object") continue;
+        const entry = item as Record<string, unknown>;
+        if (entry.type === "text" && typeof entry.text === "string") {
+          text = text ? `${text}\n${entry.text}` : entry.text;
+        } else if (entry.type === "image" && typeof entry.data === "string" && typeof entry.mimeType === "string" && entry.data && entry.mimeType) {
+          imageIndex += 1;
+          attachments.push({ kind: "image", name: `图片 ${imageIndex}`, dataUrl: `data:${entry.mimeType};base64,${entry.data}` });
+        }
+      }
+    }
+    const extracted = extractFileAttachments(text);
+    return { text: extracted.text, attachments: [...attachments, ...extracted.attachments] };
   }
 
   private messageText(content: unknown): string {

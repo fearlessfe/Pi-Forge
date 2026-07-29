@@ -7,6 +7,7 @@ export type ProtocolModelMetadata = {
   maxOutputTokens: number;
   pricing: ModelPricing;
   sourceUrl?: string;
+  supportsImages?: boolean;
 };
 
 const openAiPricingUrl = "https://developers.openai.com/api/docs/pricing";
@@ -42,6 +43,7 @@ export function buildProtocolModelMetadataIndex(models: ModelCatalogEntry[]): Ma
       maxOutputTokens: model.maxOutputTokens ?? 0,
       pricing: model.pricing ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       sourceUrl: model.metadataSourceUrl,
+      supportsImages: model.supportsImages,
     });
   }
   for (const metadata of fixedMetadata) {

@@ -8,7 +8,7 @@ import {
   type AgentSessionEvent,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { InMemoryCredentialStore, type Api, type CredentialStore, type Model } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, type Api, type CredentialStore, type ImageContent, type Model } from "@earendil-works/pi-ai";
 import { Type, type TSchema } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
@@ -22,6 +22,8 @@ import type {
   PermissionRuntime,
   PermissionSettings,
   ModelCatalogEntry,
+  PromptFileAttachment,
+  PromptImage,
   ProviderCatalogEntry,
   QuestionOption,
   ResourceSettings,
@@ -88,6 +90,29 @@ const builtinSubagentToolName = "pi_desktop_subagent";
 
 function expandDesktopCommand(prompt: string): string {
   return prompt.trim() === "/init" ? initProjectPrompt : prompt;
+}
+
+export type PromptExtras = {
+  images?: PromptImage[];
+  attachments?: PromptFileAttachment[];
+};
+
+function sanitizeImages(images: PromptImage[] | undefined): ImageContent[] {
+  return (images ?? [])
+    .filter((image) => image && typeof image.data === "string" && typeof image.mimeType === "string" && image.data && image.mimeType)
+    .map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }));
+}
+
+function sanitizeAttachments(attachments: PromptFileAttachment[] | undefined): PromptFileAttachment[] {
+  return (attachments ?? []).filter((attachment) => attachment && typeof attachment.name === "string" && typeof attachment.content === "string");
+}
+
+// 文本附件以 <file> 块拼接到正文末尾；历史重建按同一格式解析，注意保持格式一致。
+export function composePromptText(prompt: string, attachments?: PromptFileAttachment[]): string {
+  const blocks = sanitizeAttachments(attachments)
+    .map((attachment) => `\n\n<file name="${attachment.name.replace(/"/g, "")}">\n${attachment.content}\n</file>`)
+    .join("");
+  return `${prompt.trim()}${blocks}`;
 }
 
 const questionParameters = Type.Object({
@@ -190,12 +215,15 @@ export class AgentService {
     return this.modelCatalog.discoverModels(input);
   }
 
-  async send(prompt: string, cwd?: string, conversationId?: string): Promise<string> {
+  async send(prompt: string, cwd?: string, conversationId?: string, extras?: PromptExtras): Promise<string> {
     if (this.running) throw new Error("Agent 正在执行，请先停止当前任务或等待完成。");
-    if (!prompt.trim()) throw new Error("消息不能为空。");
+    const images = sanitizeImages(extras?.images);
+    const attachments = sanitizeAttachments(extras?.attachments);
+    if (!prompt.trim() && images.length === 0 && attachments.length === 0) throw new Error("消息不能为空。");
 
     const resolvedCwd = this.resolveCwd(cwd);
     const config = this.settings.resolve();
+    await this.assertImagesSupported(config, images);
     const session = await this.ensureSession(resolvedCwd, config, conversationId);
     const runId = randomUUID();
     this.activeRunId = runId;
@@ -214,7 +242,7 @@ export class AgentService {
     });
     this.emitContextUsage(runId, session);
 
-    void session.prompt(expandDesktopCommand(prompt.trim())).then(() => {
+    void session.prompt(expandDesktopCommand(composePromptText(prompt, attachments)), images.length > 0 ? { images } : undefined).then(() => {
       if (this.activeRunId !== runId) return;
       const modelError = session.agent.state.errorMessage;
       this.persistFileChanges(runId);
@@ -298,13 +326,30 @@ export class AgentService {
     }
   }
 
-  async queueMessage(prompt: string, mode: "steer" | "followUp"): Promise<{ steering: string[]; followUp: string[] }> {
+  async queueMessage(prompt: string, mode: "steer" | "followUp", extras?: PromptExtras): Promise<{ steering: string[]; followUp: string[] }> {
     if (!this.running || !this.session) throw new Error("当前没有正在运行的 Agent 任务。");
-    const normalized = prompt.trim();
-    if (!normalized) throw new Error("排队消息不能为空。");
-    if (mode === "steer") await this.session.steer(normalized);
-    else await this.session.followUp(normalized);
+    const images = sanitizeImages(extras?.images);
+    const attachments = sanitizeAttachments(extras?.attachments);
+    if (!prompt.trim() && images.length === 0 && attachments.length === 0) throw new Error("排队消息不能为空。");
+    await this.assertImagesSupported(this.settings.resolve(), images);
+    const text = composePromptText(prompt, attachments);
+    if (mode === "steer") await this.session.steer(text, images.length > 0 ? images : undefined);
+    else await this.session.followUp(text, images.length > 0 ? images : undefined);
     return this.currentQueue();
+  }
+
+  // 仅在目录明确标记 supportsImages === false 时拦截；未知或查询失败不阻止发送。
+  private async assertImagesSupported(config: AgentRuntimeConfig, images: ImageContent[]): Promise<void> {
+    if (images.length === 0) return;
+    let entry: ModelCatalogEntry | undefined;
+    try {
+      const catalog = await this.modelCatalog.getModelCatalog(false);
+      entry = catalog.find((provider) => provider.id === config.provider)
+        ?.models.find((model) => model.id === config.modelId);
+    } catch {
+      return;
+    }
+    if (entry?.supportsImages === false) throw new Error("当前模型不支持图片输入。");
   }
 
   clearQueue(): { steering: string[]; followUp: string[] } {

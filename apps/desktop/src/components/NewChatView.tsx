@@ -15,6 +15,7 @@ import {
   FolderOpen,
   GitFork,
   MessageCircleQuestion,
+  Paperclip,
   RotateCcw,
   TerminalSquare,
   ShieldCheck,
@@ -23,10 +24,11 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { CommandInfo, ContextUsageInfo, ProviderCatalogEntry, ProviderId, QueuedMessages, ResponseUsage, TaskFileChange } from "../contracts";
+import { classifyAttachmentFile, hasComposerAttachments, maxImageBytes, maxTextFileBytes, type ComposerAttachments, type ComposerFile, type ComposerImage } from "../composer-attachments";
 import { normalizeVisibleActivities } from "../conversation-activity";
 import { fileExtension, isArtifactChange } from "../file-changes";
 import { shouldSubmitOnEnter } from "../keyboard";
@@ -42,11 +44,15 @@ type NewChatViewProps = {
   modelId: string;
   modelProvider: ProviderId;
   modelProviders: ProviderCatalogEntry[];
+  modelSupportsImages: boolean;
   contextUsage?: ContextUsageInfo;
   prompt: string;
+  attachments: ComposerAttachments;
   isRunning: boolean;
   queuedMessages: QueuedMessages;
   onPromptChange: (value: string) => void;
+  onAttachmentsChange: (update: (current: ComposerAttachments) => ComposerAttachments) => void;
+  onAttachmentError: (message: string) => void;
   onProjectChange: (project: Project | null) => void;
   onChooseWorkspace: () => void;
   onOpenTerminal: () => void;
@@ -146,8 +152,134 @@ function CommandPalette({ matches, selected, placement, onSelect }: { matches: C
   </div>;
 }
 
-function formatData(value: unknown): string {
-  if (typeof value === "string") return value;
+const attachmentAcceptTypes = "image/*,text/*,.json,.md,.markdown,.yaml,.yml,.toml,.csv,.ts,.tsx,.js,.jsx,.py,.sh,.xml,.html,.css,.sql,.log,.ini,.cfg,.conf,.env";
+
+function attachmentId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function useComposerAttachments(props: NewChatViewProps) {
+  const { t } = useI18n();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  function addFiles(fileList: File[]) {
+    for (const file of fileList) {
+      const kind = classifyAttachmentFile(file.name, file.type);
+      if (kind === "unsupported") {
+        props.onAttachmentError(t("暂不支持该文件类型"));
+        continue;
+      }
+      if (kind === "image") {
+        if (!props.modelSupportsImages) {
+          props.onAttachmentError(t("当前模型不支持图片输入"));
+          continue;
+        }
+        if (file.size > maxImageBytes) {
+          props.onAttachmentError(t("图片大小不能超过 10 MB"));
+          continue;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = typeof reader.result === "string" ? reader.result : "";
+          const data = dataUrl.includes(",") ? dataUrl.slice(dataUrl.indexOf(",") + 1) : "";
+          if (!data) return;
+          const image: ComposerImage = {
+            id: attachmentId(),
+            name: file.name || t("粘贴的图片"),
+            mimeType: file.type || "image/png",
+            data,
+            dataUrl,
+          };
+          props.onAttachmentsChange((current) => ({ ...current, images: [...current.images, image] }));
+        };
+        reader.onerror = () => props.onAttachmentError(t("无法读取文件"));
+        reader.readAsDataURL(file);
+        continue;
+      }
+      if (file.size > maxTextFileBytes) {
+        props.onAttachmentError(t("文件大小不能超过 1 MB"));
+        continue;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result !== "string") return;
+        const attachment: ComposerFile = { id: attachmentId(), name: file.name || t("未命名文件"), content: reader.result };
+        props.onAttachmentsChange((current) => ({ ...current, files: [...current.files, attachment] }));
+      };
+      reader.onerror = () => props.onAttachmentError(t("无法读取文件"));
+      reader.readAsText(file);
+    }
+  }
+
+  function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData?.items ?? [])
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => Boolean(file));
+    if (files.length === 0) return;
+    event.preventDefault();
+    addFiles(files);
+  }
+
+  function onDrop(event: DragEvent<HTMLFormElement>) {
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (files.length === 0) return;
+    event.preventDefault();
+    addFiles(files);
+  }
+
+  function onDragOver(event: DragEvent<HTMLFormElement>) {
+    if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+  }
+
+  function onFilePicked(event: ChangeEvent<HTMLInputElement>) {
+    addFiles(Array.from(event.target.files ?? []));
+    event.target.value = "";
+  }
+
+  function removeImage(id: string) {
+    props.onAttachmentsChange((current) => ({ ...current, images: current.images.filter((image) => image.id !== id) }));
+  }
+
+  function removeFile(id: string) {
+    props.onAttachmentsChange((current) => ({ ...current, files: current.files.filter((file) => file.id !== id) }));
+  }
+
+  return { fileInputRef, onPaste, onDrop, onDragOver, onFilePicked, removeImage, removeFile, openPicker: () => fileInputRef.current?.click() };
+}
+
+function AttachmentStrip({ attachments, onRemoveImage, onRemoveFile }: {
+  attachments: ComposerAttachments;
+  onRemoveImage: (id: string) => void;
+  onRemoveFile: (id: string) => void;
+}) {
+  const { t } = useI18n();
+  if (!hasComposerAttachments(attachments)) return null;
+  return (
+    <div className="flex flex-none flex-wrap items-center gap-[6px] overflow-auto pb-base" aria-label={t("附件列表")}>
+      {attachments.images.map((image) => (
+        <span className="relative inline-flex flex-none" key={image.id}>
+          <img className="size-[44px] rounded-sm border border-separator object-cover" src={image.dataUrl} alt={image.name} title={image.name} />
+          <button className="absolute -top-[5px] -right-[5px] grid size-[16px] cursor-pointer place-items-center rounded-full border border-separator bg-bg-grouped text-label-3 transition-colors duration-150 ease-apple hover:text-label" type="button" aria-label={t("移除附件")} title={t("移除附件")} onClick={() => onRemoveImage(image.id)}><X size={10} /></button>
+        </span>
+      ))}
+      {attachments.files.map((file) => (
+        <span className="inline-flex h-[28px] flex-none items-center gap-tight rounded-full border border-separator bg-bg px-base text-caption text-label-2" key={file.id} title={file.name}>
+          <FileBox size={12} className="text-accent" />
+          <span className="max-w-[160px] truncate">{file.name}</span>
+          <button className="inline-flex cursor-pointer border-0 bg-transparent p-0 text-label-3 transition-colors duration-150 ease-apple hover:text-label" type="button" aria-label={t("移除附件")} title={t("移除附件")} onClick={() => onRemoveFile(file.id)}><X size={12} /></button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function AttachButton({ supportsImages, onClick }: { supportsImages: boolean; onClick: () => void }) {
+  const { t } = useI18n();
+  return <button className={composerToolButtonClass} type="button" aria-label={t("添加附件")} title={supportsImages ? t("添加附件") : t("当前模型不支持图片输入")} onClick={onClick}><Paperclip size={14} /></button>;
+}
+
+function formatData(value: unknown): string {  if (typeof value === "string") return value;
   try {
     return JSON.stringify(value, null, 2);
   } catch {
@@ -307,6 +439,8 @@ function SendControl({ isRunning, canSend, onStop }: { isRunning: boolean; canSe
 function InitialComposer(props: NewChatViewProps) {
   const { t } = useI18n();
   const palette = useCommandPalette(props);
+  const composer = useComposerAttachments(props);
+  const canSend = Boolean(props.prompt.trim()) || hasComposerAttachments(props.attachments);
   return (
     <section className="relative z-[1] grid h-full w-full place-items-center pb-6" aria-label={t("新建对话")}>
       <div className="w-[min(760px,calc(100%-64px))]">
@@ -320,11 +454,13 @@ function InitialComposer(props: NewChatViewProps) {
           </p>
         </header>
 
-        <form className="composer-shell relative flex h-[184px] flex-col rounded-lg bg-bg-grouped p-card pb-tight shadow-2 transition-shadow duration-150 ease-apple" onSubmit={(event) => { event.preventDefault(); props.onSubmit(); }}>
+        <form className="composer-shell relative flex h-[184px] flex-col rounded-lg bg-bg-grouped p-card pb-tight shadow-2 transition-shadow duration-150 ease-apple" onSubmit={(event) => { event.preventDefault(); props.onSubmit(); }} onDrop={composer.onDrop} onDragOver={composer.onDragOver}>
+          <AttachmentStrip attachments={props.attachments} onRemoveImage={composer.removeImage} onRemoveFile={composer.removeFile} />
           <textarea
             className="composer-input min-h-0 w-full flex-1 resize-none border-0 bg-transparent p-0 text-body leading-relaxed text-label outline-none placeholder:text-label-3"
             value={props.prompt}
             onChange={(event) => props.onPromptChange(event.target.value)}
+            onPaste={composer.onPaste}
             onKeyDown={(event) => {
               const selectedCommand = palette.onKeyDown(event);
               if (selectedCommand === null) return;
@@ -334,15 +470,17 @@ function InitialComposer(props: NewChatViewProps) {
               }
               if (!shouldSubmitOnEnter(event.nativeEvent)) return;
               event.preventDefault();
-              if (props.prompt.trim() && !props.isRunning) props.onSubmit();
+              if (canSend && !props.isRunning) props.onSubmit();
             }}
             placeholder={t("描述你想分析、构建或修改的内容…")}
             aria-label={t("对话内容")}
           />
+          <input ref={composer.fileInputRef} type="file" multiple hidden accept={attachmentAcceptTypes} tabIndex={-1} aria-hidden="true" onChange={composer.onFilePicked} />
           <CommandPalette matches={palette.matches} selected={palette.selected} placement="inside" onSelect={palette.select} />
           <div className="flex h-control-md flex-none items-end gap-base">
             <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={props.isRunning} onChange={props.onModelChange} />
-            <SendControl isRunning={props.isRunning} canSend={Boolean(props.prompt.trim())} onStop={props.onStop} />
+            <AttachButton supportsImages={props.modelSupportsImages} onClick={composer.openPicker} />
+            <SendControl isRunning={props.isRunning} canSend={canSend} onStop={props.onStop} />
           </div>
         </form>
 
@@ -610,7 +748,14 @@ function ConversationTurn({ turn, running, onRetry, onForkTurn, onAnswerQuestion
     <article className="relative mb-[34px]">
       <section className="relative ml-auto flex w-[86%] items-start justify-end pb-[31px]" aria-label={t("用户消息")}>
         <div className="w-fit max-w-full">
-          <div className="mt-[3px] ml-auto w-fit max-w-full rounded-md rounded-tr-sm border border-separator bg-bg-grouped px-[13px] py-[11px] text-body leading-[1.65] text-label-2">{turn.question}</div>
+          {turn.attachments && turn.attachments.length > 0 && (
+            <div className="mb-[6px] ml-auto flex w-fit max-w-full flex-wrap justify-end gap-[6px]">
+              {turn.attachments.map((attachment, index) => attachment.kind === "image" && attachment.dataUrl
+                ? <img className="max-h-[140px] max-w-[200px] rounded-sm border border-separator object-cover" src={attachment.dataUrl} alt={attachment.name} title={attachment.name} key={`${attachment.name}-${index}`} />
+                : <span className="inline-flex h-[28px] items-center gap-tight rounded-full border border-separator bg-bg-grouped px-base text-caption text-label-2" title={attachment.name} key={`${attachment.name}-${index}`}><FileBox size={12} className="text-accent" /><span className="max-w-[180px] truncate">{attachment.name}</span></span>)}
+            </div>
+          )}
+          {turn.question && <div className="mt-[3px] ml-auto w-fit max-w-full rounded-md rounded-tr-sm border border-separator bg-bg-grouped px-[13px] py-[11px] text-body leading-[1.65] text-label-2">{turn.question}</div>}
           <div className="absolute right-0 bottom-0 flex items-center gap-tight">
             <button className={messageActionButtonClass} type="button" onClick={() => void copyQuestion()} aria-label={t("复制用户输入")}>
               {copied ? <Check size={14} /> : <Copy size={14} />}<span>{t(copied ? "已复制" : "复制")}</span>
@@ -722,6 +867,8 @@ function FileChangeInspector({ change, onClose }: { change: TaskFileChange; onCl
 function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: TaskFileChange) => void }) {
   const { t } = useI18n();
   const palette = useCommandPalette(props);
+  const composer = useComposerAttachments(props);
+  const canSend = Boolean(props.prompt.trim()) || hasComposerAttachments(props.attachments);
   const runningTurn = [...props.turns].reverse().find((turn) => turn.status === "running");
   return (
     <section className="relative z-[1] grid h-full w-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto]" aria-label={t("当前对话")}>
@@ -737,11 +884,13 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
           event.preventDefault();
           if (props.isRunning) props.onQueue("followUp");
           else props.onSubmit();
-        }}>
+        }} onDrop={composer.onDrop} onDragOver={composer.onDragOver}>
+          <AttachmentStrip attachments={props.attachments} onRemoveImage={composer.removeImage} onRemoveFile={composer.removeFile} />
           <textarea
             className="composer-input min-h-0 w-full flex-1 resize-none border-0 bg-transparent px-[3px] py-0 text-body leading-relaxed text-label outline-none placeholder:text-label-3"
             value={props.prompt}
             onChange={(event) => props.onPromptChange(event.target.value)}
+            onPaste={composer.onPaste}
             onKeyDown={(event) => {
               const selectedCommand = palette.onKeyDown(event);
               if (selectedCommand === null) return;
@@ -752,20 +901,22 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
               }
               if (!shouldSubmitOnEnter(event.nativeEvent)) return;
               event.preventDefault();
-              if (!props.prompt.trim()) return;
+              if (!canSend) return;
               if (props.isRunning) props.onQueue("followUp");
               else props.onSubmit();
             }}
             placeholder={t(props.isRunning ? "输入调整指令，选择立即介入或稍后继续…" : "继续给 Pi 指令…")}
             aria-label={t("继续对话")}
           />
+          <input ref={composer.fileInputRef} type="file" multiple hidden accept={attachmentAcceptTypes} tabIndex={-1} aria-hidden="true" onChange={composer.onFilePicked} />
           <CommandPalette matches={palette.matches} selected={palette.selected} placement="above" onSelect={palette.select} />
           <div className="flex h-control-md flex-none items-end gap-base">
             <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={props.isRunning} onChange={props.onModelChange} />
+            <AttachButton supportsImages={props.modelSupportsImages} onClick={composer.openPicker} />
             <DirectoryMenu compact project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} />
             <button className={composerToolButtonClass} type="button" onClick={props.onOpenTerminal} aria-label={t("打开终端")} title={t("打开终端")}><TerminalSquare size={14} /></button>
-            {props.isRunning && <><button className={queueButtonClass} type="button" disabled={!props.prompt.trim()} onClick={() => props.onQueue("steer")}>{t("立即调整")}</button><button className={queueButtonClass} type="submit" disabled={!props.prompt.trim()}>{t("稍后继续")}</button></>}
-            <SendControl isRunning={props.isRunning} canSend={Boolean(props.prompt.trim())} onStop={props.onStop} />
+            {props.isRunning && <><button className={queueButtonClass} type="button" disabled={!canSend} onClick={() => props.onQueue("steer")}>{t("立即调整")}</button><button className={queueButtonClass} type="submit" disabled={!canSend}>{t("稍后继续")}</button></>}
+            <SendControl isRunning={props.isRunning} canSend={canSend} onStop={props.onStop} />
           </div>
         </form>
         <p className="mx-auto mt-base flex min-h-[17px] w-[min(760px,100%)] items-center gap-base text-caption text-label-3">

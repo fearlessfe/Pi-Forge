@@ -8,6 +8,7 @@ import { BrowserWorkbench } from "./components/BrowserWorkbench";
 import type { AgentEvent, AppearanceTheme, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
 import { appendMessageDelta } from "./conversation-activity";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
+import { emptyComposerAttachments, promptFileAttachmentsOf, promptImagesOf, turnAttachmentsOf, type ComposerAttachments } from "./composer-attachments";
 import { isPrimaryShortcut, shortcutLabel } from "./keyboard";
 import { useI18n } from "./i18n";
 import { mergeAnswerUsage } from "./response-usage";
@@ -227,6 +228,7 @@ export function App() {
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo>();
   const [authFlow, setAuthFlow] = useState<AuthFlowState | null>(null);
   const [prompt, setPrompt] = useState("");
+  const [composerAttachments, setComposerAttachments] = useState<ComposerAttachments>(emptyComposerAttachments);
   const [commandRunning, setCommandRunning] = useState(false);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -414,6 +416,9 @@ export function App() {
   }, [modelSettings.configuredProviders, modelSettings.provider, providerCatalog]);
   const selectedContextWindow = providerCatalog.find((provider) => provider.id === modelSettings.provider)
     ?.models.find((model) => model.id === modelSettings.modelId)?.contextWindow ?? 0;
+  // 仅在目录明确标记不支持图片时禁用图片附件；未知模型按允许处理。
+  const currentModelSupportsImages = providerCatalog.find((provider) => provider.id === modelSettings.provider)
+    ?.models.find((model) => model.id === modelSettings.modelId)?.supportsImages !== false;
   const displayedContextUsage = contextUsage ?? (selectedContextWindow > 0
     ? { tokens: turns.length === 0 ? 0 : null, contextWindow: selectedContextWindow, percent: turns.length === 0 ? 0 : null }
     : undefined);
@@ -670,7 +675,9 @@ export function App() {
   }
 
   async function sendQuestion(question: string, skipExtensionCommand = false) {
-    if (!question.trim() || isRunning) return;
+    const images = promptImagesOf(composerAttachments);
+    const files = promptFileAttachmentsOf(composerAttachments);
+    if ((!question.trim() && images.length === 0 && files.length === 0) || isRunning) return;
     if (!skipExtensionCommand && question.trimStart().startsWith("/") && window.piDesktop?.resources?.executeExtensionCommand) {
       setCommandRunning(true);
       try {
@@ -690,15 +697,18 @@ export function App() {
     const wasNewConversation = !selectedConversationId;
     const conversationId = ensureConversation(question);
     const id = `${Date.now()}-${turns.length}`;
+    const turnAttachments = turnAttachmentsOf(composerAttachments);
     setTurns((current) => [...current, {
       id,
       question: question.trim(),
       answer: "",
       activities: [],
+      ...(turnAttachments.length > 0 ? { attachments: turnAttachments } : {}),
       fileChanges: [],
       status: "running",
     }]);
     setPrompt("");
+    setComposerAttachments(emptyComposerAttachments);
 
     if (!window.piDesktop) {
       setTurns((current) => current.map((turn) => turn.id === id
@@ -707,7 +717,13 @@ export function App() {
       return;
     }
     try {
-      const { runId } = await window.piDesktop.agent.send({ prompt: question.trim(), cwd: project?.path, conversationId });
+      const { runId } = await window.piDesktop.agent.send({
+        prompt: question.trim(),
+        cwd: project?.path,
+        conversationId,
+        ...(images.length > 0 ? { images } : {}),
+        ...(files.length > 0 ? { attachments: files } : {}),
+      });
       setTurns((current) => current.map((turn) => turn.id === id && !turn.runId ? { ...turn, runId } : turn));
     } catch (error) {
       setTurns((current) => current.map((turn) => turn.id === id
@@ -815,10 +831,18 @@ export function App() {
 
   async function queuePrompt(mode: "steer" | "followUp", promptOverride?: string) {
     const submittedPrompt = promptOverride ?? prompt;
-    if (!submittedPrompt.trim() || !window.piDesktop?.agent.queue) return;
+    const images = promptImagesOf(composerAttachments);
+    const files = promptFileAttachmentsOf(composerAttachments);
+    if ((!submittedPrompt.trim() && images.length === 0 && files.length === 0) || !window.piDesktop?.agent.queue) return;
     try {
-      setQueuedMessages(await window.piDesktop.agent.queue(submittedPrompt, mode));
+      setQueuedMessages(await window.piDesktop.agent.queue({
+        prompt: submittedPrompt,
+        mode,
+        ...(images.length > 0 ? { images } : {}),
+        ...(files.length > 0 ? { attachments: files } : {}),
+      }));
       setPrompt("");
+      setComposerAttachments(emptyComposerAttachments);
     } catch (error) {
       setNotice({ title: t("消息排队失败"), message: eventError(error), type: "info" });
     }
@@ -1095,11 +1119,15 @@ export function App() {
                   modelId={modelSettings.modelId}
                   modelProvider={modelSettings.provider}
                   modelProviders={configuredModelProviders}
+                  modelSupportsImages={currentModelSupportsImages}
                   contextUsage={displayedContextUsage}
                   prompt={prompt}
+                  attachments={composerAttachments}
                   isRunning={isRunning}
                   queuedMessages={queuedMessages}
                   onPromptChange={setPrompt}
+                  onAttachmentsChange={setComposerAttachments}
+                  onAttachmentError={(message) => setNotice({ title: t("无法添加附件"), message, type: "info" })}
                   onProjectChange={setProject}
                   onChooseWorkspace={() => void chooseWorkspace()}
                   onOpenTerminal={() => setTerminalOpen(true)}

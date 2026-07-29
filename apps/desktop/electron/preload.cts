@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentEvent, AuthEvent, BrowserEvent, ModelMetadataOverride, PiDesktopApi, PluginProgressEvent, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, TerminalEvent } from "../src/contracts.js";
+import type { AgentEvent, AuthEvent, BrowserEvent, ModelMetadataOverride, PiDesktopApi, PluginProgressEvent, QueuePromptInput, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, TerminalEvent } from "../src/contracts.js";
 
 const api: PiDesktopApi = {
   appearance: {
@@ -118,7 +118,7 @@ const api: PiDesktopApi = {
     setConversationTags: (conversationId, tags) => ipcRenderer.invoke("agent:set-conversation-tags", conversationId, tags),
     deleteConversation: (conversationId) => ipcRenderer.invoke("agent:delete-conversation", conversationId),
     abort: () => ipcRenderer.invoke("agent:abort"),
-    queue: (prompt, mode) => ipcRenderer.invoke("agent:queue", prompt, mode),
+    queue: (input: QueuePromptInput) => ipcRenderer.invoke("agent:queue", input),
     clearQueue: () => ipcRenderer.invoke("agent:clear-queue"),
     listChanges: (runId) => ipcRenderer.invoke("agent:list-changes", runId),
     acceptChanges: (changeIds) => ipcRenderer.invoke("agent:accept-changes", changeIds),

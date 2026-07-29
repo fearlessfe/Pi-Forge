@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { AgentEvent, AppearancePreference, AppearanceTheme, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ResourceSettings, SaveMcpServerInput, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
+import type { AgentEvent, AppearancePreference, AppearanceTheme, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, PromptFileAttachment, PromptImage, QueuePromptInput, ResourceSettings, SaveMcpServerInput, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
 import { AgentRuntimeClient } from "./agent-runtime-client.js";
 import { AppearanceStore } from "./appearance-store.js";
 import { AuthService } from "./auth-service.js";
@@ -154,6 +154,22 @@ async function migrateLegacyApiKeys(settings: SettingsStore, credentials: Encryp
 function requireString(value: unknown, message: string): string {
   if (typeof value !== "string" || !value) throw new Error(message);
   return value;
+}
+
+function parsePromptExtras(input: { images?: unknown; attachments?: unknown }): { images?: PromptImage[]; attachments?: PromptFileAttachment[] } {
+  const { images, attachments } = input;
+  if (images !== undefined && (!Array.isArray(images) || images.some((image) => !image || typeof image !== "object"
+    || typeof (image as PromptImage).name !== "string"
+    || typeof (image as PromptImage).mimeType !== "string"
+    || typeof (image as PromptImage).data !== "string"))) {
+    throw new Error("图片附件无效。");
+  }
+  if (attachments !== undefined && (!Array.isArray(attachments) || attachments.some((attachment) => !attachment || typeof attachment !== "object"
+    || typeof (attachment as PromptFileAttachment).name !== "string"
+    || typeof (attachment as PromptFileAttachment).content !== "string"))) {
+    throw new Error("文件附件无效。");
+  }
+  return { images: images as PromptImage[] | undefined, attachments: attachments as PromptFileAttachment[] | undefined };
 }
 
 function requirePermissionSettings(value: unknown): PermissionSettings {
@@ -532,8 +548,9 @@ function registerIpc(
     ) {
       throw new Error("消息字段无效。");
     }
+    const extras = parsePromptExtras(input);
     if (input.cwd !== undefined) requireKnownWorkspace(resources, input.cwd);
-    const runId = await agent.send(input.prompt, input.cwd, input.conversationId);
+    const runId = await agent.send(input.prompt, input.cwd, input.conversationId, extras);
     return { runId };
   });
   ipcMain.handle("agent:list-conversations", () => agent.listConversations());
@@ -561,9 +578,12 @@ function registerIpc(
     agent.deleteConversation(requireString(conversationId, "会话 ID 无效。"))
   ));
   ipcMain.handle("agent:abort", () => agent.abort());
-  ipcMain.handle("agent:queue", (_event, prompt: unknown, mode: unknown) => {
-    if (mode !== "steer" && mode !== "followUp") throw new Error("消息排队模式无效。");
-    return agent.queueMessage(requireString(prompt, "排队消息无效。"), mode);
+  ipcMain.handle("agent:queue", (_event, value: unknown) => {
+    if (!value || typeof value !== "object") throw new Error("排队消息格式无效。");
+    const input = value as QueuePromptInput;
+    if (typeof input.prompt !== "string") throw new Error("排队消息无效。");
+    if (input.mode !== "steer" && input.mode !== "followUp") throw new Error("消息排队模式无效。");
+    return agent.queueMessage(input.prompt, input.mode, parsePromptExtras(input));
   });
   ipcMain.handle("agent:clear-queue", () => agent.clearQueue());
   ipcMain.handle("agent:list-changes", (_event, runId: unknown) => agent.listChanges(runId === undefined ? undefined : requireString(runId, "任务 ID 无效。")));

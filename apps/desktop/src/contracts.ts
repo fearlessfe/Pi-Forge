@@ -175,6 +175,8 @@ export type ModelCatalogEntry = {
   id: string;
   name: string;
   reasoning: boolean;
+  /** Whether the model accepts image input; undefined means unknown (allowed). */
+  supportsImages?: boolean;
   /** Wire protocol used to call this model, e.g. openai-responses. */
   protocol?: string;
   contextWindow: number;
@@ -393,10 +395,39 @@ export type AgentEvent =
   | { type: "run.stopped"; runId: string }
   | { type: "run.error"; runId: string; message: string };
 
+/** 随消息发送的图片附件；data 为不含 data: URL 前缀的 base64。 */
+export type PromptImage = {
+  name: string;
+  mimeType: string;
+  data: string;
+};
+
+/** 随消息发送的文本文件附件，发送时内联到消息正文中。 */
+export type PromptFileAttachment = {
+  name: string;
+  content: string;
+};
+
+/** 用户消息里展示的附件（图片可带 dataUrl 缩略图）。 */
+export type TurnAttachment = {
+  kind: "image" | "file";
+  name: string;
+  dataUrl?: string;
+};
+
 export type SendPromptInput = {
   prompt: string;
   cwd?: string;
   conversationId?: string;
+  images?: PromptImage[];
+  attachments?: PromptFileAttachment[];
+};
+
+export type QueuePromptInput = {
+  prompt: string;
+  mode: "steer" | "followUp";
+  images?: PromptImage[];
+  attachments?: PromptFileAttachment[];
 };
 
 export type RuntimeRecoveryInfo = {
@@ -428,6 +459,7 @@ export type ConversationHistoryTurn = {
   question: string;
   answer: string;
   activities: ConversationActivity[];
+  attachments?: TurnAttachment[];
   fileChanges?: TaskFileChange[];
   usage?: ResponseUsage;
 };
@@ -706,7 +738,7 @@ export type PiDesktopApi = {
     setConversationTags(conversationId: string, tags: string[]): Promise<void>;
     deleteConversation(conversationId: string): Promise<void>;
     abort(): Promise<void>;
-    queue(prompt: string, mode: "steer" | "followUp"): Promise<QueuedMessages>;
+    queue(input: QueuePromptInput): Promise<QueuedMessages>;
     clearQueue(): Promise<QueuedMessages>;
     listChanges(runId?: string): Promise<TaskFileChange[]>;
     acceptChanges(changeIds?: string[]): Promise<TaskFileChange[]>;

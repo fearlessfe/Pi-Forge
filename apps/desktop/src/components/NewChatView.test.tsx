@@ -34,10 +34,14 @@ describe("NewChatView analysis presentation", () => {
         modelId="test-model"
         modelProvider="anthropic"
         modelProviders={[]}
+        modelSupportsImages
         prompt=""
+        attachments={{ images: [], files: [] }}
         isRunning
         queuedMessages={{ steering: [], followUp: [] }}
         onPromptChange={noop}
+        onAttachmentsChange={noop}
+        onAttachmentError={noop}
         onProjectChange={noop}
         onChooseWorkspace={noop}
         onOpenTerminal={noop}

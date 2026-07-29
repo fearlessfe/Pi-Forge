@@ -114,8 +114,23 @@ describe("conversation history compatibility", () => {
     });
   });
 
-  it("restores safe persisted file changes for historical turns", () => {
+  it("preserves valid turn attachments and drops malformed entries", () => {
     expect(normalizeHistoryTurn({
+      attachments: [
+        { kind: "image", name: "shot.png", dataUrl: "data:image/png;base64,QUJD" },
+        { kind: "file", name: "notes.txt" },
+        { kind: "video", name: "clip.mp4" },
+        { kind: "image", dataUrl: "data:image/png;base64,AA" },
+        "raw",
+      ],
+    }, 0).attachments).toEqual([
+      { kind: "image", name: "shot.png", dataUrl: "data:image/png;base64,QUJD" },
+      { kind: "file", name: "notes.txt", dataUrl: undefined },
+    ]);
+    expect(normalizeHistoryTurn({}, 0).attachments).toBeUndefined();
+  });
+
+  it("restores safe persisted file changes for historical turns", () => {    expect(normalizeHistoryTurn({
       fileChanges: [{
         id: "change-1",
         runId: "run-1",

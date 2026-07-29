@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 import type { BrowserAnnotationCapture, SaveModelSettings } from "../src/contracts.js";
-import { AgentService, type AgentRuntimeConfig } from "./agent-service.js";
+import { AgentService, type AgentRuntimeConfig, type PromptExtras } from "./agent-service.js";
 import { CapabilityStore } from "./capability-store.js";
 import { ModelMetadataStore } from "./model-metadata-store.js";
 import { PermissionStore } from "./permission-store.js";
@@ -171,7 +171,7 @@ async function invoke(request: RuntimeRequest): Promise<unknown> {
   switch (request.method) {
     case "getModelCatalog": return agent.getModelCatalog(args[0] as boolean | undefined);
     case "discoverModels": return agent.discoverModels(args[0] as SaveModelSettings);
-    case "send": return agent.send(args[0] as string, args[1] as string | undefined, args[2] as string | undefined);
+    case "send": return agent.send(args[0] as string, args[1] as string | undefined, args[2] as string | undefined, args[3] as PromptExtras | undefined);
     case "executeExtensionCommand": return agent.executeExtensionCommand(args[0] as string, args[1] as string | undefined, args[2] as string | undefined);
     case "listConversations": return agent.listConversations();
     case "loadConversation": return agent.loadConversation(args[0] as string);
@@ -182,7 +182,7 @@ async function invoke(request: RuntimeRequest): Promise<unknown> {
     case "renameConversation": return agent.renameConversation(args[0] as string, args[1] as string);
     case "deleteConversation": return agent.deleteConversation(args[0] as string);
     case "abort": return agent.abort();
-    case "queueMessage": return agent.queueMessage(args[0] as string, args[1] as "steer" | "followUp");
+    case "queueMessage": return agent.queueMessage(args[0] as string, args[1] as "steer" | "followUp", args[2] as PromptExtras | undefined);
     case "clearQueue": return agent.clearQueue();
     case "listChanges": return agent.listChanges(args[0] as string | undefined);
     case "changePath": return agent.changePath(args[0] as string);
