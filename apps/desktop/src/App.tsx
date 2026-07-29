@@ -725,8 +725,9 @@ export function App() {
     }
   }
 
-  function submitPrompt() {
-    const command = prompt.trim();
+  function submitPrompt(promptOverride?: string) {
+    const submittedPrompt = promptOverride ?? prompt;
+    const command = submittedPrompt.trim();
     if (command === "/init") {
       if (!project) {
         setNotice({ title: t("请选择工作目录"), message: t("/init 需要一个项目目录来生成 AGENTS.md。"), type: "info" });
@@ -757,7 +758,7 @@ export function App() {
       }).catch((error: unknown) => setNotice({ title: t("重新加载失败"), message: eventError(error), type: "info" }));
       return;
     }
-    void sendQuestion(prompt);
+    void sendQuestion(submittedPrompt);
   }
 
   function retryTurn(turnId: string) {
@@ -812,10 +813,11 @@ export function App() {
     await window.piDesktop?.agent.abort();
   }
 
-  async function queuePrompt(mode: "steer" | "followUp") {
-    if (!prompt.trim() || !window.piDesktop?.agent.queue) return;
+  async function queuePrompt(mode: "steer" | "followUp", promptOverride?: string) {
+    const submittedPrompt = promptOverride ?? prompt;
+    if (!submittedPrompt.trim() || !window.piDesktop?.agent.queue) return;
     try {
-      setQueuedMessages(await window.piDesktop.agent.queue(prompt, mode));
+      setQueuedMessages(await window.piDesktop.agent.queue(submittedPrompt, mode));
       setPrompt("");
     } catch (error) {
       setNotice({ title: t("消息排队失败"), message: eventError(error), type: "info" });

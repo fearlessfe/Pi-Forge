@@ -51,9 +51,9 @@ type NewChatViewProps = {
   onChooseWorkspace: () => void;
   onOpenTerminal: () => void;
   onModelChange: (provider: ProviderId, modelId: string) => void;
-  onSubmit: () => void;
+  onSubmit: (promptOverride?: string) => void;
   onStop: () => void;
-  onQueue: (mode: "steer" | "followUp") => void;
+  onQueue: (mode: "steer" | "followUp", promptOverride?: string) => void;
   onClearQueue: () => void;
   onAcceptChanges: (changeIds?: string[]) => void;
   onRevertChanges: (changeIds?: string[]) => void;
@@ -107,24 +107,30 @@ function useCommandPalette(props: NewChatViewProps) {
     props.onPromptChange(`${command.name} `);
   }
 
-  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
-    if (matches.length === 0) return false;
+  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): CommandInfo | null | undefined {
+    if (matches.length === 0) return undefined;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       setSelected((current) => (current + (event.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length);
-      return true;
+      return null;
     }
-    if (event.key === "Tab" || (event.key === "Enter" && props.prompt.trim() !== matches[selected]?.name)) {
+    if (event.key === "Tab") {
       event.preventDefault();
       select(matches[selected]);
-      return true;
+      return null;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const command = matches[selected];
+      select(command);
+      return command;
     }
     if (event.key === "Escape") {
       event.preventDefault();
       props.onPromptChange("");
-      return true;
+      return null;
     }
-    return false;
+    return undefined;
   }
 
   return { matches, selected, select, onKeyDown };
@@ -314,13 +320,18 @@ function InitialComposer(props: NewChatViewProps) {
           </p>
         </header>
 
-        <form className="relative flex h-[184px] flex-col rounded-lg bg-bg-grouped p-card pb-tight shadow-2 transition-shadow duration-150 ease-apple" onSubmit={(event) => { event.preventDefault(); props.onSubmit(); }}>
+        <form className="composer-shell relative flex h-[184px] flex-col rounded-lg bg-bg-grouped p-card pb-tight shadow-2 transition-shadow duration-150 ease-apple" onSubmit={(event) => { event.preventDefault(); props.onSubmit(); }}>
           <textarea
-            className="min-h-0 w-full flex-1 resize-none border-0 bg-transparent p-0 text-body leading-relaxed text-label outline-none placeholder:text-label-3"
+            className="composer-input min-h-0 w-full flex-1 resize-none border-0 bg-transparent p-0 text-body leading-relaxed text-label outline-none placeholder:text-label-3"
             value={props.prompt}
             onChange={(event) => props.onPromptChange(event.target.value)}
             onKeyDown={(event) => {
-              if (palette.onKeyDown(event)) return;
+              const selectedCommand = palette.onKeyDown(event);
+              if (selectedCommand === null) return;
+              if (selectedCommand) {
+                if (!props.isRunning) props.onSubmit(selectedCommand.name);
+                return;
+              }
               if (!shouldSubmitOnEnter(event.nativeEvent)) return;
               event.preventDefault();
               if (props.prompt.trim() && !props.isRunning) props.onSubmit();
@@ -722,17 +733,23 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
       <footer className="relative bg-linear-to-b from-transparent via-20% via-bg to-bg px-[52px] pt-[14px] pb-[17px]">
         {props.isRunning && runningTurn && <RunningTaskStatus turn={runningTurn} onStop={props.onStop} />}
         {(props.queuedMessages.steering.length > 0 || props.queuedMessages.followUp.length > 0) && <div className="mx-auto mb-[7px] flex w-[min(760px,100%)] items-center gap-[6px] overflow-hidden text-caption text-label-3"><span className="shrink-0 text-accent">{t("已排队 {count} 条消息", { count: props.queuedMessages.steering.length + props.queuedMessages.followUp.length })}</span>{props.queuedMessages.steering.map((message) => <em className="min-w-0 max-w-[220px] truncate rounded-full border border-separator bg-bg-grouped px-[7px] py-tight not-italic" key={`steer:${message}`}>{t("立即调整")} · {message}</em>)}{props.queuedMessages.followUp.map((message) => <em className="min-w-0 max-w-[220px] truncate rounded-full border border-separator bg-bg-grouped px-[7px] py-tight not-italic" key={`follow:${message}`}>{t("稍后继续")} · {message}</em>)}<button className="ml-auto cursor-pointer border-0 bg-transparent text-caption text-label-3 transition-colors duration-150 ease-apple hover:text-label-2" type="button" onClick={props.onClearQueue}>{t("清空队列")}</button></div>}
-        <form className="relative mx-auto flex h-[108px] w-[min(760px,100%)] flex-col rounded-lg bg-bg-grouped px-[14px] pt-loose pb-tight shadow-2 transition-shadow duration-150 ease-apple" onSubmit={(event) => {
+        <form className="composer-shell relative mx-auto flex h-[108px] w-[min(760px,100%)] flex-col rounded-lg bg-bg-grouped px-[14px] pt-loose pb-tight shadow-2 transition-shadow duration-150 ease-apple" onSubmit={(event) => {
           event.preventDefault();
           if (props.isRunning) props.onQueue("followUp");
           else props.onSubmit();
         }}>
           <textarea
-            className="min-h-0 w-full flex-1 resize-none border-0 bg-transparent px-[3px] py-0 text-body leading-relaxed text-label outline-none placeholder:text-label-3"
+            className="composer-input min-h-0 w-full flex-1 resize-none border-0 bg-transparent px-[3px] py-0 text-body leading-relaxed text-label outline-none placeholder:text-label-3"
             value={props.prompt}
             onChange={(event) => props.onPromptChange(event.target.value)}
             onKeyDown={(event) => {
-              if (palette.onKeyDown(event)) return;
+              const selectedCommand = palette.onKeyDown(event);
+              if (selectedCommand === null) return;
+              if (selectedCommand) {
+                if (props.isRunning) props.onQueue("followUp", selectedCommand.name);
+                else props.onSubmit(selectedCommand.name);
+                return;
+              }
               if (!shouldSubmitOnEnter(event.nativeEvent)) return;
               event.preventDefault();
               if (!props.prompt.trim()) return;

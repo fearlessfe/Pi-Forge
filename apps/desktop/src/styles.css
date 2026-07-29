@@ -829,6 +829,23 @@ button {
   outline-offset: 2px;
 }
 
+/* Composer uses its large card as the focus surface. A thin, translucent halo avoids
+   drawing a hard green rectangle around the textarea while retaining visible focus. */
+.composer-shell:focus-within {
+  box-shadow: var(--shadow-2), 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.composer-input:focus-visible {
+  outline: none;
+}
+
+@media (forced-colors: active) {
+  .composer-input:focus-visible {
+    outline: 2px solid CanvasText;
+    outline-offset: 2px;
+  }
+}
+
 .workspace-main {
   min-width: 0;
   min-height: 0;
