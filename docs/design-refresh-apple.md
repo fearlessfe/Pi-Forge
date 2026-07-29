@@ -157,8 +157,8 @@ src/styles.css          ← 唯一样式入口（@import "tailwindcss" + @theme 
 
 **事实**：`.desktop-window` 是不透明 `var(--bg)` 铺满窗口（styles.css:112），侧栏/窗口栏背后没有可被模糊的内容——`backdrop-filter` 在这种结构下不会产生真实内容透射，只会得到"半透明灰"。因此：
 
-- **跨平台默认（本方案交付物）**：窗口栏/侧栏/toast 使用半透明 chrome（`--material-*` 变量 + `backdrop-filter` 作为渐进增强写法保留），目标是**"半透明材质感"的视觉分层**，不承诺真实 vibrancy。验收标准按"半透明 + 可读性"判定，不按"模糊内容透射"判定。
-- **macOS 增强（独立后续项，不在本方案工作量内）**：Electron `BrowserWindow` 的 `vibrancy: "sidebar"` / `backgroundMaterial` + 透明窗口方案，可产生真实窗口级模糊。需单独验证：性能（backdrop 合成开销）、可读性（桌面壁纸复杂时）、与 CSP/截图脚本的兼容性、非 macOS 平台的降级路径。验证通过前不进入默认交付。
+- **跨平台默认**：窗口栏/侧栏/toast 使用半透明 chrome（`--material-*` 变量 + `backdrop-filter` 渐进增强），确保 Windows/Linux 获得稳定的材质层级。
+- **macOS 原生增强（已交付）**：Electron `BrowserWindow` 启用 `vibrancy: "sidebar"`，渲染层只保留低透明度主题染色并关闭二次 CSS blur；主内容区保持不透明，标题栏和导航侧栏透出真实系统材质。验收车道通过 `PI_DESKTOP_DISABLE_VIBRANCY=1` 使用确定性纯色降级，避免桌面壁纸使黄金图产生随机差异。
 
 ### 3.4 定制层边界（Tailwind 表达不了的部分）
 
@@ -255,5 +255,4 @@ xterm 终端在渲染进程内（改动①），主题切换时直接更新 `Ter
 
 - 不改组件结构/交互逻辑（除开头声明的 TS/Electron 改动与 3.6 链路）、不引入 UI 库或字体包。
 - 不做 Liquid Glass 的激进拟物（彩色玻璃、镜面高光）——HIG 自己也要求"克制使用"。
-- **不在本阶段做 macOS 原生 vibrancy**——它是独立验证的增强项（见 3.3），本方案只交付"半透明材质感"。
-- **不做"跟随系统"主题选项**——现状为首次启动读取系统偏好、之后手动切换，本次保持；如需"跟随系统"第三选项，作为独立增强单独评估（涉及主题状态模型变更，不属于样式重构）。
+- 不替换为仅 macOS 可用的 AppKit 控件；Electron 交互与 Windows/Linux 降级仍需保持功能一致。

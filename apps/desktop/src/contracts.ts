@@ -11,8 +11,11 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 
 export type PermissionMode = "balanced" | "strict";
 
-/** 界面主题；跨进程同步给主进程（窗口/原生视图背景），见 docs/design-refresh-apple.md 3.6。 */
+/** 已解析的界面主题；用于窗口/原生视图的实际配色。 */
 export type AppearanceTheme = "dark" | "light";
+
+/** 用户外观偏好；system 跟随 macOS/Windows 的系统外观。 */
+export type AppearancePreference = AppearanceTheme | "system";
 
 export type PermissionSettings = {
   mode: PermissionMode;
@@ -604,7 +607,8 @@ export type PluginRuntimeStatus = {
 
 export type PiDesktopApi = {
   appearance: {
-    setTheme(theme: AppearanceTheme): Promise<void>;
+    nativeMaterial: boolean;
+    setTheme(preference: AppearancePreference, resolvedTheme: AppearanceTheme): Promise<AppearanceTheme>;
   };
   settings: {
     get(): Promise<ModelSettings>;

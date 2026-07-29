@@ -1,6 +1,6 @@
-import type { AuthPrompt, ConversationActivity, ProviderId, ResponseUsage, TaskFileChange } from "./contracts.js";
+import type { AppearancePreference, AuthPrompt, ConversationActivity, ProviderId, ResponseUsage, TaskFileChange } from "./contracts.js";
 
-export type Theme = "dark" | "light";
+export type Theme = AppearancePreference;
 
 export type AppView = "chat" | "plugins" | "settings";
 

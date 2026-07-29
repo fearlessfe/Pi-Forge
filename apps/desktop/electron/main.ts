@@ -1,8 +1,8 @@
-import { app, BrowserWindow, dialog, ipcMain, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from "electron";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { AgentEvent, AppearanceTheme, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ResourceSettings, SaveMcpServerInput, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
+import type { AgentEvent, AppearancePreference, AppearanceTheme, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ResourceSettings, SaveMcpServerInput, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
 import { AgentRuntimeClient } from "./agent-runtime-client.js";
 import { AppearanceStore } from "./appearance-store.js";
 import { AuthService } from "./auth-service.js";
@@ -36,12 +36,29 @@ let observabilityService: ObservabilityService | undefined;
 let applicationShutdownStarted = false;
 
 /* 窗口/原生视图背景随主题切换，对齐 token v2 --bg-window（docs/design-refresh-apple.md 3.2/3.6）。
-   初始背景取 AppearanceStore 里最近一次持久化的主题（无记录默认深色），避免浅色用户启动闪深色；
-   渲染进程主题变化时经 appearance:set-theme 同步纠正并持久化。 */
+   初始外观取 AppearanceStore 里最近一次偏好（无记录跟随系统）；macOS 使用透明原生材质，
+   其余平台继续使用解析后的纯色背景，避免启动闪烁。 */
 const windowBackground: Record<AppearanceTheme, string> = { dark: "#1C1C1E", light: "#F5F5F7" };
+const nativeMaterialEnabled = process.platform === "darwin" && process.env.PI_DESKTOP_DISABLE_VIBRANCY !== "1";
+const forcedThemeSource = process.env.PI_DESKTOP_THEME_SOURCE === "dark" || process.env.PI_DESKTOP_THEME_SOURCE === "light"
+  ? process.env.PI_DESKTOP_THEME_SOURCE
+  : undefined;
+
+function applyNativeTheme(preference: AppearancePreference): void {
+  nativeTheme.themeSource = forcedThemeSource ?? preference;
+}
+
+function refreshNativeMaterial(): void {
+  if (!nativeMaterialEnabled || !mainWindow || mainWindow.isDestroyed()) return;
+  // Electron 从显式 dark 恢复 system 时，NSVisualEffectView 可能保留旧的
+  // dark appearance。重新绑定语义化 sidebar 材质，让它按新的系统外观重算。
+  mainWindow.setVibrancy(null);
+  mainWindow.setVibrancy("sidebar");
+}
 
 function initialWindowBackground(): string {
-  return windowBackground[appearanceStore?.get() ?? "dark"];
+  if (nativeMaterialEnabled) return "#00000000";
+  return windowBackground[nativeTheme.shouldUseDarkColors ? "dark" : "light"];
 }
 
 app.setName("Pi Forge");
@@ -79,6 +96,7 @@ function createWindow(): BrowserWindow {
     minHeight: 680,
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     backgroundColor: initialWindowBackground(),
+    ...(nativeMaterialEnabled ? { vibrancy: "sidebar" as const, visualEffectState: "followWindow" as const } : {}),
     webPreferences: {
       preload: path.join(currentDir, "preload.cjs"),
       contextIsolation: true,
@@ -204,11 +222,23 @@ function registerIpc(
     requireKnownWorkspace(resources, resolved);
     return resolved;
   };
-  ipcMain.handle("appearance:set-theme", (_event, value: unknown) => {
-    if (value !== "dark" && value !== "light") throw new Error("主题设置无效。");
-    appearance.save(value);
-    browser.setTheme(value);
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setBackgroundColor(windowBackground[value]);
+  ipcMain.handle("appearance:set-theme", (_event, preference: unknown, resolvedTheme: unknown) => {
+    if (preference !== "dark" && preference !== "light" && preference !== "system") throw new Error("主题偏好无效。");
+    if (resolvedTheme !== "dark" && resolvedTheme !== "light") throw new Error("解析后的主题无效。");
+    appearance.save(preference);
+    applyNativeTheme(preference);
+    // 显式主题会同时改写渲染进程的 prefers-color-scheme。因此从 dark/light
+    // 切回 system 时，渲染进程传来的 resolvedTheme 可能是旧值。必须在恢复
+    // nativeTheme.themeSource 后由主进程重新解析，才能让 CSS 与 macOS 原生材质保持一致。
+    const effectiveTheme: AppearanceTheme = preference === "system"
+      ? nativeTheme.shouldUseDarkColors ? "dark" : "light"
+      : preference;
+    browser.setTheme(effectiveTheme);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setBackgroundColor(nativeMaterialEnabled ? "#00000000" : windowBackground[effectiveTheme]);
+      refreshNativeMaterial();
+    }
+    return effectiveTheme;
   });
   ipcMain.handle("settings:get", () => settingsWithCredentials(settings, credentials));  ipcMain.handle("settings:catalog", () => agent.getModelCatalog());
   ipcMain.handle("settings:refresh-metadata", () => agent.getModelCatalog(true));
@@ -572,6 +602,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   const sessionDir = path.join(piDesktopHome, "sessions");
   const settings = new SettingsStore(userData);
   appearanceStore = new AppearanceStore(userData);
+  applyNativeTheme(appearanceStore.get());
   const observabilityStore = new ObservabilityStore(userData);
   observabilityService = new ObservabilityService(observabilityStore, userData);
   const capabilities = new CapabilityStore(userData);

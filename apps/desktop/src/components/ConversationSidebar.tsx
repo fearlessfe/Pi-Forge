@@ -36,7 +36,7 @@ const sidebarEmptyClass = "text-caption leading-normal text-label-3";
 const menuItemClass = "dropdown-item flex min-h-control-md items-center gap-base rounded-sm px-loose text-caption";
 
 function primaryNavItemClass(active: boolean, collapsed: boolean) {
-  return `flex h-control-lg cursor-pointer items-center gap-loose rounded-md text-callout transition-colors duration-150 ease-apple ${active ? "bg-fill-3 text-label" : "text-label-2 hover:bg-fill active:bg-fill-2 active:scale-[0.98]"} ${collapsed ? "justify-center px-0" : "px-loose"}`;
+  return `flex h-control-lg cursor-pointer items-center gap-loose rounded-md text-callout transition-colors duration-150 ease-apple ${active ? "bg-accent/16 text-label" : "text-label-2 hover:bg-fill active:bg-fill-2 active:scale-[0.98]"} ${collapsed ? "justify-center px-0" : "px-loose"}`;
 }
 
 type ConversationSidebarProps = {
@@ -96,7 +96,7 @@ function ConversationRow({
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(conversation.title);
   const [saving, setSaving] = useState(false);
-  const rowClassName = `group grid min-h-[43px] w-full grid-cols-[minmax(0,1fr)_28px] items-center gap-px rounded-md px-1 py-0.5 text-left ${selected ? "bg-fill-3 text-label" : "text-label-2 hover:bg-fill active:bg-fill-2 active:scale-[0.98]"}${project ? " relative before:absolute before:-left-[13px] before:top-[21px] before:h-px before:w-[9px] before:bg-separator before:content-['']" : ""}`;
+  const rowClassName = `group grid min-h-[43px] w-full grid-cols-[minmax(0,1fr)_28px] items-center gap-px rounded-md px-1 py-0.5 text-left transition-colors duration-150 ease-apple ${selected ? "bg-accent/16 text-label" : "text-label-2 hover:bg-fill active:bg-fill-2 active:scale-[0.98]"}${project ? " relative before:absolute before:-left-[13px] before:top-[21px] before:h-px before:w-[9px] before:bg-separator before:content-['']" : ""}`;
 
   useEffect(() => {
     if (!editing) setTitle(conversation.title);

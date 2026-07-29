@@ -1,11 +1,11 @@
-import { AlertTriangle, CheckCircle2, Package, RotateCcw, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Package, RotateCcw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { ConversationSidebar } from "./components/ConversationSidebar";
 import { NewChatView } from "./components/NewChatView";
 import { PluginCenterView } from "./components/PluginCenterView";
 import { SettingsView } from "./components/SettingsView";
 import { BrowserWorkbench } from "./components/BrowserWorkbench";
-import type { AgentEvent, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
+import type { AgentEvent, AppearanceTheme, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
 import { appendMessageDelta } from "./conversation-activity";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { isPrimaryShortcut, shortcutLabel } from "./keyboard";
@@ -50,10 +50,14 @@ const initialSystemPromptSettings: SystemPromptSettings = { content: "" };
 const initialResourceSettings: ResourceSettings = { workspaceContextEnabled: true, disabledSkills: [] };
 const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((module) => ({ default: module.TerminalPanel })));
 
+function getSystemTheme(): AppearanceTheme {
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
 function getInitialTheme(): Theme {
   const saved = window.localStorage.getItem("pi-theme");
-  if (saved === "dark" || saved === "light") return saved;
-  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  if (saved === "dark" || saved === "light" || saved === "system") return saved;
+  return "system";
 }
 
 function eventError(error: unknown): string {
@@ -205,6 +209,7 @@ export function App() {
   const [view, setView] = useState<AppView>("chat");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("models");
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
+  const [systemTheme, setSystemTheme] = useState<AppearanceTheme>(getSystemTheme);
   const [project, setProject] = useState<Project | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -230,17 +235,37 @@ export function App() {
   const [browserOpen, setBrowserOpen] = useState(false);
   const [runtimeRecoveries, setRuntimeRecoveries] = useState<RuntimeRecoveryInfo[]>([]);
   const [runtimeCrashLooping, setRuntimeCrashLooping] = useState(false);
+  const resolvedTheme: AppearanceTheme = theme === "system" ? systemTheme : theme;
+  const nativeMaterial = window.piDesktop?.appearance.nativeMaterial === true;
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.style.colorScheme = theme;
+    const media = window.matchMedia("(prefers-color-scheme: light)");
+    const syncSystemTheme = () => setSystemTheme(media.matches ? "light" : "dark");
+    syncSystemTheme();
+    media.addEventListener("change", syncSystemTheme);
+    return () => media.removeEventListener("change", syncSystemTheme);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = resolvedTheme;
+    document.documentElement.dataset.nativeMaterial = nativeMaterial ? "true" : "false";
+    document.documentElement.style.colorScheme = resolvedTheme;
     window.localStorage.setItem("pi-theme", theme);
     // 跨进程主题同步（docs/design-refresh-apple.md 3.6）：主进程据此切换窗口/原生视图背景并持久化。
     // IPC 失败不阻塞渲染层主题切换，仅告警；下一次主题切换时本 effect 会自然重试。
-    void window.piDesktop?.appearance.setTheme(theme).catch((error: unknown) => {
-      console.warn("[appearance] 主题同步到主进程失败，将在下次切换主题时重试。", error);
-    });
-  }, [theme]);
+    let cancelled = false;
+    const appearance = window.piDesktop?.appearance;
+    if (appearance) {
+      void appearance.setTheme(theme, resolvedTheme).then((effectiveTheme) => {
+        // dark/light 会覆盖 Electron 中的 prefers-color-scheme；切回 system 时，
+        // 以主进程在恢复 nativeTheme.themeSource 后得到的真实系统主题为准。
+        if (!cancelled && theme === "system") setSystemTheme(effectiveTheme);
+      }).catch((error: unknown) => {
+        console.warn("[appearance] 主题同步到主进程失败，将在下次切换主题时重试。", error);
+      });
+    }
+    return () => { cancelled = true; };
+  }, [nativeMaterial, resolvedTheme, theme]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1011,11 +1036,11 @@ export function App() {
 
   return (
     <div className="grid h-screen w-screen place-items-center">
-      <section className="relative flex h-screen w-screen min-h-170 flex-col overflow-hidden bg-bg" aria-label="Pi Desktop">
+      <section className={`relative flex h-screen w-screen min-h-170 flex-col overflow-hidden ${nativeMaterial ? "bg-transparent" : "bg-bg"}`} aria-label="Pi Forge">
         <header className="material-chrome grid h-11 shrink-0 select-none grid-cols-[180px_1fr_180px] items-center px-card [app-region:drag] [-webkit-app-region:drag]">
           <span className="min-h-px min-w-px" aria-hidden="true" />
-          <span className="justify-self-center text-callout text-label-2">Pi Desktop — {title}</span>
-          <span className="justify-self-end font-mono text-mini text-label-3" title={t("搜索对话或项目")}>{shortcutLabel("K")}</span>
+          <span className="justify-self-center text-callout font-medium text-label-2">Pi Forge — {title}</span>
+          <button className="inline-flex h-7 cursor-pointer items-center gap-[6px] justify-self-end rounded-md border border-separator bg-fill px-base text-caption text-label-3 shadow-1 transition-colors duration-150 ease-apple hover:bg-fill-2 hover:text-label-2 active:scale-[0.98] [app-region:no-drag] [-webkit-app-region:no-drag]" type="button" title={t("搜索对话或项目")} aria-label={t("搜索对话或项目")} onClick={() => { setView("chat"); setSidebarCollapsed(false); setSearchRequest((current) => current + 1); }}><Search size={13} /><kbd className="font-mono text-mini">{shortcutLabel("K")}</kbd></button>
         </header>
 
         {view !== "settings" ? (

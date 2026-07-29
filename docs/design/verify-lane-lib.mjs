@@ -247,7 +247,8 @@ export function installMockBridge() {
 
   window.piDesktop = {
     appearance: {
-      setTheme: resolve(undefined),
+      nativeMaterial: false,
+      setTheme: (_preference, resolvedTheme) => Promise.resolve(resolvedTheme),
     },
     settings: {
       get: resolve(modelSettings),

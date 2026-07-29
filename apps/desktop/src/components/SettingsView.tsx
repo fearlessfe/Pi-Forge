@@ -97,7 +97,7 @@ const toggleRowNoteClass = "mt-[5px] block text-caption text-label-2";
 
 const settingsNavItemClass = (active: boolean) =>
   active
-    ? "flex h-control-lg w-full cursor-pointer items-center gap-[10px] rounded-md bg-fill-3 px-[10px] text-left text-body text-label transition-colors duration-150 ease-apple"
+    ? "flex h-control-lg w-full cursor-pointer items-center gap-[10px] rounded-md bg-accent/16 px-[10px] text-left text-body text-label transition-colors duration-150 ease-apple"
     : "flex h-control-lg w-full cursor-pointer items-center gap-[10px] rounded-md px-[10px] text-left text-body text-label-2 transition-colors duration-150 ease-apple hover:bg-fill hover:text-label active:bg-fill-2 active:scale-[0.98]";
 
 const policyBadgeClass = (allowed: boolean) =>
@@ -142,7 +142,7 @@ const themeCardClass = (selected: boolean) =>
     ? "cursor-pointer rounded-md border border-accent/32 bg-bg-grouped p-base text-label ring-2 ring-accent/16 transition-colors duration-150 ease-apple"
     : "cursor-pointer rounded-md border border-separator bg-bg-grouped p-base text-label transition-colors duration-150 ease-apple hover:bg-fill";
 /* 主题预览色板：深/浅示意色固定在定制层（非主题感知 token），此处仅做静态映射（3.5 规则 2）。 */
-const themePreviewVariantClass = { dark: "theme-preview--dark", light: "theme-preview--light" } as const;
+const themePreviewVariantClass = { dark: "theme-preview--dark", light: "theme-preview--light", system: "theme-preview--system" } as const;
 
 const sections: Array<{
   group: string;
@@ -907,11 +907,11 @@ function AppearancePanel({ theme, onThemeChange }: Pick<SettingsViewProps, "them
   return (
     <div className="w-full max-w-[760px]">
       <header className="mb-[27px] flex min-h-[62px] items-start justify-between gap-5"><div className="min-w-0"><h2 className="mb-2 text-large-title font-semibold text-label">{t("外观")}</h2><p className="text-body text-label-2">{t("选择适合当前环境的界面主题。")}</p></div></header>
-      <section className="grid grid-cols-2 gap-[14px]">
-        {(["dark", "light"] as const).map((item) => (
+      <section className="grid grid-cols-3 gap-[14px]">
+        {(["system", "light", "dark"] as const).map((item) => (
           <button className={themeCardClass(theme === item)} key={item} type="button" onClick={() => onThemeChange(item)}>
             <span className={`grid h-[150px] grid-cols-[30%_1fr] overflow-hidden rounded-sm ${themePreviewVariantClass[item]}`}><i className="border-r" /><b className="px-[18px] py-[25px]"><em className="mb-[9px] block h-[7px] w-[42%] rounded-full" /><em className="mb-[9px] block h-[7px] w-[70%] rounded-full" /><em className="mb-[9px] block h-[7px] w-[70%] rounded-full" /></b></span>
-            <span className="flex items-center justify-between px-1 pt-[11px] pb-0.5 text-caption font-semibold">{t(item === "dark" ? "深色" : "浅色")}{theme === item && <Check size={14} />}</span>
+            <span className="flex items-center justify-between px-1 pt-[11px] pb-0.5 text-caption font-semibold">{t(item === "system" ? "跟随系统" : item === "dark" ? "深色" : "浅色")}{theme === item && <Check size={14} />}</span>
           </button>
         ))}
       </section>
@@ -922,9 +922,9 @@ function AppearancePanel({ theme, onThemeChange }: Pick<SettingsViewProps, "them
 export function SettingsView(props: SettingsViewProps) {
   const { t } = useI18n();
   return (
-    <section className="grid h-[calc(100%-44px)] grid-cols-[304px_minmax(0,1fr)] bg-bg [@media(max-width:1100px)]:grid-cols-[280px_minmax(0,1fr)]" aria-label={t("设置")}>
+    <section className="grid h-[calc(100%-44px)] grid-cols-[304px_minmax(0,1fr)] bg-transparent [@media(max-width:1100px)]:grid-cols-[280px_minmax(0,1fr)]" aria-label={t("设置")}>
       <SettingsNavigation activeSection={props.activeSection} onBack={props.onBack} onSectionChange={props.onSectionChange} />
-      <main className="min-w-0 overflow-y-auto px-[64px] py-[46px] [@media(max-width:1100px)]:px-10 [@media(max-width:1100px)]:py-[38px]">
+      <main className="min-w-0 overflow-y-auto bg-bg px-[64px] py-[46px] [@media(max-width:1100px)]:px-10 [@media(max-width:1100px)]:py-[38px]">
         {props.activeSection === "models" && <ModelsPanel settings={props.settings} providerCatalog={props.providerCatalog} authFlow={props.authFlow} onSave={props.onSave} onDiscoverModels={props.onDiscoverModels} onTest={props.onTest} onLogin={props.onLogin} onAnswerAuthPrompt={props.onAnswerAuthPrompt} onCancelAuth={props.onCancelAuth} onLogout={props.onLogout} onDismissAuth={props.onDismissAuth} />}
         {props.activeSection === "model-metadata" && <ModelMetadataPanel settings={props.settings} providerCatalog={props.providerCatalog} onRefreshMetadata={props.onRefreshMetadata} onSaveMetadata={props.onSaveMetadata} onResetMetadata={props.onResetMetadata} />}
         {props.activeSection === "skills" && <SkillsPanel cwd={props.workspaceTrust?.path} agentRunning={props.agentRunning} />}

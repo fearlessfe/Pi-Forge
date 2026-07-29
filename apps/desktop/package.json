@@ -63,7 +63,7 @@
   },
   "build": {
     "appId": "dev.piforge.desktop",
-    "productName": "Pi Desktop",
+    "productName": "Pi Forge",
     "executableName": "pi-forge",
     "artifactName": "Pi-Forge-${version}-${os}-${arch}.${ext}",
     "directories": {

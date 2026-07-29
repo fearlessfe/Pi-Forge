@@ -17,8 +17,8 @@ afterEach(() => {
 });
 
 describe("AppearanceStore", () => {
-  it("defaults to dark when no theme has been persisted", () => {
-    expect(new AppearanceStore(temporaryDirectory()).get()).toBe("dark");
+  it("follows the system when no theme has been persisted", () => {
+    expect(new AppearanceStore(temporaryDirectory()).get()).toBe("system");
   });
 
   it("persists the last theme across restarts so the window can restore its background", () => {
@@ -33,18 +33,18 @@ describe("AppearanceStore", () => {
     const directory = temporaryDirectory();
     const store = new AppearanceStore(directory);
     store.save("light");
-    store.save("dark");
+    store.save("system");
 
-    expect(new AppearanceStore(directory).get()).toBe("dark");
+    expect(new AppearanceStore(directory).get()).toBe("system");
   });
 
   it("falls back to dark on malformed or unexpected files instead of preventing startup", () => {
     const broken = temporaryDirectory();
     fs.writeFileSync(path.join(broken, "appearance.json"), "{broken", "utf8");
-    expect(new AppearanceStore(broken).get()).toBe("dark");
+    expect(new AppearanceStore(broken).get()).toBe("system");
 
     const unexpected = temporaryDirectory();
     fs.writeFileSync(path.join(unexpected, "appearance.json"), JSON.stringify({ version: 1, theme: "solarized" }), "utf8");
-    expect(new AppearanceStore(unexpected).get()).toBe("dark");
+    expect(new AppearanceStore(unexpected).get()).toBe("system");
   });
 });

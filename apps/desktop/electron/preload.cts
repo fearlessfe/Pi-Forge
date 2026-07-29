@@ -3,7 +3,8 @@ import type { AgentEvent, AuthEvent, BrowserEvent, ModelMetadataOverride, PiDesk
 
 const api: PiDesktopApi = {
   appearance: {
-    setTheme: (theme) => ipcRenderer.invoke("appearance:set-theme", theme),
+    nativeMaterial: process.platform === "darwin" && process.env.PI_DESKTOP_DISABLE_VIBRANCY !== "1",
+    setTheme: (preference, resolvedTheme) => ipcRenderer.invoke("appearance:set-theme", preference, resolvedTheme),
   },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),

@@ -35,6 +35,7 @@
   /* 半透明 chrome */
   --material-sidebar: rgb(28 28 30 / 82%);
   --material-chrome: rgb(28 28 30 / 72%);
+  --material-edge: rgb(255 255 255 / 6%);
   /* 交互状态（供定制层使用；工具类场景直接用 bg-fill / bg-fill-2 / bg-fill-3） */
   --state-hover: var(--fill);
   --state-pressed: var(--fill-2);
@@ -89,6 +90,7 @@
   --green: #1f7a36;
   --material-sidebar: rgb(246 246 248 / 78%);
   --material-chrome: rgb(246 246 248 / 72%);
+  --material-edge: rgb(255 255 255 / 62%);
   --shadow-1: 0 1px 2px rgb(0 0 0 / 6%);
   --shadow-2: 0 8px 24px rgb(0 0 0 / 10%);
   --shadow-3: 0 16px 48px rgb(0 0 0 / 14%);
@@ -114,6 +116,18 @@
   --terminal-bright-cyan: #32ade6;
   /* ANSI 97 在白底上的强调色：#ffffff 会隐形，压为浅灰保证可读。 */
   --terminal-bright-white: #6e6e73;
+}
+
+/* macOS 原生 vibrancy 已在 BrowserWindow 层完成模糊；这里只保留克制的主题染色，
+   让侧栏/标题栏真正透出桌面材质，同时避免 CSS 再次模糊造成浑浊。 */
+:root[data-native-material="true"] {
+  --material-sidebar: rgb(28 28 30 / 46%);
+  --material-chrome: rgb(28 28 30 / 34%);
+}
+
+:root[data-theme="light"][data-native-material="true"] {
+  --material-sidebar: rgb(246 246 248 / 44%);
+  --material-chrome: rgb(246 246 248 / 30%);
 }
 
 /* ---- @theme inline：主题感知 token → 工具类（值随 CSS 变量翻转） ---- */
@@ -197,6 +211,7 @@
   .material-chrome {
     background: var(--material-chrome);
     border-bottom: 1px solid var(--separator);
+    box-shadow: inset 0 1px 0 var(--material-edge);
   }
 
   @supports (backdrop-filter: blur(1px)) {
@@ -210,6 +225,7 @@
   .material-sidebar {
     background: var(--material-sidebar);
     border-right: 1px solid var(--separator);
+    box-shadow: inset 0 1px 0 var(--material-edge);
   }
 
   @supports (backdrop-filter: blur(1px)) {
@@ -217,6 +233,12 @@
       -webkit-backdrop-filter: blur(20px) saturate(180%);
       backdrop-filter: blur(20px) saturate(180%);
     }
+  }
+
+  :root[data-native-material="true"] .material-chrome,
+  :root[data-native-material="true"] .material-sidebar {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 
   /* 2. 动画（合并后的 spinner、呼吸脉冲、prefers-reduced-motion 规则） */
@@ -706,6 +728,23 @@
   .theme-preview--light em:first-child {
     background: #1f7a36;
   }
+
+  .theme-preview--system {
+    background: linear-gradient(90deg, #0f1318 0 50%, #f5f6f7 50% 100%);
+  }
+
+  .theme-preview--system > i {
+    border-color: rgb(128 128 132 / 35%);
+    background: linear-gradient(90deg, #171c23 0 50%, #e8ecef 50% 100%);
+  }
+
+  .theme-preview--system em {
+    background: linear-gradient(90deg, #303844 0 50%, #d2d8dd 50% 100%);
+  }
+
+  .theme-preview--system em:first-child {
+    background: linear-gradient(90deg, #30d158 0 50%, #1f7a36 50% 100%);
+  }
 }
 
 /* ---- D1 base：全局排版基线（docs/design-refresh-apple.md 3.2 可读性底线） ---- */
@@ -746,6 +785,25 @@ body {
   background: var(--bg-window);
 }
 
+:root[data-native-material="true"] body {
+  background: transparent;
+}
+
+::selection {
+  color: var(--label);
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
 button,
 input,
 textarea {
@@ -776,4 +834,5 @@ button {
   min-height: 0;
   position: relative;
   overflow: hidden;
+  background: var(--bg-window);
 }

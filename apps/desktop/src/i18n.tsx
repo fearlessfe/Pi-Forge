@@ -96,6 +96,7 @@ export const enUS: Record<string, string> = {
   "选择适合当前环境的界面主题。": "Choose an interface theme for your environment.",
   "深色": "Dark",
   "浅色": "Light",
+  "跟随系统": "System",
   "展开侧栏": "Expand sidebar",
   "收起侧栏": "Collapse sidebar",
   "主要导航": "Primary navigation",

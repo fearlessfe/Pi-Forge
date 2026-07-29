@@ -102,7 +102,12 @@ try {
     electronApp = await _electron.launch({
       args: [mainJs],
       cwd: appDir,
-      env: { ...process.env, PI_DESKTOP_USER_DATA: userDataDir },
+      env: {
+        ...process.env,
+        PI_DESKTOP_USER_DATA: userDataDir,
+        PI_DESKTOP_DISABLE_VIBRANCY: "1",
+        PI_DESKTOP_THEME_SOURCE: "light",
+      },
       timeout: 120_000,
     });
   } catch (err) {
