@@ -118,6 +118,7 @@ describe("conversation history compatibility", () => {
     expect(normalizeHistoryTurn({
       attachments: [
         { kind: "image", name: "shot.png", dataUrl: "data:image/png;base64,QUJD" },
+        { kind: "file", name: "large.log", id: "attachment-1", mimeType: "text/plain", size: 70_000, access: "tool" },
         { kind: "file", name: "notes.txt" },
         { kind: "video", name: "clip.mp4" },
         { kind: "image", dataUrl: "data:image/png;base64,AA" },
@@ -125,6 +126,7 @@ describe("conversation history compatibility", () => {
       ],
     }, 0).attachments).toEqual([
       { kind: "image", name: "shot.png", dataUrl: "data:image/png;base64,QUJD" },
+      { kind: "file", name: "large.log", dataUrl: undefined, id: "attachment-1", mimeType: "text/plain", size: 70_000, access: "tool" },
       { kind: "file", name: "notes.txt", dataUrl: undefined },
     ]);
     expect(normalizeHistoryTurn({}, 0).attachments).toBeUndefined();

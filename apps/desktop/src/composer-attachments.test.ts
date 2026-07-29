@@ -32,7 +32,7 @@ describe("classifyAttachmentFile", () => {
 describe("composer attachment payloads", () => {
   const attachments: ComposerAttachments = {
     images: [{ id: "1", name: "shot.png", mimeType: "image/png", data: "QUJD", dataUrl: "data:image/png;base64,QUJD" }],
-    files: [{ id: "2", name: "notes.txt", content: "some notes" }],
+    files: [{ id: "2", name: "notes.txt", mimeType: "text/plain", size: 10, content: "some notes" }],
   };
 
   it("detects non-empty attachment state", () => {
@@ -42,13 +42,23 @@ describe("composer attachment payloads", () => {
 
   it("builds wire payloads without preview-only fields", () => {
     expect(promptImagesOf(attachments)).toEqual([{ name: "shot.png", mimeType: "image/png", data: "QUJD" }]);
-    expect(promptFileAttachmentsOf(attachments)).toEqual([{ name: "notes.txt", content: "some notes" }]);
+    expect(promptFileAttachmentsOf(attachments)).toEqual([{ name: "notes.txt", mimeType: "text/plain", content: "some notes" }]);
   });
 
   it("builds turn attachments with image previews and file chips", () => {
     expect(turnAttachmentsOf(attachments)).toEqual([
       { kind: "image", name: "shot.png", dataUrl: "data:image/png;base64,QUJD" },
-      { kind: "file", name: "notes.txt" },
+      { kind: "file", name: "notes.txt", mimeType: "text/plain", size: 10, access: "inline" },
     ]);
+  });
+
+  it("marks large text files for on-demand reading", () => {
+    expect(turnAttachmentsOf({ images: [], files: [{
+      id: "large",
+      name: "large.log",
+      mimeType: "text/plain",
+      size: 64 * 1024 + 1,
+      content: "content",
+    }] })).toEqual([{ kind: "file", name: "large.log", mimeType: "text/plain", size: 65_537, access: "tool" }]);
   });
 });

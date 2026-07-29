@@ -158,6 +158,8 @@ export const enUS: Record<string, string> = {
   "添加附件": "Add attachment",
   "附件列表": "Attachments",
   "移除附件": "Remove attachment",
+  "直接附加": "Included directly",
+  "按需读取": "Read on demand",
   "暂不支持该文件类型": "This file type is not supported yet",
   "图片大小不能超过 10 MB": "Images must be 10 MB or smaller",
   "文件大小不能超过 1 MB": "Files must be 1 MB or smaller",

@@ -150,6 +150,10 @@ function normalizeTurnAttachment(value: unknown): TurnAttachment | undefined {
     kind: attachment.kind,
     name: attachment.name,
     dataUrl: typeof attachment.dataUrl === "string" ? attachment.dataUrl : undefined,
+    id: typeof attachment.id === "string" ? attachment.id : undefined,
+    mimeType: typeof attachment.mimeType === "string" ? attachment.mimeType : undefined,
+    size: typeof attachment.size === "number" ? attachment.size : undefined,
+    access: attachment.access === "inline" || attachment.access === "tool" ? attachment.access : undefined,
   };
 }
 

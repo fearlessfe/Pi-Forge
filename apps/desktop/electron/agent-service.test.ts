@@ -1218,23 +1218,32 @@ describe("AgentService with a real Pi session", () => {
     }, agentDir, cwd, (event) => events.push(event));
 
     try {
+      const largeContent = `large-secret-${"x".repeat(64 * 1024)}`;
       const runId = await service.send("describe this", cwd, "attachments-conversation", {
         images: [{ name: "shot.png", mimeType: "image/png", data: "QUJD" }],
-        attachments: [{ name: "notes.txt", content: "some notes" }],
+        attachments: [
+          { name: "notes.txt", content: "some notes" },
+          { name: "large.log", mimeType: "text/plain", content: largeContent },
+        ],
       });
       await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
 
       const payload = JSON.stringify(requests[0]?.messages);
       expect(payload).toContain("QUJD");
-      expect(payload).toContain('<file name=\\"notes.txt\\">');
+      expect(payload).toMatch(/<file attachment-id=\\"[0-9a-f-]{36}\\"/);
+      expect(payload).toContain('name=\\"notes.txt\\" mime-type=\\"text/plain\\" size=\\"10\\" access=\\"inline\\"');
       expect(payload).toContain("some notes");
+      expect(payload).toMatch(/<attachment attachment-id=\\"[0-9a-f-]{36}\\"/);
+      expect(payload).toContain('name=\\"large.log\\" mime-type=\\"text/plain\\" size=\\"65549\\" access=\\"read_attachment\\"');
+      expect(payload).not.toContain("large-secret-");
 
       const detail = await service.loadConversation("attachments-conversation");
       expect(detail.turns[0]).toMatchObject({
         question: "describe this",
         attachments: [
           { kind: "image", name: "图片 1", dataUrl: "data:image/png;base64,QUJD" },
-          { kind: "file", name: "notes.txt" },
+          expect.objectContaining({ kind: "file", name: "notes.txt", mimeType: "text/plain", size: 10, access: "inline" }),
+          expect.objectContaining({ kind: "file", name: "large.log", mimeType: "text/plain", size: 65_549, access: "tool" }),
         ],
       });
     } finally {
@@ -1284,12 +1293,70 @@ describe("AgentService with a real Pi session", () => {
       await expect(service.send("look at this", cwd, undefined, {
         images: [{ name: "a.png", mimeType: "image/png", data: "QUJD" }],
       })).rejects.toThrow("当前模型不支持图片输入");
-      // 纯文本附件不受图片能力限制，仍会正常发送并拼入 <file> 块。
+      // 纯文本附件不受图片能力限制，仍会正常发送并按大小选择附件策略。
       const runId = await service.send("summarize", cwd, undefined, {
         attachments: [{ name: "a.txt", content: "text" }],
       });
       await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
-      expect(JSON.stringify(requests[0]?.messages)).toContain('<file name=\\"a.txt\\">');
+      expect(JSON.stringify(requests[0]?.messages)).toContain('name=\\"a.txt\\"');
+    } finally {
+      service.dispose();
+      await close(server);
+    }
+  });
+
+  it("lets the model read a referenced attachment by capability ID without exposing filesystem paths", async () => {
+    const requests: ChatRequest[] = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (part) => { body += part; });
+      req.on("end", () => {
+        const request = JSON.parse(body) as ChatRequest;
+        requests.push(request);
+        if (requests.length === 1) {
+          const match = JSON.stringify(request.messages).match(/attachment-id=\\?"([0-9a-f-]{36})\\?"/);
+          const attachmentId = match?.[1];
+          if (!attachmentId) throw new Error("Expected an attachment capability ID in the first request");
+          writeSse(res, [
+            chunk({ role: "assistant" }),
+            chunk({ tool_calls: [{
+              index: 0,
+              id: "call-read-attachment",
+              type: "function",
+              function: { name: "read_attachment", arguments: JSON.stringify({ attachmentId, offset: 0, limit: 64 }) },
+            }] }),
+            chunk({}, "tool_calls"),
+          ]);
+        } else {
+          writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "read it" }), chunk({}, "stop")]);
+        }
+      });
+    });
+    const port = await listen(server);
+    const cwd = createDirectory("read-attachment-workspace");
+    const events: AgentEvent[] = [];
+    const service = new AgentService({
+      resolve: () => ({
+        provider: "openai-compatible",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        modelId: "mock-model",
+        thinkingLevel: "off" as const,
+        apiKey: "read-attachment-key",
+      }),
+    }, createDirectory("read-attachment-agent"), cwd, (event) => events.push(event));
+
+    try {
+      const runId = await service.send("inspect the attachment", cwd, undefined, {
+        attachments: [{ name: "large.txt", content: `tool-secret-start-${"x".repeat(64 * 1024)}` }],
+      });
+      await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
+      expect(requests[0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ function: expect.objectContaining({ name: "read_attachment" }) })]));
+      expect(JSON.stringify(requests[0].messages)).not.toContain("tool-secret-start");
+      expect(JSON.stringify(requests[1].messages)).toContain("tool-secret-start");
+      const tool = events.find((event) => event.type === "tool.completed" && event.name === "read_attachment");
+      expect(tool).toMatchObject({ isError: false });
+      expect(JSON.stringify((tool as Extract<AgentEvent, { type: "tool.completed" }>).details)).not.toContain(cwd);
     } finally {
       service.dispose();
       await close(server);
@@ -1354,9 +1421,12 @@ describe("AgentService with a real Pi session", () => {
     try {
       const runId = await service.send("start a long task", cwd);
       await started;
-      await expect(service.queueMessage("adjust plan", "steer", {
+      const queue = await service.queueMessage("adjust plan", "steer", {
         attachments: [{ name: "spec.md", content: "# spec" }],
-      })).resolves.toEqual({ steering: ['adjust plan\n\n<file name="spec.md">\n# spec\n</file>'], followUp: [] });
+      });
+      expect(queue.followUp).toEqual([]);
+      expect(queue.steering).toHaveLength(1);
+      expect(queue.steering[0]).toMatch(/^adjust plan\n\n<file attachment-id="[0-9a-f-]{36}" name="spec.md" mime-type="text\/plain" size="6" access="inline">\n# spec\n<\/file>$/);
       expect(service.clearQueue()).toEqual({ steering: [], followUp: [] });
       finishRequest();
       await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });

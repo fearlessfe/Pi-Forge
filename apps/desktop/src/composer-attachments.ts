@@ -1,4 +1,4 @@
-import type { PromptFileAttachment, PromptImage, TurnAttachment } from "./contracts.js";
+import { inlineTextAttachmentMaxBytes, type PromptFileAttachment, type PromptImage, type TurnAttachment } from "./contracts.js";
 
 /** 输入框中待发送的图片附件（dataUrl 用于预览，发送时只带裸 base64）。 */
 export type ComposerImage = {
@@ -13,6 +13,8 @@ export type ComposerImage = {
 export type ComposerFile = {
   id: string;
   name: string;
+  mimeType: string;
+  size: number;
   content: string;
 };
 
@@ -25,6 +27,7 @@ export const emptyComposerAttachments: ComposerAttachments = { images: [], files
 
 export const maxImageBytes = 10 * 1024 * 1024;
 export const maxTextFileBytes = 1024 * 1024;
+export const inlineTextFileBytes = inlineTextAttachmentMaxBytes;
 
 const textFileMimeTypes = new Set([
   "application/json",
@@ -64,12 +67,18 @@ export function promptImagesOf(attachments: ComposerAttachments): PromptImage[] 
 }
 
 export function promptFileAttachmentsOf(attachments: ComposerAttachments): PromptFileAttachment[] {
-  return attachments.files.map((file) => ({ name: file.name, content: file.content }));
+  return attachments.files.map((file) => ({ name: file.name, mimeType: file.mimeType, content: file.content }));
 }
 
 export function turnAttachmentsOf(attachments: ComposerAttachments): TurnAttachment[] {
   return [
     ...attachments.images.map((image): TurnAttachment => ({ kind: "image", name: image.name, dataUrl: image.dataUrl })),
-    ...attachments.files.map((file): TurnAttachment => ({ kind: "file", name: file.name })),
+    ...attachments.files.map((file): TurnAttachment => ({
+      kind: "file",
+      name: file.name,
+      mimeType: file.mimeType,
+      size: file.size,
+      access: file.size <= inlineTextFileBytes ? "inline" : "tool",
+    })),
   ];
 }

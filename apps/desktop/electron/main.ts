@@ -166,6 +166,7 @@ function parsePromptExtras(input: { images?: unknown; attachments?: unknown }): 
   }
   if (attachments !== undefined && (!Array.isArray(attachments) || attachments.some((attachment) => !attachment || typeof attachment !== "object"
     || typeof (attachment as PromptFileAttachment).name !== "string"
+    || ((attachment as PromptFileAttachment).mimeType !== undefined && typeof (attachment as PromptFileAttachment).mimeType !== "string")
     || typeof (attachment as PromptFileAttachment).content !== "string"))) {
     throw new Error("文件附件无效。");
   }

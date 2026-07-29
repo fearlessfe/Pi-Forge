@@ -29,7 +29,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardE
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { CommandInfo, ContextUsageInfo, ProviderCatalogEntry, ProviderId, QueuedMessages, ResponseUsage, TaskFileChange } from "../contracts";
-import { classifyAttachmentFile, hasComposerAttachments, maxImageBytes, maxTextFileBytes, type ComposerAttachments, type ComposerFile, type ComposerImage } from "../composer-attachments";
+import { classifyAttachmentFile, hasComposerAttachments, inlineTextFileBytes, maxImageBytes, maxTextFileBytes, type ComposerAttachments, type ComposerFile, type ComposerImage } from "../composer-attachments";
 import { normalizeVisibleActivities } from "../conversation-activity";
 import { fileExtension, isArtifactChange } from "../file-changes";
 import { shouldSubmitOnEnter } from "../keyboard";
@@ -204,7 +204,13 @@ function useComposerAttachments(props: NewChatViewProps) {
       const reader = new FileReader();
       reader.onload = () => {
         if (typeof reader.result !== "string") return;
-        const attachment: ComposerFile = { id: attachmentId(), name: file.name || t("未命名文件"), content: reader.result };
+        const attachment: ComposerFile = {
+          id: attachmentId(),
+          name: file.name || t("未命名文件"),
+          mimeType: file.type || "text/plain",
+          size: file.size,
+          content: reader.result,
+        };
         props.onAttachmentsChange((current) => ({ ...current, files: [...current.files, attachment] }));
       };
       reader.onerror = () => props.onAttachmentError(t("无法读取文件"));
@@ -265,9 +271,10 @@ function AttachmentStrip({ attachments, onRemoveImage, onRemoveFile }: {
         </span>
       ))}
       {attachments.files.map((file) => (
-        <span className="inline-flex h-[28px] flex-none items-center gap-tight rounded-full border border-separator bg-bg px-base text-caption text-label-2" key={file.id} title={file.name}>
+        <span className="inline-flex h-[28px] flex-none items-center gap-tight rounded-full border border-separator bg-bg px-base text-caption text-label-2" key={file.id} title={`${file.name} · ${t(file.size <= inlineTextFileBytes ? "直接附加" : "按需读取")}`}>
           <FileBox size={12} className="text-accent" />
           <span className="max-w-[160px] truncate">{file.name}</span>
+          <span className="text-label-3">{t(file.size <= inlineTextFileBytes ? "直接附加" : "按需读取")}</span>
           <button className="inline-flex cursor-pointer border-0 bg-transparent p-0 text-label-3 transition-colors duration-150 ease-apple hover:text-label" type="button" aria-label={t("移除附件")} title={t("移除附件")} onClick={() => onRemoveFile(file.id)}><X size={12} /></button>
         </span>
       ))}
@@ -756,7 +763,7 @@ function ConversationTurn({ turn, running, onRetry, onForkTurn, onAnswerQuestion
             <div className="mb-[6px] ml-auto flex w-fit max-w-full flex-wrap justify-end gap-[6px]">
               {turn.attachments.map((attachment, index) => attachment.kind === "image" && attachment.dataUrl
                 ? <img className="max-h-[140px] max-w-[200px] rounded-sm border border-separator object-cover" src={attachment.dataUrl} alt={attachment.name} title={attachment.name} key={`${attachment.name}-${index}`} />
-                : <span className="inline-flex h-[28px] items-center gap-tight rounded-full border border-separator bg-bg-grouped px-base text-caption text-label-2" title={attachment.name} key={`${attachment.name}-${index}`}><FileBox size={12} className="text-accent" /><span className="max-w-[180px] truncate">{attachment.name}</span></span>)}
+                : <span className="inline-flex h-[28px] items-center gap-tight rounded-full border border-separator bg-bg-grouped px-base text-caption text-label-2" title={attachment.name} key={`${attachment.name}-${index}`}><FileBox size={12} className="text-accent" /><span className="max-w-[180px] truncate">{attachment.name}</span>{attachment.access && <span className="text-label-3">{t(attachment.access === "inline" ? "直接附加" : "按需读取")}</span>}</span>)}
             </div>
           )}
           {turn.question && <div className={`mt-[3px] ml-auto w-fit max-w-full rounded-md rounded-tr-sm border bg-bg-grouped px-[13px] py-[11px] text-body leading-[1.65] text-label-2 ${turn.status === "queued" ? "border-accent/32" : "border-separator"}`}>{turn.question}</div>}

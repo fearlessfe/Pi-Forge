@@ -403,17 +403,25 @@ export type PromptImage = {
   data: string;
 };
 
-/** 随消息发送的文本文件附件，发送时内联到消息正文中。 */
+/** 随消息发送的文本文件附件；Electron 根据实际字节数决定内联或按需读取。 */
 export type PromptFileAttachment = {
   name: string;
+  mimeType?: string;
   content: string;
 };
+
+/** 文本附件超过此 UTF-8 字节数时，只向模型提供引用并通过工具按需读取。 */
+export const inlineTextAttachmentMaxBytes = 64 * 1024;
 
 /** 用户消息里展示的附件（图片可带 dataUrl 缩略图）。 */
 export type TurnAttachment = {
   kind: "image" | "file";
   name: string;
   dataUrl?: string;
+  id?: string;
+  mimeType?: string;
+  size?: number;
+  access?: "inline" | "tool";
 };
 
 export type SendPromptInput = {

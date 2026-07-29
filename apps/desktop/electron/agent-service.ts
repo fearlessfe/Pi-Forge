@@ -54,6 +54,12 @@ import { ModelCatalog, compatibleProviderDefinitions, officialMetadataSources } 
 import { ConversationHistory, initProjectPrompt, responseUsage } from "./conversation-history.js";
 import { createDesktopResourceLoader } from "./resource-loader-factory.js";
 import { CapabilityPolicy } from "./capability-policy.js";
+import {
+  AttachmentStore,
+  defaultAttachmentReadBytes,
+  maxAttachmentReadBytes,
+  type PreparedAttachment,
+} from "./attachment-store.js";
 
 type EventSink = (event: AgentEvent) => void;
 
@@ -104,15 +110,40 @@ function sanitizeImages(images: PromptImage[] | undefined): ImageContent[] {
 }
 
 function sanitizeAttachments(attachments: PromptFileAttachment[] | undefined): PromptFileAttachment[] {
-  return (attachments ?? []).filter((attachment) => attachment && typeof attachment.name === "string" && typeof attachment.content === "string");
+  return (attachments ?? []).filter((attachment) => attachment && typeof attachment.name === "string" && typeof attachment.content === "string")
+    .map((attachment) => ({
+      name: attachment.name,
+      mimeType: typeof attachment.mimeType === "string" ? attachment.mimeType : "text/plain",
+      content: attachment.content,
+    }));
 }
 
-// 文本附件以 <file> 块拼接到正文末尾；历史重建按同一格式解析，注意保持格式一致。
-export function composePromptText(prompt: string, attachments?: PromptFileAttachment[]): string {
-  const blocks = sanitizeAttachments(attachments)
-    .map((attachment) => `\n\n<file name="${attachment.name.replace(/"/g, "")}">\n${attachment.content}\n</file>`)
+function escapeXmlAttribute(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// 小文件保留正文内容，大文件只注入不可猜测的 capability ID，由 read_attachment 分块读取。
+export function composePromptText(prompt: string, attachments?: PreparedAttachment[]): string {
+  const blocks = (attachments ?? [])
+    .map((attachment) => {
+      const attributes = `attachment-id="${attachment.id}" name="${escapeXmlAttribute(attachment.name)}" mime-type="${escapeXmlAttribute(attachment.mimeType)}" size="${attachment.size}"`;
+      return attachment.access === "inline"
+        ? `\n\n<file ${attributes} access="inline">\n${attachment.content}\n</file>`
+        : `\n\n<attachment ${attributes} access="read_attachment" />`;
+    })
     .join("");
   return `${prompt.trim()}${blocks}`;
+}
+
+function attachmentIdsInMessages(messages: AgentSession["messages"]): Set<string> {
+  const ids = new Set<string>();
+  const pattern = /\battachment-id="([0-9a-f-]{36})"/gi;
+  for (const message of messages) {
+    if (!("content" in message)) continue;
+    const text = messageContentText(message.content);
+    for (const match of text.matchAll(pattern)) ids.add(match[1]);
+  }
+  return ids;
 }
 
 const questionParameters = Type.Object({
@@ -173,6 +204,7 @@ export class AgentService {
   private readonly modelCatalog: ModelCatalog;
   private readonly conversationHistory: ConversationHistory;
   private readonly capabilityPolicy: CapabilityPolicy;
+  private readonly attachmentStore: AttachmentStore;
 
   constructor(
     private readonly settings: ModelSettingsReader,
@@ -215,6 +247,7 @@ export class AgentService {
       subagentToolName: builtinSubagentToolName,
     });
     this.capabilityPolicy = new CapabilityPolicy(this.capabilities, this.pluginSecurity, builtinSubagentToolName);
+    this.attachmentStore = new AttachmentStore(this.sessionDir);
   }
 
   async getModelCatalog(allowNetwork = true): Promise<ProviderCatalogEntry[]> {
@@ -235,6 +268,7 @@ export class AgentService {
     const config = this.settings.resolve();
     await this.assertImagesSupported(config, images);
     const session = await this.ensureSession(resolvedCwd, config, conversationId);
+    const preparedAttachments = this.attachmentStore.create(session.sessionManager.getSessionId(), attachments);
     const runId = randomUUID();
     this.activeRunId = runId;
     this.running = true;
@@ -252,7 +286,7 @@ export class AgentService {
     });
     this.emitContextUsage(runId, session);
 
-    void session.prompt(expandDesktopCommand(composePromptText(prompt, attachments)), images.length > 0 ? { images } : undefined).then(() => {
+    void session.prompt(expandDesktopCommand(composePromptText(prompt, preparedAttachments)), images.length > 0 ? { images } : undefined).then(() => {
       if (this.activeRunId !== runId) return;
       const modelError = session.agent.state.errorMessage;
       this.persistFileChanges(runId);
@@ -342,7 +376,8 @@ export class AgentService {
     const attachments = sanitizeAttachments(extras?.attachments);
     if (!prompt.trim() && images.length === 0 && attachments.length === 0) throw new Error("排队消息不能为空。");
     await this.assertImagesSupported(this.settings.resolve(), images);
-    const text = composePromptText(prompt, attachments);
+    const preparedAttachments = this.attachmentStore.create(this.session.sessionManager.getSessionId(), attachments);
+    const text = composePromptText(prompt, preparedAttachments);
     if (mode === "steer") await this.session.steer(text, images.length > 0 ? images : undefined);
     else await this.session.followUp(text, images.length > 0 ? images : undefined);
     return this.currentQueue();
@@ -650,6 +685,44 @@ export class AgentService {
       },
     });
 
+    const listAttachments = defineTool({
+      name: "list_attachments",
+      label: "List attachments",
+      description: "List file attachments available in the current conversation, including their IDs, sizes, and access mode.",
+      promptSnippet: "List user-provided file attachments in this conversation",
+      promptGuidelines: ["Use this when you need to discover which attached files are available."],
+      parameters: Type.Object({}),
+      executionMode: "parallel",
+      execute: async () => {
+        const attachments = this.attachmentStore.list(attachmentIdsInMessages(this.session?.messages ?? []));
+        return { content: [{ type: "text", text: JSON.stringify(attachments, null, 2) }], details: { attachments } };
+      },
+    });
+
+    const readAttachment = defineTool({
+      name: "read_attachment",
+      label: "Read attachment",
+      description: `Read a UTF-8 text attachment by its conversation-scoped attachment ID. Reads at most ${maxAttachmentReadBytes} bytes per call and never accepts filesystem paths.`,
+      promptSnippet: "Read user-provided text attachments by attachment ID",
+      promptGuidelines: ["Use the nextOffset returned by each result to continue reading until eof is true."],
+      parameters: Type.Object({
+        attachmentId: Type.String({ description: "The attachment-id shown in the user message" }),
+        offset: Type.Optional(Type.Integer({ minimum: 0, description: "UTF-8 byte offset; defaults to 0" })),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: maxAttachmentReadBytes, description: `Maximum bytes to read; defaults to ${defaultAttachmentReadBytes}` })),
+      }),
+      executionMode: "parallel",
+      execute: async (_toolCallId, params) => {
+        const allowedIds = attachmentIdsInMessages(this.session?.messages ?? []);
+        if (!allowedIds.has(params.attachmentId)) throw new Error("当前会话无权读取该附件。");
+        const result = this.attachmentStore.read(
+          params.attachmentId,
+          params.offset ?? 0,
+          params.limit ?? defaultAttachmentReadBytes,
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: { attachment: result } };
+      },
+    });
+
     const spawnSubagent = defineTool({
       name: builtinSubagentToolName,
       label: "Spawn subagent",
@@ -801,7 +874,7 @@ export class AgentService {
       },
     }));
 
-    return [askUser, spawnSubagent, ...(browserAnnotate ? [browserAnnotate] : []), ...adaptedMcpTools];
+    return [askUser, listAttachments, readAttachment, spawnSubagent, ...(browserAnnotate ? [browserAnnotate] : []), ...adaptedMcpTools];
   }
 
   private async createModelRuntime(config: AgentRuntimeConfig) {

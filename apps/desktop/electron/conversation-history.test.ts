@@ -103,6 +103,19 @@ describe("extractFileAttachments", () => {
       attachments: [],
     });
   });
+
+  it("rebuilds inline and on-demand attachment references with safe metadata", () => {
+    const inlineId = "123e4567-e89b-42d3-a456-426614174000";
+    const toolId = "123e4567-e89b-42d3-a456-426614174001";
+    const text = `review\n\n<file attachment-id="${inlineId}" name="a&amp;b.txt" mime-type="text/plain" size="5" access="inline">\nhello\n</file>\n\n<attachment attachment-id="${toolId}" name="large.log" mime-type="text/plain" size="70000" access="read_attachment" />`;
+    expect(extractFileAttachments(text)).toEqual({
+      text: "review",
+      attachments: [
+        { kind: "file", name: "a&b.txt", id: inlineId, mimeType: "text/plain", size: 5, access: "inline" },
+        { kind: "file", name: "large.log", id: toolId, mimeType: "text/plain", size: 70_000, access: "tool" },
+      ],
+    });
+  });
 });
 
 describe("ConversationHistory", () => {

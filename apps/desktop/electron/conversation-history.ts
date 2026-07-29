@@ -74,21 +74,59 @@ export function displayUserPrompt(prompt: string): string {
   return prompt.trim() === initProjectPrompt ? "/init" : prompt;
 }
 
-// 从消息正文末尾解析 AgentService.composePromptText 生成的 <file name="..."> 块。
+function decodeXmlAttribute(value: string): string {
+  return value.replace(/&quot;/g, '"').replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&");
+}
+
+function attachmentAttributes(source: string): Record<string, string> {
+  return Object.fromEntries([...source.matchAll(/([a-z-]+)="([^"]*)"/g)].map((match) => [match[1], decodeXmlAttribute(match[2])]));
+}
+
+function turnAttachmentFromAttributes(attributes: Record<string, string>, access: "inline" | "tool"): TurnAttachment | undefined {
+  if (!attributes.name) return undefined;
+  const size = Number(attributes.size);
+  return {
+    kind: "file",
+    name: attributes.name,
+    id: attributes["attachment-id"] || undefined,
+    mimeType: attributes["mime-type"] || undefined,
+    size: Number.isFinite(size) && size >= 0 ? size : undefined,
+    access,
+  };
+}
+
+// 解析新式 inline/tool 引用，同时兼容旧版 <file name="..."> 块。
 // 只剥离结构完整且位于末尾的块；正文中间出现的同名字符串保持原样。
 export function extractFileAttachments(text: string): { text: string; attachments: TurnAttachment[] } {
   const attachments: TurnAttachment[] = [];
   let rest = text;
-  while (rest.endsWith("\n</file>")) {
-    const openIndex = rest.lastIndexOf("<file name=\"");
-    if (openIndex < 0) break;
-    if (openIndex > 0 && !rest.slice(0, openIndex).endsWith("\n\n")) break;
-    const header = rest.slice(openIndex + "<file name=\"".length);
-    const nameEnd = header.indexOf("\">\n");
-    if (nameEnd < 0) break;
-    const name = header.slice(0, nameEnd);
-    if (!name || name.includes("\n")) break;
-    attachments.unshift({ kind: "file", name });
+  while (true) {
+    const referenceMatch = rest.match(/(?:^|\n\n)<attachment ([^\n<>]+) \/>$/);
+    if (referenceMatch) {
+      const attributes = attachmentAttributes(referenceMatch[1]);
+      const attachment = attributes.access === "read_attachment"
+        ? turnAttachmentFromAttributes(attributes, "tool")
+        : undefined;
+      if (!attachment) break;
+      attachments.unshift(attachment);
+      rest = rest.slice(0, referenceMatch.index).replace(/\n\n$/, "");
+      continue;
+    }
+
+    if (!rest.endsWith("\n</file>")) break;
+    const openIndex = Math.max(rest.lastIndexOf("<file attachment-id=\""), rest.lastIndexOf("<file name=\""));
+    if (openIndex < 0 || (openIndex > 0 && !rest.slice(0, openIndex).endsWith("\n\n"))) break;
+    const headerEnd = rest.indexOf("\n", openIndex);
+    if (headerEnd < 0) break;
+    const header = rest.slice(openIndex, headerEnd);
+    if (!header.endsWith(">")) break;
+    const attributes = attachmentAttributes(header);
+    const isNew = Boolean(attributes["attachment-id"]);
+    const attachment = isNew
+      ? turnAttachmentFromAttributes(attributes, "inline")
+      : attributes.name ? { kind: "file" as const, name: attributes.name } : undefined;
+    if (!attachment) break;
+    attachments.unshift(attachment);
     rest = openIndex > 0 ? rest.slice(0, openIndex - 2) : "";
   }
   return { text: rest.trim(), attachments };
