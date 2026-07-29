@@ -142,6 +142,16 @@ function resultText(result: unknown): string {
   }
 }
 
+function messageContentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.flatMap((part) => {
+    if (!part || typeof part !== "object") return [];
+    const candidate = part as { type?: unknown; text?: unknown };
+    return candidate.type === "text" && typeof candidate.text === "string" ? [candidate.text] : [];
+  }).join("\n");
+}
+
 function resultDetails(result: unknown): ToolActivityDetails | undefined {
   if (!result || typeof result !== "object" || !("details" in result)) return undefined;
   const details = (result as { details?: unknown }).details;
@@ -893,7 +903,10 @@ export class AgentService {
     if (!runId) return;
     this.eventSequence += 1;
     this.emit({ type: "agent.event", runId, event: captureAgentSessionEvent(event, this.eventSequence) });
-    if (event.type === "message_update") {
+    if (event.type === "message_start" && event.message.role === "user") {
+      const message = messageContentText(event.message.content).trim();
+      this.emit({ type: "user.message.started", runId, message });
+    } else if (event.type === "message_update") {
       if (event.assistantMessageEvent.type === "text_delta") {
         this.emit({ type: "message.delta", runId, text: event.assistantMessageEvent.delta });
       } else if (event.assistantMessageEvent.type === "thinking_delta") {

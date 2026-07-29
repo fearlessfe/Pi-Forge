@@ -1093,6 +1093,7 @@ describe("AgentService with a real Pi session", () => {
     try {
       const runId = await service.send("start a long task", cwd);
       await started;
+      expect(events).toContainEqual(expect.objectContaining({ type: "user.message.started", runId, message: "start a long task" }));
       await expect(service.queueMessage("change direction", "steer")).resolves.toEqual({ steering: ["change direction"], followUp: [] });
       await expect(service.queueMessage("summarize afterward", "followUp")).resolves.toEqual({ steering: ["change direction"], followUp: ["summarize afterward"] });
       expect(eventsOfType(events, "queue.updated")).toEqual(expect.arrayContaining([
@@ -1103,6 +1104,56 @@ describe("AgentService with a real Pi session", () => {
       expect(eventsOfType(events, "queue.updated").at(-1)).toMatchObject({ runId, queue: { steering: [], followUp: [] } });
       finishRequest();
       await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
+    } finally {
+      service.dispose();
+      await close(server);
+    }
+  });
+
+  it("emits a user-message lifecycle event when a queued follow-up starts executing", async () => {
+    let requestStarted!: () => void;
+    let finishFirstRequest!: () => void;
+    const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+    const requests: ChatRequest[] = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; });
+      req.on("end", () => {
+        requests.push(JSON.parse(body) as ChatRequest);
+        if (requests.length === 1) {
+          requestStarted();
+          finishFirstRequest = () => writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "first answer" }), chunk({}, "stop")]);
+        } else {
+          writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "follow-up answer" }), chunk({}, "stop")]);
+        }
+      });
+    });
+    const port = await listen(server);
+    const cwd = createDirectory("queue-lifecycle-workspace");
+    const configuration: SaveModelSettings = {
+      provider: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      modelId: "mock-model",
+      thinkingLevel: "off",
+      apiKey: "queue-lifecycle-key",
+    };
+    const events: AgentEvent[] = [];
+    const service = new AgentService({ resolve: () => ({ ...configuration }) }, createDirectory("queue-lifecycle-agent"), cwd, (event) => events.push(event));
+
+    try {
+      const runId = await service.send("start a long task", cwd);
+      await started;
+      await service.queueMessage("summarize afterward", "followUp");
+      finishFirstRequest();
+
+      await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
+
+      expect(eventsOfType(events, "user.message.started").map((event) => event.message)).toEqual([
+        "start a long task",
+        "summarize afterward",
+      ]);
+      expect(requests).toHaveLength(2);
+      expect(JSON.stringify(requests[1].messages)).toContain("summarize afterward");
     } finally {
       service.dispose();
       await close(server);

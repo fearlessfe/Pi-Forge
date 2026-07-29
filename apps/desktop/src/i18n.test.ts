@@ -10,6 +10,7 @@ const componentSources = Object.values(import.meta.glob("./**/*.tsx", {
 describe("translateMessage", () => {
   it("translates known interface text to English", () => {
     expect(translateMessage("en-US", "设置")).toBe("Settings");
+    expect(translateMessage("en-US", "保存")).toBe("Save");
   });
 
   it("interpolates dynamic values in either language", () => {

@@ -30,6 +30,13 @@ describe("NewChatView analysis presentation", () => {
             { id: "message-1", type: "message", text: "| Result | Status |\n| --- | --- |\n| Build | Done |\n\n`pnpm build`\n\n<script>alert('unsafe')</script>" },
           ],
           status: "running",
+        }, {
+          id: "queued-1",
+          question: "Summarize the result",
+          answer: "",
+          activities: [],
+          queueMode: "followUp",
+          status: "queued",
         }]}
         modelId="test-model"
         modelProvider="anthropic"
@@ -38,7 +45,7 @@ describe("NewChatView analysis presentation", () => {
         prompt=""
         attachments={{ images: [], files: [] }}
         isRunning
-        queuedMessages={{ steering: [], followUp: [] }}
+        queuedMessages={{ steering: [], followUp: ["Summarize the result"] }}
         onPromptChange={noop}
         onAttachmentsChange={noop}
         onAttachmentError={noop}
@@ -68,5 +75,8 @@ describe("NewChatView analysis presentation", () => {
     expect(markup).toContain("任务进行中");
     expect(markup).toContain("正在生成回复");
     expect(markup).toContain("停止任务");
+    expect(markup).toContain("Summarize the result");
+    expect(markup).toContain("稍后继续 · 等待执行");
+    expect(markup).toContain("已排队 1 条消息");
   });
 });

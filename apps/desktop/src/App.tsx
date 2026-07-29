@@ -1,17 +1,16 @@
 import { AlertTriangle, CheckCircle2, Package, RotateCcw, Search, Sparkles, Trash2, X } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationSidebar } from "./components/ConversationSidebar";
 import { NewChatView } from "./components/NewChatView";
 import { PluginCenterView } from "./components/PluginCenterView";
 import { SettingsView } from "./components/SettingsView";
 import { BrowserWorkbench } from "./components/BrowserWorkbench";
-import type { AgentEvent, AppearanceTheme, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
-import { appendMessageDelta } from "./conversation-activity";
+import type { AppearanceTheme, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
+import { applyAgentEvent } from "./agent-event-state";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { emptyComposerAttachments, promptFileAttachmentsOf, promptImagesOf, turnAttachmentsOf, type ComposerAttachments } from "./composer-attachments";
 import { isPrimaryShortcut, shortcutLabel } from "./keyboard";
 import { useI18n } from "./i18n";
-import { mergeAnswerUsage } from "./response-usage";
 import type { AppView, AuthFlowState, ChatTurn, Conversation, Project, SettingsSection, Theme } from "./types";
 
 type Notice = {
@@ -89,100 +88,6 @@ function historyConversation(item: ConversationHistoryItem, t: (message: string)
   };
 }
 
-function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[] {
-  // Runtime lifecycle events are handled as app-level state, not chat turns.
-  if (event.type === "runtime.status") return turns;
-  let targetIndex = turns.findIndex((turn) => turn.runId === event.runId);
-  if (targetIndex < 0) {
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      if (turns[index].status === "running" && !turns[index].runId) {
-        targetIndex = index;
-        break;
-      }
-    }
-  }
-  if (targetIndex < 0) return turns;
-
-  return turns.map((turn, index) => {
-    if (index !== targetIndex) return turn;
-    const current = turn.runId ? turn : { ...turn, runId: event.runId };
-
-    switch (event.type) {
-      case "run.started":
-        return current;
-      case "message.delta": {
-        return {
-          ...current,
-          answer: current.answer + event.text,
-          activities: appendMessageDelta(current.activities, event.text),
-        };
-      }
-      case "thinking.delta": {
-        const last = current.activities.at(-1);
-        const activities = last?.type === "thinking"
-          ? current.activities.map((item, itemIndex) => itemIndex === current.activities.length - 1 && item.type === "thinking"
-            ? { ...item, text: item.text + event.text }
-            : item)
-          : [...current.activities, { id: `thinking-${current.activities.length}`, type: "thinking" as const, text: event.text }];
-        return { ...current, activities };
-      }
-      case "tool.started":
-        return {
-          ...current,
-          activities: [...current.activities, {
-            id: event.callId,
-            type: "tool",
-            name: event.name,
-            args: event.args,
-            output: "",
-            status: "running",
-          }],
-        };
-      case "tool.updated":
-        return {
-          ...current,
-          activities: current.activities.map((item) => item.type === "tool" && item.id === event.callId
-            ? { ...item, output: event.output, details: event.details ?? item.details }
-            : item),
-        };
-      case "tool.completed":
-        return {
-          ...current,
-          activities: current.activities.map((item) => item.type === "tool" && item.id === event.callId
-            ? { ...item, output: event.output, status: event.isError ? "error" : "success", details: event.details ?? item.details }
-            : item),
-        };
-      case "question.requested":
-        return {
-          ...current,
-          activities: [...current.activities.filter((item) => !(item.type === "question" && item.id === event.callId)), {
-            id: event.callId,
-            type: "question",
-            question: event.question,
-            options: event.options,
-            status: "pending",
-          }],
-        };
-      case "response.usage":
-        return { ...current, usage: mergeAnswerUsage(current.usage, event.usage) };
-      case "changes.updated":
-        return { ...current, fileChanges: event.changes };
-      case "context.updated":
-      case "queue.updated":
-        return current;
-      case "agent.event":
-        // Raw SDK events are acknowledged here but intentionally stay out of the user-facing UI.
-        return current;
-      case "run.completed":
-        return current.status === "stopped" ? current : { ...current, status: "completed" };
-      case "run.stopped":
-        return { ...current, status: "stopped" };
-      case "run.error":
-        return current.status === "stopped" ? current : { ...current, status: "error", error: event.message };
-    }
-  });
-}
-
 function applyAuthEvent(current: AuthFlowState | null, event: AuthEvent, t: (message: string) => string): AuthFlowState | null {
   if (event.type === "auth.started") return { loginId: event.loginId, providerId: event.providerId, status: "running" };
   if (!current || current.loginId !== event.loginId) return current;
@@ -233,6 +138,7 @@ export function App() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
+  const queuedTurnSequence = useRef(0);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
   const [runtimeRecoveries, setRuntimeRecoveries] = useState<RuntimeRecoveryInfo[]>([]);
@@ -834,6 +740,22 @@ export function App() {
     const images = promptImagesOf(composerAttachments);
     const files = promptFileAttachmentsOf(composerAttachments);
     if ((!submittedPrompt.trim() && images.length === 0 && files.length === 0) || !window.piDesktop?.agent.queue) return;
+    const turnId = `queued-${Date.now()}-${queuedTurnSequence.current++}`;
+    const turnAttachments = turnAttachmentsOf(composerAttachments);
+    setTurns((current) => {
+      const active = [...current].reverse().find((turn) => turn.status === "running");
+      return [...current, {
+        id: turnId,
+        runId: active?.runId,
+        question: submittedPrompt.trim(),
+        answer: "",
+        activities: [],
+        ...(turnAttachments.length > 0 ? { attachments: turnAttachments } : {}),
+        fileChanges: [],
+        queueMode: mode,
+        status: "queued",
+      }];
+    });
     try {
       setQueuedMessages(await window.piDesktop.agent.queue({
         prompt: submittedPrompt,
@@ -844,13 +766,24 @@ export function App() {
       setPrompt("");
       setComposerAttachments(emptyComposerAttachments);
     } catch (error) {
-      setNotice({ title: t("消息排队失败"), message: eventError(error), type: "info" });
+      const message = eventError(error);
+      setTurns((current) => current.map((turn) => turn.id === turnId
+        ? { ...turn, status: "error", error: message }
+        : turn));
+      setNotice({ title: t("消息排队失败"), message, type: "info" });
     }
   }
 
   async function clearQueuedPrompts() {
     if (!window.piDesktop?.agent.clearQueue) return;
-    setQueuedMessages(await window.piDesktop.agent.clearQueue());
+    try {
+      setQueuedMessages(await window.piDesktop.agent.clearQueue());
+      setTurns((current) => current.map((turn) => turn.status === "queued"
+        ? { ...turn, status: "cancelled" }
+        : turn));
+    } catch (error) {
+      setNotice({ title: t("无法清空消息队列"), message: eventError(error), type: "info" });
+    }
   }
 
   async function acceptFileChanges(changeIds?: string[]) {

@@ -48,7 +48,8 @@ export type ChatTurn = {
   attachments?: TurnAttachment[];
   fileChanges?: TaskFileChange[];
   usage?: ResponseUsage;
-  status: "running" | "completed" | "error" | "stopped";
+  queueMode?: "steer" | "followUp";
+  status: "queued" | "running" | "completed" | "error" | "stopped" | "cancelled";
   error?: string;
 };
 

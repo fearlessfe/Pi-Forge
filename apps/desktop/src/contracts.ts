@@ -380,6 +380,7 @@ export type AgentRuntimeStatus = "running" | "crash-looping";
 export type AgentEvent =
   | { type: "runtime.status"; status: AgentRuntimeStatus }
   | { type: "run.started"; runId: string; conversationId: string; provider: string; model: string; cwd: string }
+  | { type: "user.message.started"; runId: string; message: string }
   | { type: "message.delta"; runId: string; text: string }
   | { type: "thinking.delta"; runId: string; text: string }
   | { type: "tool.started"; runId: string; callId: string; name: string; args: unknown }

@@ -6,6 +6,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  Clock3,
   CircleStop,
   Copy,
   ExternalLink,
@@ -738,6 +739,9 @@ function ConversationTurn({ turn, running, onRetry, onForkTurn, onAnswerQuestion
 }) {
   const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  const queueStatus = turn.status === "queued"
+    ? `${t(turn.queueMode === "steer" ? "立即调整" : "稍后继续")} · ${t("等待执行")}`
+    : turn.status === "cancelled" ? t("未执行") : null;
   async function copyQuestion() {
     await navigator.clipboard.writeText(turn.question);
     setCopied(true);
@@ -755,28 +759,29 @@ function ConversationTurn({ turn, running, onRetry, onForkTurn, onAnswerQuestion
                 : <span className="inline-flex h-[28px] items-center gap-tight rounded-full border border-separator bg-bg-grouped px-base text-caption text-label-2" title={attachment.name} key={`${attachment.name}-${index}`}><FileBox size={12} className="text-accent" /><span className="max-w-[180px] truncate">{attachment.name}</span></span>)}
             </div>
           )}
-          {turn.question && <div className="mt-[3px] ml-auto w-fit max-w-full rounded-md rounded-tr-sm border border-separator bg-bg-grouped px-[13px] py-[11px] text-body leading-[1.65] text-label-2">{turn.question}</div>}
+          {turn.question && <div className={`mt-[3px] ml-auto w-fit max-w-full rounded-md rounded-tr-sm border bg-bg-grouped px-[13px] py-[11px] text-body leading-[1.65] text-label-2 ${turn.status === "queued" ? "border-accent/32" : "border-separator"}`}>{turn.question}</div>}
           <div className="absolute right-0 bottom-0 flex items-center gap-tight">
+            {queueStatus && <span className={`mr-base inline-flex items-center gap-[5px] text-caption ${turn.status === "queued" ? "text-accent" : "text-label-3"}`} role="status"><Clock3 size={13} />{queueStatus}</span>}
             <button className={messageActionButtonClass} type="button" onClick={() => void copyQuestion()} aria-label={t("复制用户输入")}>
               {copied ? <Check size={14} /> : <Copy size={14} />}<span>{t(copied ? "已复制" : "复制")}</span>
             </button>
-            <button className={messageActionButtonClass} type="button" onClick={() => onRetry(turn.id)} disabled={turn.status === "running"}>
+            <button className={messageActionButtonClass} type="button" onClick={() => onRetry(turn.id)} disabled={running || turn.status === "queued"}>
               <RotateCcw size={14} /><span>{t("重试")}</span>
             </button>
-            {turn.sessionEntryId && <button className={messageActionButtonClass} type="button" onClick={() => onForkTurn(turn.sessionEntryId!)} disabled={turn.status === "running"}>
+            {turn.sessionEntryId && <button className={messageActionButtonClass} type="button" onClick={() => onForkTurn(turn.sessionEntryId!)} disabled={running}>
               <GitFork size={14} /><span>{t("从此处 Fork")}</span>
             </button>}
           </div>
         </div>
       </section>
-      <section className="relative mt-[19px] flex w-[86%] items-start justify-start" aria-label={t("Agent 回答")}>
+      {turn.status !== "queued" && turn.status !== "cancelled" && <section className="relative mt-[19px] flex w-[86%] items-start justify-start" aria-label={t("Agent 回答")}>
         <div className="grid w-full gap-[9px]">
           <ActivityTimeline turn={turn} onAnswerQuestion={onAnswerQuestion} />
           {turn.usage && <ResponseUsageLine usage={turn.usage} />}
           {turn.status === "error" && <div className="flex items-center gap-base rounded-md bg-red/8 px-loose py-[10px] text-caption text-red"><XCircle size={14} />{turn.error}</div>}
           {turn.status === "stopped" && <div className="flex items-center gap-base rounded-md bg-bg-grouped px-loose py-[10px] text-caption text-orange">{t("任务已停止")}</div>}
         </div>
-      </section>
+      </section>}
       <FileChangesPanel changes={turn.fileChanges ?? []} running={running} onOpen={onOpenChange} onAccept={onAcceptChanges} onRevert={onRevertChanges} />
     </article>
   );
@@ -870,6 +875,9 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
   const composer = useComposerAttachments(props);
   const canSend = Boolean(props.prompt.trim()) || hasComposerAttachments(props.attachments);
   const runningTurn = [...props.turns].reverse().find((turn) => turn.status === "running");
+  const steeringCount = props.queuedMessages.steering.length;
+  const followUpCount = props.queuedMessages.followUp.length;
+  const queuedCount = steeringCount + followUpCount;
   return (
     <section className="relative z-[1] grid h-full w-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto]" aria-label={t("当前对话")}>
       <div className="min-h-0 overflow-auto px-[54px] pt-[42px] pb-[22px] [scrollbar-width:thin] [scrollbar-color:var(--fill-3)_transparent]" aria-live="polite">
@@ -879,7 +887,7 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
       </div>
       <footer className="relative bg-linear-to-b from-transparent via-20% via-bg to-bg px-[52px] pt-[14px] pb-[17px]">
         {props.isRunning && runningTurn && <RunningTaskStatus turn={runningTurn} onStop={props.onStop} />}
-        {(props.queuedMessages.steering.length > 0 || props.queuedMessages.followUp.length > 0) && <div className="mx-auto mb-[7px] flex w-[min(760px,100%)] items-center gap-[6px] overflow-hidden text-caption text-label-3"><span className="shrink-0 text-accent">{t("已排队 {count} 条消息", { count: props.queuedMessages.steering.length + props.queuedMessages.followUp.length })}</span>{props.queuedMessages.steering.map((message) => <em className="min-w-0 max-w-[220px] truncate rounded-full border border-separator bg-bg-grouped px-[7px] py-tight not-italic" key={`steer:${message}`}>{t("立即调整")} · {message}</em>)}{props.queuedMessages.followUp.map((message) => <em className="min-w-0 max-w-[220px] truncate rounded-full border border-separator bg-bg-grouped px-[7px] py-tight not-italic" key={`follow:${message}`}>{t("稍后继续")} · {message}</em>)}<button className="ml-auto cursor-pointer border-0 bg-transparent text-caption text-label-3 transition-colors duration-150 ease-apple hover:text-label-2" type="button" onClick={props.onClearQueue}>{t("清空队列")}</button></div>}
+        {queuedCount > 0 && <div className="mx-auto mb-[7px] flex min-h-[28px] w-[min(760px,100%)] items-center gap-base rounded-sm border border-accent/16 bg-accent/8 px-base text-caption text-label-3" aria-live="polite"><Clock3 size={13} className="shrink-0 text-accent" /><strong className="font-semibold text-accent">{t("已排队 {count} 条消息", { count: queuedCount })}</strong>{steeringCount > 0 && <small>{t("立即调整")} {steeringCount}</small>}{followUpCount > 0 && <small>{t("稍后继续")} {followUpCount}</small>}<button className="ml-auto cursor-pointer border-0 bg-transparent text-caption text-label-3 transition-colors duration-150 ease-apple hover:text-label-2" type="button" onClick={props.onClearQueue}>{t("清空队列")}</button></div>}
         <form className="composer-shell relative mx-auto flex h-[108px] w-[min(760px,100%)] flex-col rounded-lg bg-bg-grouped px-[14px] pt-loose pb-tight shadow-2 transition-shadow duration-150 ease-apple" onSubmit={(event) => {
           event.preventDefault();
           if (props.isRunning) props.onQueue("followUp");
