@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { AgentEvent, AppearancePreference, AppearanceTheme, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, PromptFileAttachment, PromptImage, QueuePromptInput, ResourceSettings, SaveMcpServerInput, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
+import type { AgentEvent, AppearancePreference, AppearanceTheme, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ResourceSettings, SaveObservabilitySettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
 import { AgentRuntimeClient } from "./agent-runtime-client.js";
 import { AppearanceStore } from "./appearance-store.js";
 import { AuthService } from "./auth-service.js";
@@ -22,6 +22,12 @@ import { TerminalService } from "./terminal-service.js";
 import { BrowserService } from "./browser-service.js";
 import { ObservabilityStore } from "./observability-store.js";
 import { ObservabilityService } from "./observability-service.js";
+import {
+  requireMcpServerInput,
+  requireModelSettings,
+  requireQueuePromptInput,
+  requireSendPromptInput,
+} from "./ipc-input-validation.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
@@ -119,19 +125,6 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
-function requireSettings(value: unknown): SaveModelSettings {
-  if (!value || typeof value !== "object") throw new Error("模型设置格式无效。");
-  const input = value as Record<string, unknown>;
-  if (
-    typeof input.provider !== "string"
-    || typeof input.baseUrl !== "string"
-    || typeof input.modelId !== "string"
-    || typeof input.thinkingLevel !== "string"
-    || (input.apiKey !== undefined && typeof input.apiKey !== "string")
-  ) throw new Error("模型设置字段无效。");
-  return value as SaveModelSettings;
-}
-
 async function settingsWithCredentials(settings: SettingsStore, credentials: EncryptedCredentialStore) {
   const current = settings.get();
   const stored = [...await credentials.list()];
@@ -154,23 +147,6 @@ async function migrateLegacyApiKeys(settings: SettingsStore, credentials: Encryp
 function requireString(value: unknown, message: string): string {
   if (typeof value !== "string" || !value) throw new Error(message);
   return value;
-}
-
-function parsePromptExtras(input: { images?: unknown; attachments?: unknown }): { images?: PromptImage[]; attachments?: PromptFileAttachment[] } {
-  const { images, attachments } = input;
-  if (images !== undefined && (!Array.isArray(images) || images.some((image) => !image || typeof image !== "object"
-    || typeof (image as PromptImage).name !== "string"
-    || typeof (image as PromptImage).mimeType !== "string"
-    || typeof (image as PromptImage).data !== "string"))) {
-    throw new Error("图片附件无效。");
-  }
-  if (attachments !== undefined && (!Array.isArray(attachments) || attachments.some((attachment) => !attachment || typeof attachment !== "object"
-    || typeof (attachment as PromptFileAttachment).name !== "string"
-    || ((attachment as PromptFileAttachment).mimeType !== undefined && typeof (attachment as PromptFileAttachment).mimeType !== "string")
-    || typeof (attachment as PromptFileAttachment).content !== "string"))) {
-    throw new Error("文件附件无效。");
-  }
-  return { images: images as PromptImage[] | undefined, attachments: attachments as PromptFileAttachment[] | undefined };
 }
 
 function requirePermissionSettings(value: unknown): PermissionSettings {
@@ -205,15 +181,6 @@ function requireObservabilitySettings(value: unknown): SaveObservabilitySettings
     || !Array.isArray(input.exporters)
   ) throw new Error("Trace 设置字段无效。");
   return value as SaveObservabilitySettings;
-}
-
-function requireMcpServerInput(value: unknown): SaveMcpServerInput {
-  if (!value || typeof value !== "object") throw new Error("MCP Server 配置格式无效。");
-  const input = value as Record<string, unknown>;
-  if (typeof input.id !== "string" || typeof input.name !== "string" || typeof input.enabled !== "boolean" || typeof input.timeoutMs !== "number" || !input.transport || typeof input.transport !== "object") {
-    throw new Error("MCP Server 配置字段无效。");
-  }
-  return value as SaveMcpServerInput;
 }
 
 function registerIpc(
@@ -273,10 +240,10 @@ function registerIpc(
     await agent.reset();
     return agent.getModelCatalog(false);
   });
-  ipcMain.handle("settings:discover-models", (_event, value: unknown) => agent.discoverModels(requireSettings(value)));
+  ipcMain.handle("settings:discover-models", (_event, value: unknown) => agent.discoverModels(requireModelSettings(value)));
   ipcMain.handle("settings:save", async (_event, value: unknown) => {
     await agent.reset();
-    const input = requireSettings(value);
+    const input = requireModelSettings(value);
     settings.save({ ...input, apiKey: undefined });
     if (input.apiKey?.trim()) {
       await credentials.modify(input.provider, async () => ({ type: "api_key", key: input.apiKey?.trim() }));
@@ -285,7 +252,7 @@ function registerIpc(
     return settingsWithCredentials(settings, credentials);
   });
   ipcMain.handle("settings:test", async (_event, value: unknown) => {
-    const response = await agent.testConfiguration(requireSettings(value));
+    const response = await agent.testConfiguration(requireModelSettings(value));
     return { ok: true as const, response };
   });
   ipcMain.handle("observability:get", () => observability.getSettings());
@@ -540,18 +507,12 @@ function registerIpc(
     };
   });
   ipcMain.handle("agent:send", async (_event, value: unknown) => {
-    if (!value || typeof value !== "object") throw new Error("消息格式无效。");
-    const input = value as SendPromptInput;
-    if (
-      typeof input.prompt !== "string"
-      || (input.cwd !== undefined && typeof input.cwd !== "string")
-      || (input.conversationId !== undefined && typeof input.conversationId !== "string")
-    ) {
-      throw new Error("消息字段无效。");
-    }
-    const extras = parsePromptExtras(input);
+    const input = requireSendPromptInput(value);
     if (input.cwd !== undefined) requireKnownWorkspace(resources, input.cwd);
-    const runId = await agent.send(input.prompt, input.cwd, input.conversationId, extras);
+    const runId = await agent.send(input.prompt, input.cwd, input.conversationId, {
+      images: input.images,
+      attachments: input.attachments,
+    });
     return { runId };
   });
   ipcMain.handle("agent:list-conversations", () => agent.listConversations());
@@ -580,11 +541,11 @@ function registerIpc(
   ));
   ipcMain.handle("agent:abort", () => agent.abort());
   ipcMain.handle("agent:queue", (_event, value: unknown) => {
-    if (!value || typeof value !== "object") throw new Error("排队消息格式无效。");
-    const input = value as QueuePromptInput;
-    if (typeof input.prompt !== "string") throw new Error("排队消息无效。");
-    if (input.mode !== "steer" && input.mode !== "followUp") throw new Error("消息排队模式无效。");
-    return agent.queueMessage(input.prompt, input.mode, parsePromptExtras(input));
+    const input = requireQueuePromptInput(value);
+    return agent.queueMessage(input.prompt, input.mode, {
+      images: input.images,
+      attachments: input.attachments,
+    });
   });
   ipcMain.handle("agent:clear-queue", () => agent.clearQueue());
   ipcMain.handle("agent:list-changes", (_event, runId: unknown) => agent.listChanges(runId === undefined ? undefined : requireString(runId, "任务 ID 无效。")));

@@ -4,8 +4,8 @@ import {
   type PackageManager,
   type ProgressEvent,
 } from "@earendil-works/pi-coding-agent";
-import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type {
   InstalledPlugin,
@@ -16,11 +16,12 @@ import type {
   PluginRiskTier,
   PluginSearchResult,
 } from "../src/contracts.js";
+import { downloadAndVerifyPluginTarball } from "./plugin-package-verifier.js";
 import { PluginSecurityStore } from "./plugin-security-store.js";
 
 type PackageManagerPort = Pick<
   PackageManager,
-  "installAndPersist" | "removeAndPersist" | "listConfiguredPackages" | "setProgressCallback" | "getInstalledPath"
+  "install" | "addSourceToSettings" | "removeAndPersist" | "listConfiguredPackages" | "setProgressCallback" | "getInstalledPath"
 >;
 
 type RegistryPackage = {
@@ -133,16 +134,26 @@ function validateManifest(value: unknown): PluginManifest {
   return manifest;
 }
 
-function integrityMatches(integrity: string, bytes: Buffer): boolean {
-  const entries = integrity.trim().split(/\s+/).flatMap((entry) => {
+function hasSha512Integrity(integrity: string | undefined): boolean {
+  return integrity?.trim().split(/\s+/).some((entry) => {
     const separator = entry.indexOf("-");
-    if (separator <= 0) return [];
-    const algorithm = entry.slice(0, separator).toLowerCase();
-    if (algorithm !== "sha512" && algorithm !== "sha1") return [];
-    return [{ algorithm, digest: entry.slice(separator + 1) }];
-  });
-  if (entries.length === 0) return false;
-  return entries.some(({ algorithm, digest }) => crypto.createHash(algorithm).update(bytes).digest("base64") === digest);
+    if (separator <= 0 || entry.slice(0, separator).toLowerCase() !== "sha512") return false;
+    try {
+      return Buffer.from(entry.slice(separator + 1), "base64").length === 64;
+    } catch {
+      return false;
+    }
+  }) === true;
+}
+
+export function lifecycleSafeNpmCommand(command: string[] | undefined): string[] {
+  const normalized = command?.length ? [...command] : ["npm"];
+  const alreadyDisabled = normalized.some((argument) => (
+    argument === "--ignore-scripts"
+    || argument === "--config.ignore-scripts=true"
+    || argument === "--config.ignoreScripts=true"
+  ));
+  return alreadyDisabled ? normalized : [...normalized, "--ignore-scripts"];
 }
 
 function riskTier(resources: PluginResourceType[], insecure: boolean, hasIntegrity: boolean): PluginRiskTier {
@@ -188,7 +199,7 @@ function normalizePackage(
     integrity,
     shasum,
     provenance: "npm-registry",
-    riskTier: riskTier(resources, insecure, Boolean(integrity || shasum)),
+    riskTier: riskTier(resources, insecure, hasSha512Integrity(integrity)),
     compatibility: resources.includes("extensions") ? "review" : resources.length > 0 ? "desktop" : "unknown",
   };
 }
@@ -216,11 +227,12 @@ export class PluginService {
     this.fetchImpl = options.fetch ?? fetch;
     this.registryUrl = (options.registryUrl ?? "https://registry.npmjs.org").replace(/\/$/, "");
     this.securityStore = options.securityStore ?? new PluginSecurityStore(path.dirname(agentDir));
-    this.packageManager = options.packageManager ?? new DefaultPackageManager({
-      cwd,
-      agentDir,
-      settingsManager: SettingsManager.create(cwd, agentDir, { projectTrusted: false }),
-    });
+    if (options.packageManager) this.packageManager = options.packageManager;
+    else {
+      const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+      settingsManager.applyOverrides({ npmCommand: lifecycleSafeNpmCommand(settingsManager.getNpmCommand()) });
+      this.packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+    }
     this.packageManager.setProgressCallback((event: ProgressEvent) => this.emit(event));
   }
 
@@ -299,19 +311,36 @@ export class PluginService {
       const { metadata, tarballUrl } = await this.registryMetadata(name, version);
       if (metadata.riskTier === "blocked") throw new Error("该版本被标记为存在安全风险，已阻止安装。");
       const source = `npm:${metadata.name}@${metadata.version}`;
-      await this.packageManager.installAndPersist(source);
+      const tarball = await downloadAndVerifyPluginTarball(this.fetchImpl, tarballUrl, metadata.integrity, {
+        name: metadata.name,
+        version: metadata.version,
+        manifest: metadata.manifest,
+      });
+      const stagingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-desktop-plugin-install-"));
+      fs.chmodSync(stagingDirectory, 0o700);
+      const stagedTarball = path.join(stagingDirectory, "package.tgz");
+      const replacingExistingInstall = Boolean(this.packageManager.getInstalledPath(source, "user"));
+      try {
+        fs.writeFileSync(stagedTarball, tarball, { mode: 0o600 });
+        await this.packageManager.install(`npm:${stagedTarball}`);
+      } catch (error) {
+        if (!replacingExistingInstall) await this.packageManager.removeAndPersist(source);
+        throw error;
+      } finally {
+        fs.rmSync(stagingDirectory, { recursive: true, force: true });
+      }
       const installedPath = this.packageManager.getInstalledPath(source, "user")
         ?? this.packageManager.listConfiguredPackages().find((entry) => entry.source === source)?.installedPath;
       const failure = !installedPath
         ? "插件安装后的包名、版本或资源清单校验失败，已移除该插件。"
-        : await this.verifyTarballIntegrity(metadata, tarballUrl)
-          ?? (this.verifyInstalled(installedPath, metadata.name, metadata.version, metadata.manifest)
-            ? undefined
-            : "插件安装后的包名、版本或资源清单校验失败，已移除该插件。");
+        : this.verifyInstalled(installedPath, metadata.name, metadata.version, metadata.manifest)
+          ? undefined
+          : "插件安装后的包名、版本或资源清单校验失败，已移除该插件。";
       if (failure) {
         await this.packageManager.removeAndPersist(source);
         throw new Error(failure);
       }
+      this.packageManager.addSourceToSettings(source);
       this.securityStore.save({
         source,
         name: metadata.name,
@@ -324,6 +353,7 @@ export class PluginService {
         resources: metadata.resources,
         manifest: metadata.manifest,
         installedAt: new Date().toISOString(),
+        enabled: false,
       });
       return this.listInstalled();
     });
@@ -354,22 +384,6 @@ export class PluginService {
   private validatePackage(name: string, version: string): void {
     if (!packageNamePattern.test(name)) throw new Error("插件包名无效。");
     if (version !== "latest" && !versionPattern.test(version)) throw new Error("插件版本无效。");
-  }
-
-  private async verifyTarballIntegrity(metadata: PluginPackage, tarballUrl: string | undefined): Promise<string | undefined> {
-    if (!metadata.integrity) return "插件注册表未提供完整性校验值（dist.integrity），无法确认安装包未被篡改，已移除该插件。";
-    if (!tarballUrl) return "插件注册表未提供安装包下载地址，无法校验安装包完整性，已移除该插件。";
-    let bytes: Buffer;
-    try {
-      const response = await this.fetchImpl(tarballUrl);
-      if (!response.ok) return `插件安装包下载失败（HTTP ${response.status}），无法校验完整性，已移除该插件。`;
-      bytes = Buffer.from(await response.arrayBuffer());
-    } catch {
-      return "插件安装包下载失败，无法校验完整性，已移除该插件。";
-    }
-    return integrityMatches(metadata.integrity, bytes)
-      ? undefined
-      : "插件安装包完整性校验失败，与 npm 注册表记录不一致，可能已被篡改，已移除该插件。";
   }
 
   private verifyInstalled(packageRoot: string, expectedName: string, expectedVersion: string, manifest: PluginManifest): boolean {

@@ -23,6 +23,7 @@ describe("classifyAttachmentFile", () => {
   });
 
   it("rejects unsupported binary files", () => {
+    expect(classifyAttachmentFile("vector.svg", "image/svg+xml")).toBe("unsupported");
     expect(classifyAttachmentFile("slides.pdf", "application/pdf")).toBe("unsupported");
     expect(classifyAttachmentFile("archive.zip", "")).toBe("unsupported");
     expect(classifyAttachmentFile("binary", "")).toBe("unsupported");

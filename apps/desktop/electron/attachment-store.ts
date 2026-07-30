@@ -1,12 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { inlineTextAttachmentMaxBytes, type PromptFileAttachment } from "../src/contracts.js";
+import {
+  inlineTextAttachmentMaxBytes,
+  maxPromptAttachmentNameBytes,
+  maxPromptTextAttachmentBytes,
+  maxPromptTextAttachmentsPerMessage,
+  maxPromptTextAttachmentTotalBytes,
+  type PromptFileAttachment,
+} from "../src/contracts.js";
 
 export const inlineAttachmentMaxBytes = inlineTextAttachmentMaxBytes;
-export const maxAttachmentBytes = 1024 * 1024;
-export const maxAttachmentsPerMessage = 10;
-export const maxAttachmentTotalBytes = 5 * 1024 * 1024;
+export const maxAttachmentBytes = maxPromptTextAttachmentBytes;
+export const maxAttachmentsPerMessage = maxPromptTextAttachmentsPerMessage;
+export const maxAttachmentTotalBytes = maxPromptTextAttachmentTotalBytes;
 export const defaultAttachmentReadBytes = 16 * 1024;
 export const maxAttachmentReadBytes = 32 * 1024;
 
@@ -68,7 +75,7 @@ export class AttachmentStore {
       const data = Buffer.from(content, "utf8");
       if (data.byteLength > maxAttachmentBytes) throw new Error("文件大小不能超过 1 MB。");
       const name = attachment.name.trim() || "untitled.txt";
-      if (Buffer.byteLength(name, "utf8") > 512) throw new Error("文件名过长。");
+      if (Buffer.byteLength(name, "utf8") > maxPromptAttachmentNameBytes) throw new Error("文件名过长。");
       const metadata: StoredAttachment = {
         id: randomUUID(),
         ownerConversationId,

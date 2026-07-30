@@ -1,4 +1,12 @@
-import { inlineTextAttachmentMaxBytes, type PromptFileAttachment, type PromptImage, type TurnAttachment } from "./contracts.js";
+import {
+  inlineTextAttachmentMaxBytes,
+  maxPromptImageBytes,
+  maxPromptTextAttachmentBytes,
+  supportedPromptImageMimeTypes,
+  type PromptFileAttachment,
+  type PromptImage,
+  type TurnAttachment,
+} from "./contracts.js";
 
 /** 输入框中待发送的图片附件（dataUrl 用于预览，发送时只带裸 base64）。 */
 export type ComposerImage = {
@@ -25,8 +33,8 @@ export type ComposerAttachments = {
 
 export const emptyComposerAttachments: ComposerAttachments = { images: [], files: [] };
 
-export const maxImageBytes = 10 * 1024 * 1024;
-export const maxTextFileBytes = 1024 * 1024;
+export const maxImageBytes = maxPromptImageBytes;
+export const maxTextFileBytes = maxPromptTextAttachmentBytes;
 export const inlineTextFileBytes = inlineTextAttachmentMaxBytes;
 
 const textFileMimeTypes = new Set([
@@ -52,7 +60,10 @@ const textFileExtensions = new Set([
 export type AttachmentFileKind = "image" | "text" | "unsupported";
 
 export function classifyAttachmentFile(name: string, mimeType: string): AttachmentFileKind {
-  if (mimeType.startsWith("image/")) return "image";
+  const normalizedMimeType = mimeType.toLowerCase();
+  if (normalizedMimeType.startsWith("image/")) {
+    return (supportedPromptImageMimeTypes as readonly string[]).includes(normalizedMimeType) ? "image" : "unsupported";
+  }
   if (mimeType.startsWith("text/") || textFileMimeTypes.has(mimeType)) return "text";
   const extension = name.includes(".") ? name.split(".").pop()!.toLocaleLowerCase() : name.toLocaleLowerCase();
   return textFileExtensions.has(extension) ? "text" : "unsupported";

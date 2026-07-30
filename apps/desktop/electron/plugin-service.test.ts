@@ -4,12 +4,13 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { PluginService } from "./plugin-service.js";
+import { create, extract } from "tar";
+import { lifecycleSafeNpmCommand, PluginService } from "./plugin-service.js";
 import { PluginSecurityStore } from "./plugin-security-store.js";
 
 type PackageManagerPort = Pick<
   PackageManager,
-  "installAndPersist" | "removeAndPersist" | "listConfiguredPackages" | "setProgressCallback" | "getInstalledPath"
+  "install" | "addSourceToSettings" | "removeAndPersist" | "listConfiguredPackages" | "setProgressCallback" | "getInstalledPath"
 >;
 
 function response(body: unknown, status = 200): Response {
@@ -18,8 +19,14 @@ function response(body: unknown, status = 200): Response {
 
 type TarballFixture = { url: string; bytes: Uint8Array<ArrayBuffer>; integrity: string };
 
-function tarballFixture(content: string, algorithm: "sha512" | "sha1" = "sha512"): TarballFixture {
-  const bytes = new TextEncoder().encode(content) as Uint8Array<ArrayBuffer>;
+function tarballFixture(packageJson: Record<string, unknown>, algorithm: "sha512" | "sha1" = "sha512"): TarballFixture {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-desktop-plugin-tarball-"));
+  const packageRoot = path.join(root, "package");
+  const archive = path.join(root, "plugin.tgz");
+  fs.mkdirSync(packageRoot);
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify(packageJson));
+  create({ cwd: root, file: archive, gzip: true, sync: true }, ["package"]);
+  const bytes = fs.readFileSync(archive) as Buffer<ArrayBuffer>;
   const digest = crypto.createHash(algorithm).update(bytes).digest("base64");
   return {
     url: `https://registry.example/tarballs/${crypto.randomUUID()}.tgz`,
@@ -39,23 +46,30 @@ function tempDirectory(name: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `pi-desktop-${name}-`));
 }
 
+function packageNameFromSource(source: string): string {
+  const spec = source.slice(4);
+  const separator = spec.lastIndexOf("@");
+  return separator > 0 ? spec.slice(0, separator) : spec;
+}
+
 function fakePackageManager(manifest: Record<string, string[]> = { extensions: ["./extension.ts"], skills: ["./skills"] }): PackageManagerPort & { progress?: ProgressCallback; installRoot: string } {
   const configured: Array<{ source: string; scope: "user"; filtered: boolean; installedPath?: string }> = [];
+  const installed = new Map<string, string>();
   const installRoot = tempDirectory("plugins");
   return {
     progress: undefined,
     installRoot,
     setProgressCallback(callback) { this.progress = callback; },
     listConfiguredPackages: () => configured,
-    getInstalledPath: (source) => configured.find((entry) => entry.source === source)?.installedPath,
-    installAndPersist: vi.fn(async (source: string) => {
-      const spec = source.slice(4);
-      const separator = spec.lastIndexOf("@");
-      const name = spec.slice(0, separator);
-      const version = spec.slice(separator + 1);
-      const installedPath = path.join(installRoot, Buffer.from(source).toString("hex"));
+    getInstalledPath: (source) => installed.get(packageNameFromSource(source)),
+    install: vi.fn(async (source: string) => {
+      const tarballPath = source.slice(4);
+      const installedPath = path.join(installRoot, crypto.randomUUID());
       fs.mkdirSync(installedPath, { recursive: true });
-      fs.writeFileSync(path.join(installedPath, "package.json"), JSON.stringify({ name, version, pi: manifest }));
+      extract({ file: tarballPath, cwd: installedPath, strip: 1, sync: true });
+      const packageJsonPath = path.join(installedPath, "package.json");
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as Record<string, unknown>;
+      fs.writeFileSync(packageJsonPath, JSON.stringify({ ...packageJson, pi: manifest }));
       for (const entries of Object.values(manifest)) {
         for (const entry of entries) {
           if (entry.includes("*") || entry.startsWith("!")) continue;
@@ -66,19 +80,33 @@ function fakePackageManager(manifest: Record<string, string[]> = { extensions: [
           } else fs.mkdirSync(target, { recursive: true });
         }
       }
-      configured.push({ source, scope: "user", filtered: false, installedPath });
+      installed.set(String(packageJson.name), installedPath);
+    }),
+    addSourceToSettings: vi.fn((source: string) => {
+      if (configured.some((entry) => entry.source === source)) return false;
+      configured.push({ source, scope: "user", filtered: false, installedPath: installed.get(packageNameFromSource(source)) });
+      return true;
     }),
     removeAndPersist: vi.fn(async (source: string) => {
       const index = configured.findIndex((entry) => entry.source === source);
+      const name = packageNameFromSource(source);
+      const installedPath = installed.get(name);
+      if (installedPath) fs.rmSync(installedPath, { recursive: true, force: true });
+      installed.delete(name);
       if (index < 0) return false;
-      const [removed] = configured.splice(index, 1);
-      if (removed.installedPath) fs.rmSync(removed.installedPath, { recursive: true, force: true });
+      configured.splice(index, 1);
       return true;
     }),
   };
 }
 
 describe("PluginService", () => {
+  it("forces package installs to disable lifecycle scripts", () => {
+    expect(lifecycleSafeNpmCommand(undefined)).toEqual(["npm", "--ignore-scripts"]);
+    expect(lifecycleSafeNpmCommand(["corepack", "pnpm"])).toEqual(["corepack", "pnpm", "--ignore-scripts"]);
+    expect(lifecycleSafeNpmCommand(["npm", "--ignore-scripts"])).toEqual(["npm", "--ignore-scripts"]);
+  });
+
   it("searches only tagged pi packages and maps registry metadata", async () => {
     const fetchMock = vi.fn(async () => response({
       total: 2,
@@ -117,7 +145,11 @@ describe("PluginService", () => {
 
   it("validates metadata, installs an exact version and persists it", async () => {
     const manager = fakePackageManager();
-    const fixture = tarballFixture("@demo/pi-tools tarball");
+    const fixture = tarballFixture({
+      name: "@demo/pi-tools",
+      version: "2.0.1",
+      pi: { extensions: ["./extension.ts"], skills: ["./skills"] },
+    });
     const fetchMock = vi.fn(registryFetch({
       name: "@demo/pi-tools",
       version: "2.0.1",
@@ -133,7 +165,11 @@ describe("PluginService", () => {
     const installed = await service.install("@demo/pi-tools", "2.0.1");
 
     expect(fetchMock).toHaveBeenCalledWith(fixture.url);
-    expect(manager.installAndPersist).toHaveBeenCalledWith("npm:@demo/pi-tools@2.0.1");
+    expect(manager.install).toHaveBeenCalledWith(expect.stringMatching(/^npm:.*package\.tgz$/));
+    const stagedSource = vi.mocked(manager.install).mock.calls[0]?.[0];
+    expect(stagedSource).toEqual(expect.stringMatching(/^npm:.*package\.tgz$/));
+    expect(fs.existsSync(stagedSource!.slice(4))).toBe(false);
+    expect(manager.addSourceToSettings).toHaveBeenCalledWith("npm:@demo/pi-tools@2.0.1");
     expect(installed).toEqual([expect.objectContaining({
       name: "@demo/pi-tools",
       version: "2.0.1",
@@ -142,6 +178,32 @@ describe("PluginService", () => {
       provenance: "npm-registry",
       integrity: fixture.integrity,
     })]);
+  });
+
+  it("cleans staged files and rolls back a failed first install", async () => {
+    const manager = fakePackageManager({ themes: ["./themes"] });
+    const fixture = tarballFixture({ name: "pi-install-failure", version: "1.0.0", pi: { themes: ["./themes"] } });
+    let stagedSource = "";
+    vi.mocked(manager.install).mockImplementationOnce(async (source) => {
+      stagedSource = source;
+      throw new Error("package manager failed");
+    });
+    const service = new PluginService("/agent", "/cwd", () => {}, {
+      fetch: registryFetch({
+        name: "pi-install-failure",
+        version: "1.0.0",
+        keywords: ["pi-package"],
+        pi: { themes: ["./themes"] },
+      }, fixture),
+      packageManager: manager,
+      securityStore: new PluginSecurityStore(tempDirectory("plugin-install-failure-security")),
+    });
+
+    await expect(service.install("pi-install-failure", "1.0.0")).rejects.toThrow("package manager failed");
+    expect(manager.removeAndPersist).toHaveBeenCalledWith("npm:pi-install-failure@1.0.0");
+    expect(manager.addSourceToSettings).not.toHaveBeenCalled();
+    expect(stagedSource).toEqual(expect.stringMatching(/^npm:.*package\.tgz$/));
+    expect(fs.existsSync(stagedSource.slice(4))).toBe(false);
   });
 
   it("extracts publisher usage guidance from the package README", async () => {
@@ -171,7 +233,7 @@ describe("PluginService", () => {
     });
 
     await expect(service.install("unsafe", "1.0.0")).rejects.toThrow("pi-package");
-    expect(manager.installAndPersist).not.toHaveBeenCalled();
+    expect(manager.install).not.toHaveBeenCalled();
   });
 
   it("rejects manifest path traversal and exact-version mismatches", async () => {
@@ -190,14 +252,14 @@ describe("PluginService", () => {
       securityStore,
     });
     await expect(mismatch.install("pi-safe", "1.0.0")).rejects.toThrow("不匹配的版本");
-    expect(manager.installAndPersist).not.toHaveBeenCalled();
+    expect(manager.install).not.toHaveBeenCalled();
   });
 
   it("persists registry integrity and supports user and project enablement", async () => {
     const cwd = tempDirectory("project");
     const manager = fakePackageManager({ themes: ["./themes"] });
     const securityStore = new PluginSecurityStore(tempDirectory("plugin-security"));
-    const fixture = tarballFixture("pi-theme tarball");
+    const fixture = tarballFixture({ name: "pi-theme", version: "1.4.0", pi: { themes: ["./themes"] } });
     const service = new PluginService("/agent", cwd, () => {}, {
       fetch: registryFetch({
         name: "pi-theme",
@@ -212,11 +274,12 @@ describe("PluginService", () => {
 
     await service.install("pi-theme", "1.4.0");
     expect(service.listInstalled(cwd)).toEqual([expect.objectContaining({
-      enabled: true,
-      projectEnabled: true,
+      enabled: false,
+      projectEnabled: false,
       integrity: fixture.integrity,
       riskTier: "low",
     })]);
+    service.setEnabled("npm:pi-theme@1.4.0", true);
     service.setEnabled("npm:pi-theme@1.4.0", false, cwd, "project");
     expect(securityStore.isEnabled("npm:pi-theme@1.4.0", cwd)).toBe(false);
     expect(securityStore.isEnabled("npm:pi-theme@1.4.0")).toBe(true);
@@ -303,14 +366,14 @@ describe("PluginService", () => {
         publisher: "Theme Publisher",
         weeklyDownloads: 44,
         monthlyDownloads: 250,
-        riskTier: "low",
+        riskTier: "high",
         compatibility: "desktop",
       }),
       expect.objectContaining({
         name: "pi-skill",
         publisher: "Skill Author",
         score: 0.8,
-        riskTier: "medium",
+        riskTier: "high",
         repositoryUrl: "https://github.com/demo/pi-skill",
       }),
       expect.objectContaining({ name: "pi-blocked", insecure: true, riskTier: "blocked" }),
@@ -320,7 +383,7 @@ describe("PluginService", () => {
   it("rejects unsafe registry responses and rolls back unverifiable installs", async () => {
     const manager = fakePackageManager({ extensions: ["./extension.ts"] });
     const securityStore = new PluginSecurityStore(tempDirectory("plugin-rollback-security"));
-    const fixture = tarballFixture("pi-tampered tarball");
+    const fixture = tarballFixture({ name: "pi-tampered", version: "1.0.0", pi: { themes: ["./themes"] } });
     const responses = [
       response({}, 404),
       response({}, 503),
@@ -352,13 +415,15 @@ describe("PluginService", () => {
     await expect(service.details("pi-mismatch", "1.0.0")).rejects.toThrow("不匹配的版本");
     await expect(service.install("pi-blocked", "1.0.0")).rejects.toThrow("安全风险");
     await expect(service.install("pi-tampered", "1.0.0")).rejects.toThrow("校验失败");
+    expect(manager.install).toHaveBeenCalledWith(expect.stringMatching(/^npm:.*package\.tgz$/));
+    expect(manager.addSourceToSettings).not.toHaveBeenCalledWith("npm:pi-tampered@1.0.0");
     expect(manager.removeAndPersist).toHaveBeenCalledWith("npm:pi-tampered@1.0.0");
     expect(securityStore.list()).toEqual([]);
   });
 
-  it("installs when the tarball matches the registry sha1 integrity fallback", async () => {
+  it("rejects weak sha1-only integrity before installation", async () => {
     const manager = fakePackageManager({ themes: ["./themes"] });
-    const fixture = tarballFixture("pi-legacy-hash tarball", "sha1");
+    const fixture = tarballFixture({ name: "pi-legacy-hash", version: "1.0.0", pi: { themes: ["./themes"] } }, "sha1");
     const service = new PluginService("/agent", "/cwd", () => {}, {
       fetch: registryFetch({
         name: "pi-legacy-hash",
@@ -370,20 +435,15 @@ describe("PluginService", () => {
       securityStore: new PluginSecurityStore(tempDirectory("plugin-sha1-security")),
     });
 
-    const installed = await service.install("pi-legacy-hash", "1.0.0");
-
-    expect(installed).toEqual([expect.objectContaining({
-      name: "pi-legacy-hash",
-      verification: "verified",
-      integrity: fixture.integrity,
-    })]);
+    await expect(service.install("pi-legacy-hash", "1.0.0")).rejects.toThrow("sha512");
+    expect(manager.install).not.toHaveBeenCalled();
   });
 
   it("rejects and rolls back installs whose tarball fails integrity verification", async () => {
     const manager = fakePackageManager({ themes: ["./themes"] });
     const securityStore = new PluginSecurityStore(tempDirectory("plugin-tamper-security"));
-    const fixture = tarballFixture("genuine tarball");
-    const tampered = tarballFixture("tampered tarball").bytes;
+    const fixture = tarballFixture({ name: "pi-guard", version: "1.0.0", pi: { themes: ["./themes"] } });
+    const tampered = tarballFixture({ name: "pi-other", version: "1.0.0", pi: { themes: ["./themes"] } }).bytes;
     const service = new PluginService("/agent", "/cwd", () => {}, {
       fetch: (async (url: RequestInfo | URL) =>
         String(url) === fixture.url
@@ -400,7 +460,8 @@ describe("PluginService", () => {
     });
 
     await expect(service.install("pi-guard", "1.0.0")).rejects.toThrow("完整性校验失败");
-    expect(manager.removeAndPersist).toHaveBeenCalledWith("npm:pi-guard@1.0.0");
+    expect(manager.install).not.toHaveBeenCalled();
+    expect(manager.removeAndPersist).not.toHaveBeenCalled();
     expect(manager.listConfiguredPackages()).toEqual([]);
     const installedPath = path.join(manager.installRoot, Buffer.from("npm:pi-guard@1.0.0").toString("hex"));
     expect(fs.existsSync(installedPath)).toBe(false);
@@ -422,7 +483,8 @@ describe("PluginService", () => {
     });
 
     await expect(service.install("pi-nointegrity", "1.0.0")).rejects.toThrow("完整性校验值");
-    expect(manager.removeAndPersist).toHaveBeenCalledWith("npm:pi-nointegrity@1.0.0");
+    expect(manager.install).not.toHaveBeenCalled();
+    expect(manager.removeAndPersist).not.toHaveBeenCalled();
     expect(manager.listConfiguredPackages()).toEqual([]);
     expect(securityStore.list()).toEqual([]);
   });
@@ -430,7 +492,7 @@ describe("PluginService", () => {
   it("removes installed plugins and validates enablement scope", async () => {
     const manager = fakePackageManager({ themes: ["./themes"] });
     const securityStore = new PluginSecurityStore(tempDirectory("plugin-remove-security"));
-    const fixture = tarballFixture("pi-removable tarball");
+    const fixture = tarballFixture({ name: "pi-removable", version: "1.0.0", pi: { themes: ["./themes"] } });
     const service = new PluginService("/agent", "/cwd", () => {}, {
       fetch: registryFetch({
         name: "pi-removable",
@@ -463,7 +525,8 @@ describe("PluginService", () => {
         { source: "git:https://example.com/plugin", scope: "user", filtered: false },
       ],
       getInstalledPath: () => undefined,
-      installAndPersist: vi.fn(),
+      install: vi.fn(),
+      addSourceToSettings: vi.fn(),
       removeAndPersist: vi.fn(),
     };
     const service = new PluginService("/agent", "/cwd", () => {}, {

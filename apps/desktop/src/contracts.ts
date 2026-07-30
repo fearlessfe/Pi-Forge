@@ -403,6 +403,17 @@ export type PromptImage = {
   data: string;
 };
 
+/** IPC 与 Agent Runtime 共同执行的消息附件资源上限。 */
+export const maxPromptImageBytes = 10 * 1024 * 1024;
+export const maxPromptImagesPerMessage = 8;
+export const maxPromptImageTotalBytes = 32 * 1024 * 1024;
+export const maxPromptTextAttachmentBytes = 1024 * 1024;
+export const maxPromptTextAttachmentsPerMessage = 10;
+export const maxPromptTextAttachmentTotalBytes = 5 * 1024 * 1024;
+export const maxPromptAttachmentNameBytes = 512;
+export const maxPromptMimeTypeLength = 128;
+export const supportedPromptImageMimeTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+
 /** 随消息发送的文本文件附件；Electron 根据实际字节数决定内联或按需读取。 */
 export type PromptFileAttachment = {
   name: string;

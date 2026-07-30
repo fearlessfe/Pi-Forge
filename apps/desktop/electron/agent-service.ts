@@ -60,6 +60,7 @@ import {
   maxAttachmentReadBytes,
   type PreparedAttachment,
 } from "./attachment-store.js";
+import { validatePromptExtras } from "./ipc-input-validation.js";
 
 type EventSink = (event: AgentEvent) => void;
 
@@ -103,19 +104,19 @@ export type PromptExtras = {
   attachments?: PromptFileAttachment[];
 };
 
-function sanitizeImages(images: PromptImage[] | undefined): ImageContent[] {
-  return (images ?? [])
-    .filter((image) => image && typeof image.data === "string" && typeof image.mimeType === "string" && image.data && image.mimeType)
-    .map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType }));
-}
-
-function sanitizeAttachments(attachments: PromptFileAttachment[] | undefined): PromptFileAttachment[] {
-  return (attachments ?? []).filter((attachment) => attachment && typeof attachment.name === "string" && typeof attachment.content === "string")
-    .map((attachment) => ({
-      name: attachment.name,
-      mimeType: typeof attachment.mimeType === "string" ? attachment.mimeType : "text/plain",
-      content: attachment.content,
-    }));
+function runtimePromptExtras(extras: PromptExtras | undefined): {
+  images: ImageContent[];
+  attachments: PromptFileAttachment[];
+} {
+  const validated = validatePromptExtras(extras ?? {});
+  return {
+    images: (validated.images ?? []).map((image) => ({
+      type: "image",
+      data: image.data,
+      mimeType: image.mimeType,
+    })),
+    attachments: validated.attachments ?? [],
+  };
 }
 
 function escapeXmlAttribute(value: string): string {
@@ -260,8 +261,7 @@ export class AgentService {
 
   async send(prompt: string, cwd?: string, conversationId?: string, extras?: PromptExtras): Promise<string> {
     if (this.running) throw new Error("Agent 正在执行，请先停止当前任务或等待完成。");
-    const images = sanitizeImages(extras?.images);
-    const attachments = sanitizeAttachments(extras?.attachments);
+    const { images, attachments } = runtimePromptExtras(extras);
     if (!prompt.trim() && images.length === 0 && attachments.length === 0) throw new Error("消息不能为空。");
 
     const resolvedCwd = this.resolveCwd(cwd);
@@ -372,8 +372,7 @@ export class AgentService {
 
   async queueMessage(prompt: string, mode: "steer" | "followUp", extras?: PromptExtras): Promise<{ steering: string[]; followUp: string[] }> {
     if (!this.running || !this.session) throw new Error("当前没有正在运行的 Agent 任务。");
-    const images = sanitizeImages(extras?.images);
-    const attachments = sanitizeAttachments(extras?.attachments);
+    const { images, attachments } = runtimePromptExtras(extras);
     if (!prompt.trim() && images.length === 0 && attachments.length === 0) throw new Error("排队消息不能为空。");
     await this.assertImagesSupported(this.settings.resolve(), images);
     const preparedAttachments = this.attachmentStore.create(this.session.sessionManager.getSessionId(), attachments);
