@@ -151,7 +151,7 @@ This direction does not require rewriting the desktop application all at once. P
 
 ### Requirements
 
-- Node.js 22.19+
+- Node.js 24.10+
 - pnpm 10+
 - macOS or Linux for the complete command-sandbox experience; other platforms safely fall back to pre-execution approval
 

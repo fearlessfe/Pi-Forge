@@ -49,12 +49,32 @@ describe("PluginSecurityStore", () => {
         skills: ["./skills", 42 as unknown as string],
         prompts: ["./prompts"],
       },
+      securityScan: {
+        scannerVersion: 1,
+        status: "review",
+        scannedAt: "2026-07-31T00:00:00.000Z",
+        scannedFiles: 2,
+        scannedBytes: 120,
+        skippedFiles: 0,
+        truncated: false,
+        findings: [{
+          ruleId: "prompt-ignore-instructions",
+          category: "prompt-injection",
+          severity: "high",
+          confidence: "medium",
+          path: "skills/review/SKILL.md",
+          line: 3,
+          message: "需要审核",
+          remediation: "删除覆盖指令",
+        }],
+      },
       enabled: false,
     });
     expect(saved).toMatchObject({
       enabled: false,
       resources: ["skills", "prompts"],
       manifest: { skills: ["./skills"], prompts: ["./prompts"] },
+      securityScan: expect.objectContaining({ status: "review", scannedFiles: 2 }),
       projectOverrides: {},
     });
     expect(store.isEnabled(source, project)).toBe(false);
@@ -76,6 +96,7 @@ describe("PluginSecurityStore", () => {
     });
     expect(updated.enabled).toBe(true);
     expect(updated.projectOverrides).toEqual({ [fs.realpathSync(project)]: false });
+    expect(updated.securityScan).toBeUndefined();
 
     store.remove("npm:missing@1.0.0");
     store.remove(source);
@@ -95,6 +116,44 @@ describe("PluginSecurityStore", () => {
       enabled: false,
     });
     expect(store.isEnabled(legacy.source)).toBe(false);
+  });
+
+  it("fails closed when persisted scan findings block a plugin", () => {
+    const store = new PluginSecurityStore(directory("blocked"));
+    const source = "npm:pi-blocked@1.0.0";
+    const saved = store.save({
+      source,
+      name: "pi-blocked",
+      version: "1.0.0",
+      provenance: "npm-registry",
+      riskTier: "high",
+      resources: ["prompts"],
+      manifest: { prompts: ["./prompt.md"] },
+      securityScan: {
+        scannerVersion: 1,
+        status: "clean",
+        scannedAt: "2026-07-31T00:00:00.000Z",
+        scannedFiles: 1,
+        scannedBytes: 80,
+        skippedFiles: 0,
+        truncated: false,
+        findings: [{
+          ruleId: "secret-service-token",
+          category: "secrets",
+          severity: "critical",
+          confidence: "high",
+          path: "prompt.md",
+          line: 1,
+          message: "存在凭据",
+          remediation: "移除凭据",
+        }],
+      },
+      enabled: true,
+    });
+
+    expect(saved.securityScan?.status).toBe("blocked");
+    expect(saved.enabled).toBe(false);
+    expect(() => store.setEnabled(source, true)).toThrow("阻止启用");
   });
 
   it("sanitizes partially corrupted persisted records without losing valid trust data", () => {

@@ -1,6 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { PluginManifest, PluginResourceType, PluginRiskTier } from "../src/contracts.js";
+import type {
+  PluginContentScanReport,
+  PluginManifest,
+  PluginResourceType,
+  PluginRiskTier,
+  PluginSecurityCategory,
+  PluginSecurityConfidence,
+  PluginSecuritySeverity,
+} from "../src/contracts.js";
 
 export type PluginSecurityRecord = {
   source: string;
@@ -14,6 +22,7 @@ export type PluginSecurityRecord = {
   resources: PluginResourceType[];
   manifest: PluginManifest;
   installedAt?: string;
+  securityScan?: PluginContentScanReport;
   enabled: boolean;
   projectOverrides: Record<string, boolean>;
 };
@@ -25,6 +34,9 @@ type StoredPluginSecurity = {
 
 const sourcePattern = /^npm:(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*@[0-9A-Za-z][0-9A-Za-z.+_-]*$/i;
 const resourceTypes = new Set<PluginResourceType>(["extensions", "skills", "prompts", "themes"]);
+const securityCategories = new Set<PluginSecurityCategory>(["secrets", "hidden-content", "prompt-injection", "permissions", "execution", "network", "mcp", "coverage"]);
+const securitySeverities = new Set<PluginSecuritySeverity>(["critical", "high", "medium", "low"]);
+const securityConfidences = new Set<PluginSecurityConfidence>(["high", "medium"]);
 
 function canonicalPath(value: string): string {
   const resolved = path.resolve(value);
@@ -47,6 +59,54 @@ function cleanManifest(value: unknown): PluginManifest {
   return result;
 }
 
+function finiteCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+function cleanSecurityScan(value: unknown): PluginContentScanReport | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const input = value as Record<string, unknown>;
+  if (input.scannerVersion !== 1 || (input.status !== "clean" && input.status !== "review" && input.status !== "blocked")) return undefined;
+  const findings = Array.isArray(input.findings) ? input.findings.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const finding = entry as Record<string, unknown>;
+    if (
+      typeof finding.ruleId !== "string"
+      || !securityCategories.has(finding.category as PluginSecurityCategory)
+      || !securitySeverities.has(finding.severity as PluginSecuritySeverity)
+      || !securityConfidences.has(finding.confidence as PluginSecurityConfidence)
+      || typeof finding.path !== "string"
+      || path.isAbsolute(finding.path)
+      || finding.path.split(/[\\/]+/).includes("..")
+      || typeof finding.message !== "string"
+      || typeof finding.remediation !== "string"
+    ) return [];
+    return [{
+      ruleId: finding.ruleId.slice(0, 80),
+      category: finding.category as PluginSecurityCategory,
+      severity: finding.severity as PluginSecuritySeverity,
+      confidence: finding.confidence as PluginSecurityConfidence,
+      path: finding.path.slice(0, 1_024),
+      line: Math.max(1, finiteCount(finding.line)),
+      message: finding.message.slice(0, 1_000),
+      remediation: finding.remediation.slice(0, 2_000),
+    }];
+  }).slice(0, 200) : [];
+  const status = input.status === "blocked" || findings.some((finding) => finding.severity === "critical" && finding.confidence === "high")
+    ? "blocked"
+    : input.status === "review" || findings.length > 0 ? "review" : "clean";
+  return {
+    scannerVersion: 1,
+    status,
+    scannedAt: typeof input.scannedAt === "string" ? input.scannedAt : "",
+    scannedFiles: finiteCount(input.scannedFiles),
+    scannedBytes: finiteCount(input.scannedBytes),
+    skippedFiles: finiteCount(input.skippedFiles),
+    truncated: input.truncated === true,
+    findings,
+  };
+}
+
 export class PluginSecurityStore {
   private readonly filePath: string;
 
@@ -59,6 +119,7 @@ export class PluginSecurityStore {
       ...record,
       resources: [...record.resources],
       manifest: cleanManifest(record.manifest),
+      securityScan: cleanSecurityScan(record.securityScan),
       projectOverrides: { ...record.projectOverrides },
     }));
   }
@@ -71,11 +132,13 @@ export class PluginSecurityStore {
     if (!sourcePattern.test(record.source)) throw new Error("插件来源格式无效。");
     const current = this.read();
     const previous = current.records.find((entry) => entry.source === record.source);
+    const securityScan = cleanSecurityScan(record.securityScan);
     const next: PluginSecurityRecord = {
       ...record,
       resources: record.resources.filter((entry) => resourceTypes.has(entry)),
       manifest: cleanManifest(record.manifest),
-      enabled: record.enabled ?? previous?.enabled ?? true,
+      securityScan,
+      enabled: record.riskTier === "blocked" || securityScan?.status === "blocked" ? false : record.enabled ?? previous?.enabled ?? true,
       projectOverrides: record.projectOverrides ?? previous?.projectOverrides ?? {},
     };
     this.write({ version: 1, records: [...current.records.filter((entry) => entry.source !== record.source), next] });
@@ -92,6 +155,9 @@ export class PluginSecurityStore {
     if (!sourcePattern.test(source)) throw new Error("插件来源格式无效。");
     const current = this.read();
     const existing = current.records.find((record) => record.source === source) ?? this.legacyRecord(source);
+    if (enabled && (existing.riskTier === "blocked" || existing.securityScan?.status === "blocked")) {
+      throw new Error("插件内容安全扫描已阻止启用。");
+    }
     const next = scope === "project" && cwd
       ? { ...existing, projectOverrides: { ...existing.projectOverrides, [canonicalPath(cwd)]: enabled } }
       : { ...existing, enabled };
@@ -158,6 +224,7 @@ export class PluginSecurityStore {
             : [],
           manifest: cleanManifest(input.manifest),
           installedAt: typeof input.installedAt === "string" ? input.installedAt : undefined,
+          securityScan: cleanSecurityScan(input.securityScan),
           enabled: typeof input.enabled === "boolean" ? input.enabled : true,
           projectOverrides,
         }];

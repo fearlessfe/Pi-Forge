@@ -558,6 +558,40 @@ export type PluginResourceType = "extensions" | "skills" | "prompts" | "themes";
 export type PluginRiskTier = "low" | "medium" | "high" | "blocked";
 export type PluginManifest = Partial<Record<PluginResourceType, string[]>>;
 
+export type PluginSecuritySeverity = "critical" | "high" | "medium" | "low";
+export type PluginSecurityConfidence = "high" | "medium";
+export type PluginSecurityCategory =
+  | "secrets"
+  | "hidden-content"
+  | "prompt-injection"
+  | "permissions"
+  | "execution"
+  | "network"
+  | "mcp"
+  | "coverage";
+
+export type PluginSecurityFinding = {
+  ruleId: string;
+  category: PluginSecurityCategory;
+  severity: PluginSecuritySeverity;
+  confidence: PluginSecurityConfidence;
+  path: string;
+  line: number;
+  message: string;
+  remediation: string;
+};
+
+export type PluginContentScanReport = {
+  scannerVersion: 1;
+  status: "clean" | "review" | "blocked";
+  scannedAt: string;
+  scannedFiles: number;
+  scannedBytes: number;
+  skippedFiles: number;
+  truncated: boolean;
+  findings: PluginSecurityFinding[];
+};
+
 export type PluginPackage = {
   name: string;
   version: string;
@@ -601,6 +635,7 @@ export type InstalledPlugin = {
   riskTier: PluginRiskTier;
   resources: PluginResourceType[];
   installedAt?: string;
+  securityScan?: PluginContentScanReport;
   verification: "verified" | "legacy" | "missing" | "tampered";
 };
 

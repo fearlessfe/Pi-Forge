@@ -12,7 +12,7 @@
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.10.0"
   },
   "scripts": {
     "postinstall": "node scripts/ensure-node-pty-helper.mjs",
