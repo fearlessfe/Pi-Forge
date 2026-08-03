@@ -1,6 +1,6 @@
 import type { AgentEvent, RuntimeRecoveryInfo } from "../src/contracts.js";
 
-export const agentRuntimeProtocolVersion = 1;
+export const agentRuntimeProtocolVersion = 2;
 
 export type AgentRuntimeInit = {
   protocolVersion: typeof agentRuntimeProtocolVersion;
@@ -39,6 +39,7 @@ export type AgentRuntimeMethod =
   | "revertChanges"
   | "getPermissionRuntime"
   | "getResourceInventory"
+  | "getContextBudget"
   | "reloadPackages"
   | "refreshCapabilities"
   | "getPluginRuntime"
@@ -78,6 +79,7 @@ export type HostMethod =
   | "credential.write"
   | "credential.delete"
   | "mcp.tools"
+  | "mcp.contextInventory"
   | "mcp.callTool"
   | "browser.startAnnotation";
 

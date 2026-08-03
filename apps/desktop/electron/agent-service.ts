@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AgentEvent,
   CapabilitySettings,
+  ContextBudgetReport,
   ConversationHistoryDetail,
   ConversationHistoryItem,
   PluginRuntimeStatus,
@@ -45,7 +46,7 @@ import {
   type ProtocolModelMetadata,
 } from "./model-metadata-catalog.js";
 import { ModelMetadataStore } from "./model-metadata-store.js";
-import type { McpToolDescriptor } from "./mcp-service.js";
+import type { McpContextResource, McpToolDescriptor } from "./mcp-service.js";
 import type { BrowserDebugPort } from "./browser-service.js";
 import { SubagentRunStore } from "./subagent-run-store.js";
 import { errorMessage } from "./error-message.js";
@@ -61,6 +62,11 @@ import {
   type PreparedAttachment,
 } from "./attachment-store.js";
 import { validatePromptExtras } from "./ipc-input-validation.js";
+import {
+  buildContextBudgetReport,
+  stableContextValue,
+  type ContextBudgetResource,
+} from "./context-budget.js";
 
 type EventSink = (event: AgentEvent) => void;
 
@@ -90,6 +96,7 @@ type ResourceSettingsReader = Pick<{
 type PluginSecurityReader = Pick<{ isEnabled(source: string, cwd?: string): boolean }, "isEnabled">;
 type McpRuntimePort = {
   tools(cwd?: string): Promise<McpToolDescriptor[]>;
+  contextInventory(cwd?: string): Promise<McpContextResource[]>;
   callTool(descriptor: McpToolDescriptor, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ text: string; details: unknown }>;
 };
 
@@ -505,6 +512,142 @@ export class AgentService {
       ].map((diagnostic) => ({ type: diagnostic.type, message: diagnostic.message, path: diagnostic.path })),
       commands: commands.sort((left, right) => left.name.localeCompare(right.name)),
     };
+  }
+
+  async getContextBudget(cwd?: string): Promise<ContextBudgetReport> {
+    const resolvedCwd = this.resolveCwd(cwd);
+    const resourceSettings = this.resources.getSettings();
+    const projectContextEnabled = resourceSettings.workspaceContextEnabled && this.resources.isProjectTrusted(resolvedCwd);
+    const loader = createDesktopResourceLoader({
+      cwd: resolvedCwd,
+      agentDir: this.agentDir,
+      projectContextEnabled,
+      filterExtensions: (base, targetCwd) => this.capabilityPolicy.filterCapabilityExtensions(base, targetCwd),
+      isPluginSourceEnabled: (source, targetCwd) => this.capabilityPolicy.isPluginSourceEnabled(source, targetCwd),
+    });
+    await loader.reload();
+
+    const budgetResources: ContextBudgetResource[] = [];
+    const systemPrompt = loader.getSystemPrompt();
+    if (systemPrompt) {
+      const scope = projectContextEnabled && fs.existsSync(path.join(resolvedCwd, ".pi", "SYSTEM.md")) ? "project" : "user";
+      budgetResources.push({
+        category: "systemPrompt",
+        name: "SYSTEM.md",
+        source: "agent",
+        scope,
+        enabled: true,
+        disableSupported: false,
+        baselineText: systemPrompt,
+      });
+    }
+    loader.getAppendSystemPrompt().forEach((content, index) => {
+      const scope = projectContextEnabled && fs.existsSync(path.join(resolvedCwd, ".pi", "APPEND_SYSTEM.md")) ? "project" : "user";
+      budgetResources.push({
+        category: "systemPrompt",
+        name: index === 0 ? "APPEND_SYSTEM.md" : `APPEND_SYSTEM.md ${index + 1}`,
+        source: "agent",
+        scope,
+        enabled: true,
+        disableSupported: false,
+        baselineText: content,
+      });
+    });
+
+    for (const agentsFile of loader.getAgentsFiles().agentsFiles) {
+      const scope = path.resolve(agentsFile.path).startsWith(`${path.resolve(this.agentDir)}${path.sep}`) ? "user" : "project";
+      budgetResources.push({
+        category: "agents",
+        name: path.basename(agentsFile.path),
+        source: scope,
+        scope,
+        enabled: true,
+        disableSupported: false,
+        baselineText: `<project_instructions path="${agentsFile.path}">\n${agentsFile.content}\n</project_instructions>`,
+      });
+    }
+
+    for (const skill of loader.getSkills().skills) {
+      let content = "";
+      let estimateStatus: ContextBudgetResource["estimateStatus"] = "estimated";
+      try {
+        content = fs.readFileSync(skill.filePath, "utf8");
+      } catch {
+        estimateStatus = "unavailable";
+      }
+      const enabled = !resourceSettings.disabledSkills.includes(skill.name);
+      budgetResources.push({
+        category: "skills",
+        name: skill.name,
+        source: skill.sourceInfo.origin === "package" ? "package" : skill.sourceInfo.scope,
+        scope: skill.sourceInfo.scope,
+        enabled,
+        disableSupported: true,
+        baselineText: skill.disableModelInvocation ? "" : stableContextValue({
+          name: skill.name,
+          description: skill.description,
+          location: skill.filePath,
+        }),
+        onDemandText: content,
+        estimateStatus,
+      });
+    }
+
+    for (const prompt of loader.getPrompts().prompts) {
+      budgetResources.push({
+        category: "prompts",
+        name: `/${prompt.name}`,
+        source: prompt.sourceInfo.origin === "package" ? "package" : prompt.sourceInfo.scope,
+        scope: prompt.sourceInfo.scope,
+        enabled: true,
+        disableSupported: false,
+        onDemandText: prompt.content,
+      });
+    }
+
+    for (const extension of loader.getExtensions().extensions) {
+      const toolContext = [...extension.tools.values()].map(({ definition }) => ({
+        name: definition.name,
+        label: definition.label,
+        description: definition.description,
+        promptSnippet: definition.promptSnippet,
+        promptGuidelines: definition.promptGuidelines,
+        parameters: definition.parameters,
+      }));
+      budgetResources.push({
+        category: "extensions",
+        name: path.basename(extension.path),
+        source: extension.sourceInfo.origin === "package" ? "package" : extension.sourceInfo.scope,
+        scope: extension.sourceInfo.scope,
+        enabled: true,
+        disableSupported: false,
+        baselineText: toolContext.length > 0 ? stableContextValue(toolContext) : "",
+      });
+    }
+
+    const mcpResources = this.mcp ? await this.mcp.contextInventory(resolvedCwd) : [];
+    for (const server of mcpResources) {
+      const toolContext = server.tools.map((descriptor) => ({
+        name: descriptor.name,
+        label: `MCP · ${descriptor.remoteName}`,
+        description: descriptor.description,
+        promptSnippet: `Call ${descriptor.remoteName} on its configured MCP Server`,
+        promptGuidelines: ["Use MCP tools only when their external capability is needed and send the minimum necessary data."],
+        parameters: descriptor.inputSchema,
+      }));
+      budgetResources.push({
+        category: "mcpSchemas",
+        name: server.name,
+        source: "MCP",
+        scope: server.scope,
+        enabled: server.enabled,
+        disableSupported: true,
+        baselineText: server.schemaAvailable ? stableContextValue(toolContext) : "",
+        estimateStatus: server.schemaAvailable ? "estimated" : "unavailable",
+      });
+    }
+
+    return buildContextBudgetReport(resolvedCwd, budgetResources);
   }
 
   async reloadPackages(): Promise<boolean> {

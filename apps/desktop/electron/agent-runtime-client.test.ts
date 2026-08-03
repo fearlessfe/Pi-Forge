@@ -82,7 +82,7 @@ function baseOptions(events: AgentEvent[]): ClientOptions {
       modify: vi.fn(async (_provider: string, update: (current: unknown) => Promise<unknown>) => update(undefined)),
       delete: vi.fn(async () => undefined),
     } as unknown as CredentialStore,
-    mcp: { tools: vi.fn(async () => []), callTool: vi.fn(async () => ({ text: "", details: undefined })) },
+    mcp: { tools: vi.fn(async () => []), contextInventory: vi.fn(async () => []), callTool: vi.fn(async () => ({ text: "", details: undefined })) },
     browser: { startAnnotation: vi.fn() } as unknown as BrowserDebugPort,
     emit: (event) => events.push(event),
   };
@@ -298,6 +298,7 @@ describe("AgentRuntimeClient", () => {
     const client = createClient([], {
       mcp: {
         tools: vi.fn(async () => []),
+        contextInventory: vi.fn(async () => []),
         callTool: vi.fn((_descriptor: unknown, _args: Record<string, unknown>, signal?: AbortSignal) => {
           observedSignal = signal;
           return new Promise<{ text: string; details: unknown }>(() => undefined);
@@ -341,7 +342,7 @@ describe("AgentRuntimeClient", () => {
 
   it("routes every host method to its injected handler", async () => {
     const browser = { startAnnotation: vi.fn(async () => ({ success: true })) };
-    const mcp = { tools: vi.fn(async () => [{ name: "tool" }]), callTool: vi.fn(async () => ({ text: "", details: undefined })) };
+    const mcp = { tools: vi.fn(async () => [{ name: "tool" }]), contextInventory: vi.fn(async () => []), callTool: vi.fn(async () => ({ text: "", details: undefined })) };
     createClient([], { browser: browser as unknown as BrowserDebugPort, mcp: mcp as unknown as ClientOptions["mcp"] });
     const child = lastChild();
     emitReady(child);
@@ -351,6 +352,7 @@ describe("AgentRuntimeClient", () => {
       ["host-write", "credential.write", ["openai", { type: "api_key", key: "k" }]],
       ["host-delete", "credential.delete", ["openai"]],
       ["host-tools", "mcp.tools", []],
+      ["host-context", "mcp.contextInventory", []],
       ["host-annotation", "browser.startAnnotation", []],
     ];
     for (const [id, method, args] of hostRequests) {
@@ -362,6 +364,7 @@ describe("AgentRuntimeClient", () => {
     const responses = child.sent.filter((message) => message.kind === "host.response");
     expect(responses.every((message) => !("error" in message && message.error))).toBe(true);
     expect(mcp.tools).toHaveBeenCalledOnce();
+    expect(mcp.contextInventory).toHaveBeenCalledOnce();
     expect(browser.startAnnotation).toHaveBeenCalledOnce();
   });
 
@@ -390,6 +393,7 @@ describe("AgentRuntimeClient", () => {
       [() => client.revertChanges(["change-1"]), []],
       [() => client.getPermissionRuntime(), { mode: "balanced" }],
       [() => client.getResourceInventory("/tmp"), { cwd: "/tmp" }],
+      [() => client.getContextBudget("/tmp"), { cwd: "/tmp", totalEstimatedTokens: 0 }],
       [() => client.reloadPackages(), true],
       [() => client.refreshCapabilities(), { hasSession: true }],
       [() => client.getPluginRuntime(), { hasSession: true }],

@@ -10,6 +10,7 @@ import {
   maxPromptTextAttachmentsPerMessage,
   maxPromptTextAttachmentTotalBytes,
   supportedPromptImageMimeTypes,
+  type ContextBudgetRequest,
   type PromptFileAttachment,
   type PromptImage,
   type QueuePromptInput,
@@ -54,6 +55,10 @@ export const queuePromptInputSchema = Type.Object({
   prompt: Type.String({ maxLength: maxPromptCharacters }),
   mode: Type.Union([Type.Literal("steer"), Type.Literal("followUp")]),
   ...promptExtrasProperties,
+}, { additionalProperties: false });
+
+export const contextBudgetRequestSchema = Type.Object({
+  cwd: Type.Optional(Type.String({ maxLength: 4096 })),
 }, { additionalProperties: false });
 
 export const modelSettingsInputSchema = Type.Object({
@@ -204,6 +209,10 @@ export function requireSendPromptInput(value: unknown): SendPromptInput {
 export function requireQueuePromptInput(value: unknown): QueuePromptInput {
   const input = requireSchema<QueuePromptInput>(queuePromptInputSchema, value, "排队消息字段无效。");
   return { ...input, ...validatePromptExtras(input) };
+}
+
+export function requireContextBudgetRequest(value: unknown): ContextBudgetRequest {
+  return requireSchema<ContextBudgetRequest>(contextBudgetRequestSchema, value ?? {}, "Context Budget 请求无效。");
 }
 
 export function requireModelSettings(value: unknown): SaveModelSettings {

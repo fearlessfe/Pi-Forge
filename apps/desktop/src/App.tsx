@@ -5,7 +5,7 @@ import { NewChatView } from "./components/NewChatView";
 import { PluginCenterView } from "./components/PluginCenterView";
 import { SettingsView } from "./components/SettingsView";
 import { BrowserWorkbench } from "./components/BrowserWorkbench";
-import type { AppearanceTheme, AuthEvent, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
+import type { AppearanceTheme, AuthEvent, ContextBudgetReport, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
 import { applyAgentEvent } from "./agent-event-state";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { emptyComposerAttachments, promptFileAttachmentsOf, promptImagesOf, turnAttachmentsOf, type ComposerAttachments } from "./composer-attachments";
@@ -131,6 +131,7 @@ export function App() {
   const [workspaceTrust, setWorkspaceTrust] = useState<WorkspaceTrustStatus>();
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo>();
+  const [contextBudget, setContextBudget] = useState<ContextBudgetReport>();
   const [authFlow, setAuthFlow] = useState<AuthFlowState | null>(null);
   const [prompt, setPrompt] = useState("");
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachments>(emptyComposerAttachments);
@@ -187,6 +188,18 @@ export function App() {
       ? current
       : { ...current, [selectedConversationId]: turns });
   }, [selectedConversationId, turns]);
+
+  useEffect(() => {
+    if (view !== "chat" || !window.piDesktop?.resources?.contextBudget) return;
+    let cancelled = false;
+    const input = project?.path ? { cwd: project.path } : undefined;
+    void window.piDesktop.resources.contextBudget(input).then((report) => {
+      if (!cancelled) setContextBudget(report);
+    }).catch(() => {
+      if (!cancelled) setContextBudget(undefined);
+    });
+    return () => { cancelled = true; };
+  }, [project?.path, resourceSettings.workspaceContextEnabled, systemPromptSettings.content, view, workspaceTrust?.trusted]);
 
   useEffect(() => {
     void refreshModelSettings();
@@ -1054,6 +1067,7 @@ export function App() {
                   modelProviders={configuredModelProviders}
                   modelSupportsImages={currentModelSupportsImages}
                   contextUsage={displayedContextUsage}
+                  contextBudget={contextBudget}
                   prompt={prompt}
                   attachments={composerAttachments}
                   isRunning={isRunning}
@@ -1064,6 +1078,7 @@ export function App() {
                   onProjectChange={setProject}
                   onChooseWorkspace={() => void chooseWorkspace()}
                   onOpenTerminal={() => setTerminalOpen(true)}
+                  onOpenContextBudget={() => { setSettingsSection("context-budget"); setView("settings"); }}
                   onModelChange={(providerId, modelId) => void selectChatModel(providerId, modelId)}
                   onSubmit={submitPrompt}
                   onStop={() => void stopAgent()}

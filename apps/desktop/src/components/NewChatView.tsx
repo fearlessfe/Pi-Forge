@@ -15,6 +15,7 @@ import {
   Folder,
   FolderOpen,
   GitFork,
+  Gauge,
   MessageCircleQuestion,
   Paperclip,
   RotateCcw,
@@ -28,7 +29,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { CommandInfo, ContextUsageInfo, ProviderCatalogEntry, ProviderId, QueuedMessages, ResponseUsage, TaskFileChange } from "../contracts";
+import type { CommandInfo, ContextBudgetReport, ContextUsageInfo, ProviderCatalogEntry, ProviderId, QueuedMessages, ResponseUsage, TaskFileChange } from "../contracts";
 import { classifyAttachmentFile, hasComposerAttachments, inlineTextFileBytes, maxImageBytes, maxTextFileBytes, type ComposerAttachments, type ComposerFile, type ComposerImage } from "../composer-attachments";
 import { normalizeVisibleActivities } from "../conversation-activity";
 import { fileExtension, isArtifactChange } from "../file-changes";
@@ -47,6 +48,7 @@ type NewChatViewProps = {
   modelProviders: ProviderCatalogEntry[];
   modelSupportsImages: boolean;
   contextUsage?: ContextUsageInfo;
+  contextBudget?: ContextBudgetReport;
   prompt: string;
   attachments: ComposerAttachments;
   isRunning: boolean;
@@ -57,6 +59,7 @@ type NewChatViewProps = {
   onProjectChange: (project: Project | null) => void;
   onChooseWorkspace: () => void;
   onOpenTerminal: () => void;
+  onOpenContextBudget: () => void;
   onModelChange: (provider: ProviderId, modelId: string) => void;
   onSubmit: (promptOverride?: string) => void;
   onStop: () => void;
@@ -307,21 +310,53 @@ function formatCost(cost: number): string {
   return `$${cost < 0.001 ? cost.toFixed(6) : cost.toFixed(4)}`;
 }
 
-function ContextIndicator({ usage, className = "" }: { usage?: ContextUsageInfo; className?: string }) {
+export function ContextIndicator({
+  usage,
+  budget,
+  className = "",
+  onOpenBudget,
+}: {
+  usage?: ContextUsageInfo;
+  budget?: ContextBudgetReport;
+  className?: string;
+  onOpenBudget: () => void;
+}) {
   const { t, locale } = useI18n();
-  if (!usage || usage.contextWindow <= 0) return null;
-  const percent = usage.percent === null ? null : Math.min(100, Math.max(0, usage.percent));
+  const hasUsage = Boolean(usage && usage.contextWindow > 0);
+  if (!hasUsage && !budget) return null;
+  const percent = usage?.percent === null || usage?.percent === undefined ? null : Math.min(100, Math.max(0, usage.percent));
   const tone = percent !== null && percent >= 90 ? "is-critical" : percent !== null && percent >= 70 ? "is-warning" : "";
-  const title = usage.tokens === null
+  const title = usage?.tokens === null
     ? t("上下文刚完成压缩，将在模型下次响应后更新；上限 {limit} tokens", { limit: usage.contextWindow.toLocaleString(locale) })
-    : t("当前上下文 {used} / {limit} tokens", { used: usage.tokens.toLocaleString(locale), limit: usage.contextWindow.toLocaleString(locale) });
-  return (
-    <span className={`context-indicator ${tone} ${className}`} title={title}>
+    : usage ? t("当前上下文 {used} / {limit} tokens", { used: usage.tokens.toLocaleString(locale), limit: usage.contextWindow.toLocaleString(locale) }) : "";
+  const usageIndicator = hasUsage && usage ? <span className={`context-indicator ${tone}`} title={title}>
       <span>{t("上下文")}</span>
       <strong>{usage.tokens === null ? "?" : formatTokens(usage.tokens)} / {formatTokens(usage.contextWindow)}</strong>
       <progress max={100} value={percent ?? 0} aria-label={t("上下文使用比例")} />
       <em>{percent === null ? t("待更新") : `${percent.toFixed(0)}%`}</em>
-    </span>
+    </span> : null;
+  if (!budget) return <span className={className}>{usageIndicator}</span>;
+
+  const heaviest = budget.groups.flatMap((group) => group.items)
+    .filter((item) => item.estimateStatus === "estimated" && item.estimatedTokens > 0)
+    .sort((left, right) => right.estimatedTokens - left.estimatedTokens || left.name.localeCompare(right.name))
+    .slice(0, 3);
+  return (
+    <details className={`group relative ${className}`}>
+      <summary className="flex cursor-pointer list-none items-center gap-base rounded-sm px-tight py-tight text-caption text-label-3 transition-colors duration-150 ease-apple hover:bg-fill focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/32 [&::-webkit-details-marker]:hidden" aria-label={t("查看上下文与资源预算")}>
+        {usageIndicator}
+        <span className="inline-flex items-center gap-tight rounded-full bg-accent/8 px-base py-tight text-accent"><Gauge size={12} /><span>{t("资源")}</span><strong className="font-mono font-semibold">{formatTokens(budget.totalEstimatedTokens)}</strong></span>
+        <ChevronDown className="transition-transform duration-150 ease-apple group-open:rotate-180" size={12} aria-hidden="true" />
+      </summary>
+      <section className="absolute right-0 bottom-[calc(100%+8px)] z-30 w-[340px] max-w-[calc(100vw-32px)] rounded-md border border-separator bg-bg p-card text-left shadow-3" aria-label={t("资源预算明细")}>
+        <header><strong className="text-callout font-semibold text-label">{t("资源预算")}</strong><p className="mt-tight text-caption leading-normal text-label-3">{t("这是当前上下文的组成部分，不会与上下文用量重复相加。")}</p></header>
+        <dl className="mt-loose grid grid-cols-3 gap-base">
+          {[{ label: "基础资源", value: budget.baselineEstimatedTokens }, { label: "按需资源", value: budget.onDemandEstimatedTokens }, { label: "可禁用节省", value: budget.estimatedSavingsTokens }].map((entry) => <div className="rounded-sm bg-bg-grouped px-base py-base" key={entry.label}><dt className="text-mini text-label-3">{t(entry.label)}</dt><dd className="mt-tight font-mono text-caption font-semibold text-label">~{formatTokens(entry.value)}</dd></div>)}
+        </dl>
+        <div className="mt-loose border-t border-separator pt-loose"><strong className="text-caption font-semibold text-label-2">{t("最重资源")}</strong><ol className="mt-base grid list-none gap-base p-0">{heaviest.map((item) => <li className="flex items-center justify-between gap-base text-caption" key={item.id}><span className="min-w-0 truncate text-label-2">{item.name}</span><span className="flex-none font-mono text-label-3">~{formatTokens(item.estimatedTokens)}</span></li>)}</ol>{heaviest.length === 0 && <p className="mt-base text-caption text-label-3">{t("当前没有可估算的上下文资源。")}</p>}</div>
+        <button className="mt-loose inline-flex h-control-md w-full cursor-pointer items-center justify-center gap-base rounded-sm border border-separator bg-bg-grouped-2 px-loose text-caption font-semibold text-label-2 transition-colors duration-150 ease-apple hover:bg-fill focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/32" type="button" onClick={onOpenBudget}>{t("查看完整 Context Budget")}<ExternalLink size={13} /></button>
+      </section>
+    </details>
   );
 }
 
@@ -502,7 +537,7 @@ function InitialComposer(props: NewChatViewProps) {
         </div>
         <div className="mt-tight flex min-h-[30px] items-center gap-loose">
           <p className="m-0 flex-1 text-center text-caption text-label-3">{t("工作区内操作按权限模式执行；危险或越界行为仍会询问。")}</p>
-          <ContextIndicator usage={props.contextUsage} />
+          <ContextIndicator usage={props.contextUsage} budget={props.contextBudget} onOpenBudget={props.onOpenContextBudget} />
         </div>
       </div>
     </section>
@@ -934,10 +969,10 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
             <SendControl isRunning={props.isRunning} canSend={canSend} onStop={props.onStop} />
           </div>
         </form>
-        <p className="mx-auto mt-base flex min-h-[17px] w-[min(760px,100%)] items-center gap-base text-caption text-label-3">
+        <div className="mx-auto mt-base flex min-h-[17px] w-[min(760px,100%)] items-center gap-base text-caption text-label-3">
           <span className="inline-flex min-w-0 items-center gap-base truncate">{props.project ? <><Folder size={14} /><code className="font-mono text-caption text-accent">{props.project.path}</code></> : <>{t("普通对话 · 隔离目录")}</>}</span>
-          <ContextIndicator usage={props.contextUsage} className="ml-auto" />
-        </p>
+          <ContextIndicator usage={props.contextUsage} budget={props.contextBudget} className="ml-auto" onOpenBudget={props.onOpenContextBudget} />
+        </div>
       </footer>
     </section>
   );

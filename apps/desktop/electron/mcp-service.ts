@@ -8,6 +8,7 @@ import type {
   McpOverview,
   McpServerConfig,
   McpServerRuntime,
+  McpServerScope,
   McpToolInfo,
   SaveMcpServerInput,
 } from "../src/contracts.js";
@@ -54,6 +55,15 @@ type Connection = {
 export type McpToolDescriptor = McpToolInfo & {
   serverKey: string;
   inputSchema: Record<string, unknown>;
+};
+
+export type McpContextResource = {
+  key: string;
+  name: string;
+  scope: McpServerScope;
+  enabled: boolean;
+  schemaAvailable: boolean;
+  tools: McpToolDescriptor[];
 };
 
 type TrustReader = { isProjectTrusted(cwd: string): boolean };
@@ -206,23 +216,20 @@ export class McpService {
         // One unavailable MCP server must not prevent the Agent from starting.
       }
     }));
-    const serverIdCounts = new Map<string, number>();
-    for (const server of servers) serverIdCounts.set(normalizedToolPart(server.id), (serverIdCounts.get(normalizedToolPart(server.id)) ?? 0) + 1);
-    return servers.flatMap((server) => {
-      const connection = this.connections.get(server.key);
-      if (!connection) return [];
-      const serverPart = normalizedToolPart(server.id);
-      const prefix = (serverIdCounts.get(serverPart) ?? 0) > 1 ? `${server.scope}_${serverPart}` : serverPart;
-      return connection.tools.map((tool): McpToolDescriptor => ({
-        name: `mcp__${prefix}__${normalizedToolPart(tool.name)}`,
-        remoteName: tool.name,
-        description: tool.description?.trim() || `Call ${tool.name} on MCP server ${server.name}.`,
-        serverKey: server.key,
-        inputSchema: tool.inputSchema && typeof tool.inputSchema === "object"
-          ? { ...tool.inputSchema, type: tool.inputSchema.type ?? "object" }
-          : { type: "object", properties: {}, additionalProperties: true },
-      }));
-    });
+    return this.toolDescriptors(servers);
+  }
+
+  async contextInventory(cwd?: string): Promise<McpContextResource[]> {
+    const servers = this.servers(cwd);
+    const tools = this.toolDescriptors(servers.filter((server) => server.enabled));
+    return servers.map((server) => ({
+      key: server.key,
+      name: server.name,
+      scope: server.scope,
+      enabled: server.enabled,
+      schemaAvailable: server.enabled && this.runtime(server).state === "connected",
+      tools: tools.filter((tool) => tool.serverKey === server.key),
+    }));
   }
 
   async callTool(descriptor: McpToolDescriptor, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ text: string; details: unknown }> {
@@ -249,6 +256,26 @@ export class McpService {
     const connections = [...this.connections.values()];
     this.connections.clear();
     await Promise.allSettled(connections.map((connection) => connection.client.close()));
+  }
+
+  private toolDescriptors(servers: McpServerConfig[]): McpToolDescriptor[] {
+    const serverIdCounts = new Map<string, number>();
+    for (const server of servers) serverIdCounts.set(normalizedToolPart(server.id), (serverIdCounts.get(normalizedToolPart(server.id)) ?? 0) + 1);
+    return servers.flatMap((server) => {
+      const connection = this.connections.get(server.key);
+      if (!connection) return [];
+      const serverPart = normalizedToolPart(server.id);
+      const prefix = (serverIdCounts.get(serverPart) ?? 0) > 1 ? `${server.scope}_${serverPart}` : serverPart;
+      return connection.tools.map((tool): McpToolDescriptor => ({
+        name: `mcp__${prefix}__${normalizedToolPart(tool.name)}`,
+        remoteName: tool.name,
+        description: tool.description?.trim() || `Call ${tool.name} on MCP server ${server.name}.`,
+        serverKey: server.key,
+        inputSchema: tool.inputSchema && typeof tool.inputSchema === "object"
+          ? { ...tool.inputSchema, type: tool.inputSchema.type ?? "object" }
+          : { type: "object", properties: {}, additionalProperties: true },
+      }));
+    });
   }
 
   private async connectServer(server: McpServerConfig, cwd?: string): Promise<void> {

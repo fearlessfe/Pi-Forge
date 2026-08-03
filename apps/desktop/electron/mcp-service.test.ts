@@ -24,6 +24,25 @@ afterEach(() => {
 });
 
 describe("McpService", () => {
+  it("inventories configured MCP servers without connecting them", async () => {
+    const store = new McpStore(directory("context-inventory"), encryption);
+    store.save({
+      id: "offline",
+      name: "Offline MCP",
+      scope: "user",
+      enabled: true,
+      timeoutMs: 2_000,
+      transport: { type: "streamable-http", url: "https://example.com/mcp", headers: {} },
+    });
+    const factory = vi.fn();
+    const service = new McpService(store, { isProjectTrusted: () => false }, factory);
+
+    await expect(service.contextInventory()).resolves.toEqual([
+      expect.objectContaining({ name: "Offline MCP", enabled: true, schemaAvailable: false, tools: [] }),
+    ]);
+    expect(factory).not.toHaveBeenCalled();
+  });
+
   it("connects, namespaces tools, forwards calls and exposes lifecycle status", async () => {
     const userData = directory("user");
     const store = new McpStore(userData, encryption);
@@ -53,6 +72,9 @@ describe("McpService", () => {
 
     const tools = await service.tools();
     expect(tools).toEqual([expect.objectContaining({ name: "mcp__search_api__web_search", remoteName: "web-search" })]);
+    await expect(service.contextInventory()).resolves.toEqual([
+      expect.objectContaining({ name: "Search API", enabled: true, tools }),
+    ]);
     await expect(service.callTool(tools[0], { query: "Pi" })).resolves.toMatchObject({ text: expect.stringContaining("found it") });
     expect(callTool).toHaveBeenCalledWith({ name: "web-search", arguments: { query: "Pi" } }, undefined, expect.objectContaining({ timeout: 12_000 }));
     expect(service.overview().runtimes[0]).toMatchObject({ state: "connected", serverName: "test-server", serverVersion: "1.2.3" });
@@ -234,6 +256,9 @@ describe("McpService", () => {
     });
     await service.connect(disabled.servers[0].key);
     expect(service.overview().runtimes[0].state).toBe("disabled");
+    await expect(service.contextInventory()).resolves.toEqual([
+      expect.objectContaining({ name: "Disabled", enabled: false, tools: [] }),
+    ]);
     expect(clients).toHaveLength(2);
     await service.disconnect("missing-key");
   });

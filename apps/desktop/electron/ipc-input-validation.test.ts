@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  requireContextBudgetRequest,
   requireMcpServerInput,
   requireModelSettings,
   requireQueuePromptInput,
@@ -12,6 +13,13 @@ function image(data = Buffer.from("image").toString("base64")) {
 }
 
 describe("IPC input validation", () => {
+  it("strictly validates Context Budget requests", () => {
+    expect(requireContextBudgetRequest(undefined)).toEqual({});
+    expect(requireContextBudgetRequest({ cwd: "/workspace" })).toEqual({ cwd: "/workspace" });
+    expect(() => requireContextBudgetRequest({ cwd: 42 })).toThrow("Context Budget 请求无效");
+    expect(() => requireContextBudgetRequest({ cwd: "/workspace", readFile: true })).toThrow("Context Budget 请求无效");
+  });
+
   it("accepts and normalizes bounded send and queue inputs", () => {
     expect(requireSendPromptInput({
       prompt: "inspect",

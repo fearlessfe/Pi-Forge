@@ -8,7 +8,7 @@ import { PermissionStore } from "./permission-store.js";
 import { PluginSecurityStore } from "./plugin-security-store.js";
 import { ResourceStore } from "./resource-store.js";
 import { WorkspaceCommandSandbox } from "./workspace-command-sandbox.js";
-import type { McpToolDescriptor } from "./mcp-service.js";
+import type { McpContextResource, McpToolDescriptor } from "./mcp-service.js";
 import {
   agentRuntimeProtocolVersion,
   type AgentRuntimeInit,
@@ -137,6 +137,7 @@ function initialize(input: AgentRuntimeInit): void {
   const credentials = new HostCredentialStore(host);
   const mcp = {
     tools: (cwd?: string) => host.request<McpToolDescriptor[]>("mcp.tools", cwd),
+    contextInventory: (cwd?: string) => host.request<McpContextResource[]>("mcp.contextInventory", cwd),
     callTool: (descriptor: McpToolDescriptor, args: Record<string, unknown>, signal?: AbortSignal) => (
       host.requestWithSignal<{ text: string; details: unknown }>("mcp.callTool", signal, descriptor, args)
     ),
@@ -190,6 +191,7 @@ async function invoke(request: RuntimeRequest): Promise<unknown> {
     case "revertChanges": return agent.revertChanges(args[0] as string[] | undefined);
     case "getPermissionRuntime": return agent.getPermissionRuntime();
     case "getResourceInventory": return agent.getResourceInventory(args[0] as string | undefined);
+    case "getContextBudget": return agent.getContextBudget(args[0] as string | undefined);
     case "reloadPackages": return agent.reloadPackages();
     case "refreshCapabilities": return agent.refreshCapabilities();
     case "getPluginRuntime": return agent.getPluginRuntime();

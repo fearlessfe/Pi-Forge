@@ -23,6 +23,7 @@ import { BrowserService } from "./browser-service.js";
 import { ObservabilityStore } from "./observability-store.js";
 import { ObservabilityService } from "./observability-service.js";
 import {
+  requireContextBudgetRequest,
   requireMcpServerInput,
   requireModelSettings,
   requireQueuePromptInput,
@@ -324,6 +325,10 @@ function registerIpc(
     return saved;
   });
   ipcMain.handle("resources:inventory", (_event, cwd: unknown) => agent.getResourceInventory(optionalKnownWorkspace(cwd)));
+  ipcMain.handle("resources:context-budget", (_event, value: unknown) => {
+    const input = requireContextBudgetRequest(value);
+    return agent.getContextBudget(optionalKnownWorkspace(input.cwd));
+  });
   ipcMain.handle("resources:set-skill-enabled", async (_event, name: unknown, enabled: unknown, cwd: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改 Skill。");
     const skillName = requireString(name, "Skill 名称无效。");

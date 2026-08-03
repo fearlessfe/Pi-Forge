@@ -76,6 +76,56 @@ export type ResourceInventory = {
   commands: CommandInfo[];
 };
 
+export type ContextBudgetCategory = "systemPrompt" | "agents" | "skills" | "prompts" | "extensions" | "mcpSchemas";
+
+export type ContextBudgetLoadMode = "baseline" | "on-demand" | "mixed";
+
+export type ContextBudgetItem = {
+  id: string;
+  category: ContextBudgetCategory;
+  name: string;
+  source: string;
+  scope: "user" | "project" | "temporary" | "runtime";
+  enabled: boolean;
+  disableSupported: boolean;
+  loadMode: ContextBudgetLoadMode;
+  estimateStatus: "estimated" | "unavailable";
+  baselineEstimatedTokens: number;
+  onDemandEstimatedTokens: number;
+  estimatedTokens: number;
+  estimatedSavingsTokens: number;
+};
+
+export type ContextBudgetGroup = {
+  category: ContextBudgetCategory;
+  enabledItems: number;
+  totalItems: number;
+  baselineEstimatedTokens: number;
+  onDemandEstimatedTokens: number;
+  estimatedTokens: number;
+  availableEstimatedTokens: number;
+  estimatedSavingsTokens: number;
+  items: ContextBudgetItem[];
+};
+
+export type ContextBudgetReport = {
+  cwd: string;
+  estimator: {
+    id: "utf8-bytes-v1";
+    bytesPerToken: 4;
+  };
+  baselineEstimatedTokens: number;
+  onDemandEstimatedTokens: number;
+  totalEstimatedTokens: number;
+  availableEstimatedTokens: number;
+  estimatedSavingsTokens: number;
+  groups: ContextBudgetGroup[];
+};
+
+export type ContextBudgetRequest = {
+  cwd?: string;
+};
+
 export type McpServerScope = "user" | "project";
 
 export type McpStdioTransport = {
@@ -737,6 +787,7 @@ export type PiDesktopApi = {
     getSettings(): Promise<ResourceSettings>;
     saveSettings(settings: ResourceSettings): Promise<ResourceSettings>;
     inventory(cwd?: string): Promise<ResourceInventory>;
+    contextBudget(input?: ContextBudgetRequest): Promise<ContextBudgetReport>;
     setSkillEnabled(name: string, enabled: boolean, cwd?: string): Promise<ResourceInventory>;
     executeExtensionCommand(input: SendPromptInput): Promise<{ handled: boolean }>;
   };
