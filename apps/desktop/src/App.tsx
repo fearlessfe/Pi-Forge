@@ -5,7 +5,7 @@ import { NewChatView } from "./components/NewChatView";
 import { PluginCenterView } from "./components/PluginCenterView";
 import { SettingsView } from "./components/SettingsView";
 import { BrowserWorkbench } from "./components/BrowserWorkbench";
-import type { AppearanceTheme, AuthEvent, ContextBudgetReport, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, ProviderCatalogEntry, QueuedMessages, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
+import type { AppearanceTheme, AuthEvent, ContextBudgetReport, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, PlanReviewArtifact, ProviderCatalogEntry, QueuedMessages, ResolvePlanReviewInput, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
 import { applyAgentEvent } from "./agent-event-state";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { emptyComposerAttachments, promptFileAttachmentsOf, promptImagesOf, turnAttachmentsOf, type ComposerAttachments } from "./composer-attachments";
@@ -132,6 +132,7 @@ export function App() {
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo>();
   const [contextBudget, setContextBudget] = useState<ContextBudgetReport>();
+  const [planReviews, setPlanReviews] = useState<PlanReviewArtifact[]>([]);
   const [authFlow, setAuthFlow] = useState<AuthFlowState | null>(null);
   const [prompt, setPrompt] = useState("");
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachments>(emptyComposerAttachments);
@@ -213,6 +214,9 @@ export function App() {
       if (event.type === "runtime.status") setRuntimeCrashLooping(event.status === "crash-looping");
       if (event.type === "context.updated") setContextUsage(event.usage);
       if (event.type === "queue.updated") setQueuedMessages(event.queue);
+      if (event.type === "plan.review.requested" || event.type === "plan.review.resolved") {
+        setPlanReviews((current) => [event.review, ...current.filter((review) => review.id !== event.review.id)]);
+      }
       setTurns((current) => applyAgentEvent(current, event));
       if (event.type === "run.completed" || event.type === "run.error" || event.type === "run.stopped") {
         setQueuedMessages({ steering: [], followUp: [] });
@@ -242,6 +246,20 @@ export function App() {
       unsubscribeBrowser?.();
     };
   }, [language]);
+
+  useEffect(() => {
+    if (view !== "chat" || !selectedConversationId || !window.piDesktop?.agent.listPlanReviews) {
+      setPlanReviews([]);
+      return;
+    }
+    let cancelled = false;
+    void window.piDesktop.agent.listPlanReviews(selectedConversationId).then((reviews) => {
+      if (!cancelled) setPlanReviews(reviews);
+    }).catch(() => {
+      if (!cancelled) setPlanReviews([]);
+    });
+    return () => { cancelled = true; };
+  }, [selectedConversationId, view]);
 
   async function refreshModelSettings() {
     await window.piDesktop?.settings.get().then(setModelSettings).catch((error: unknown) => {
@@ -836,6 +854,17 @@ export function App() {
     } : turn));
   }
 
+  async function resolvePlanReview(input: ResolvePlanReviewInput) {
+    if (!window.piDesktop?.agent.resolvePlanReview) throw new Error(t("计划审阅仅在 Electron 应用中可用。"));
+    const review = await window.piDesktop.agent.resolvePlanReview(input);
+    setPlanReviews((current) => [review, ...current.filter((entry) => entry.id !== review.id)]);
+    setNotice({
+      title: t(input.decision === "approved" ? "计划已批准" : "已要求修改计划"),
+      message: t(input.decision === "approved" ? "Agent 将按计划继续；后续危险操作仍需单独审批。" : "批注已返回 Agent，等待新的计划版本。"),
+      type: "success",
+    });
+  }
+
   async function saveModelSettings(input: SaveModelSettings) {
     if (!window.piDesktop) throw new Error("模型设置只能在 Electron 应用中保存。");
     const saved = await window.piDesktop.settings.save(input);
@@ -1068,6 +1097,7 @@ export function App() {
                   modelSupportsImages={currentModelSupportsImages}
                   contextUsage={displayedContextUsage}
                   contextBudget={contextBudget}
+                  planReviews={planReviews}
                   prompt={prompt}
                   attachments={composerAttachments}
                   isRunning={isRunning}
@@ -1079,6 +1109,7 @@ export function App() {
                   onChooseWorkspace={() => void chooseWorkspace()}
                   onOpenTerminal={() => setTerminalOpen(true)}
                   onOpenContextBudget={() => { setSettingsSection("context-budget"); setView("settings"); }}
+                  onResolvePlanReview={resolvePlanReview}
                   onModelChange={(providerId, modelId) => void selectChatModel(providerId, modelId)}
                   onSubmit={submitPrompt}
                   onStop={() => void stopAgent()}

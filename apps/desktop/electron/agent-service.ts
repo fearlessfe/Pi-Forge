@@ -20,6 +20,7 @@ import type {
   ConversationHistoryDetail,
   ConversationHistoryItem,
   PluginRuntimeStatus,
+  PlanReviewArtifact,
   PermissionRuntime,
   PermissionSettings,
   ModelCatalogEntry,
@@ -27,8 +28,10 @@ import type {
   PromptImage,
   ProviderCatalogEntry,
   QuestionOption,
+  ResponseUsage,
   ResourceSettings,
   ResourceInventory,
+  ResolvePlanReviewInput,
   WorkspaceTrustStatus,
   SaveModelSettings,
   TaskFileChange,
@@ -64,14 +67,22 @@ import {
 import { validatePromptExtras } from "./ipc-input-validation.js";
 import {
   buildContextBudgetReport,
+  createContextTokenEstimator,
   stableContextValue,
   type ContextBudgetResource,
 } from "./context-budget.js";
+import { ContextBudgetHistoryStore } from "./context-budget-history-store.js";
+import { PlanReviewStore } from "./plan-review-store.js";
 
 type EventSink = (event: AgentEvent) => void;
 
 type PendingQuestion = {
   resolve: (answer: string) => void;
+};
+
+type PendingPlanReview = {
+  resolve: (review: PlanReviewArtifact) => void;
+  reject: (error: Error) => void;
 };
 
 export type AgentRuntimeConfig = {
@@ -162,6 +173,11 @@ const questionParameters = Type.Object({
   }), { maxItems: 3 })),
 });
 
+const planReviewParameters = Type.Object({
+  title: Type.String({ minLength: 1, maxLength: 200, description: "Short title for the plan" }),
+  markdown: Type.String({ minLength: 1, maxLength: 200_000, description: "Complete Markdown plan for explicit user review" }),
+});
+
 const subagentParameters = Type.Object({
   role: Type.String({ description: "Short specialist role, for example code reviewer or debugger" }),
   task: Type.String({ description: "A self-contained task for the subagent" }),
@@ -201,8 +217,10 @@ export class AgentService {
   private session?: AgentSession;
   private unsubscribe?: () => void;
   private sessionKey?: string;
+  private activeCwd?: string;
   private activeRunId?: string;
   private pendingQuestions = new Map<string, PendingQuestion>();
+  private pendingPlanReviews = new Map<string, PendingPlanReview>();
   private running = false;
   private eventSequence = 0;
   private readonly runPermissionGrants = new Set<PermissionGrant>();
@@ -213,6 +231,8 @@ export class AgentService {
   private readonly conversationHistory: ConversationHistory;
   private readonly capabilityPolicy: CapabilityPolicy;
   private readonly attachmentStore: AttachmentStore;
+  private readonly contextBudgetHistory: ContextBudgetHistoryStore;
+  private readonly planReviews: PlanReviewStore;
 
   constructor(
     private readonly settings: ModelSettingsReader,
@@ -256,6 +276,8 @@ export class AgentService {
     });
     this.capabilityPolicy = new CapabilityPolicy(this.capabilities, this.pluginSecurity, builtinSubagentToolName);
     this.attachmentStore = new AttachmentStore(this.sessionDir);
+    this.contextBudgetHistory = new ContextBudgetHistoryStore(this.agentDir);
+    this.planReviews = new PlanReviewStore(this.agentDir);
   }
 
   async getModelCatalog(allowNetwork = true): Promise<ProviderCatalogEntry[]> {
@@ -647,7 +669,13 @@ export class AgentService {
       });
     }
 
-    return buildContextBudgetReport(resolvedCwd, budgetResources);
+    const config = this.settings.resolve();
+    const report = buildContextBudgetReport(
+      resolvedCwd,
+      budgetResources,
+      createContextTokenEstimator(config.provider, config.modelId),
+    );
+    return { ...report, history: this.contextBudgetHistory.list(resolvedCwd) };
   }
 
   async reloadPackages(): Promise<boolean> {
@@ -673,6 +701,21 @@ export class AgentService {
     if (!pending) throw new Error("该问题已失效或已回答。");
     this.pendingQuestions.delete(callId);
     pending.resolve(answer.trim() || "用户未提供答案");
+  }
+
+  listPlanReviews(conversationId?: string): PlanReviewArtifact[] {
+    return this.planReviews.list(conversationId);
+  }
+
+  resolvePlanReview(input: ResolvePlanReviewInput): PlanReviewArtifact {
+    const review = this.planReviews.resolve(input);
+    const pending = this.pendingPlanReviews.get(review.id);
+    if (pending) {
+      this.pendingPlanReviews.delete(review.id);
+      pending.resolve(review);
+    }
+    this.emit({ type: "plan.review.resolved", runId: review.runId, review });
+    return review;
   }
 
   reset(): void {
@@ -728,7 +771,10 @@ export class AgentService {
 
   private async ensureSession(cwd: string, config: AgentRuntimeConfig, conversationId?: string): Promise<AgentSession> {
     const key = JSON.stringify([cwd, conversationId, config.provider, config.baseUrl, config.modelId, config.thinkingLevel, config.apiKey]);
-    if (this.session && this.sessionKey === key) return this.session;
+    if (this.session && this.sessionKey === key) {
+      this.activeCwd = cwd;
+      return this.session;
+    }
     this.disposeSession();
 
     const runtime = await this.createModelRuntime(config);
@@ -801,6 +847,7 @@ export class AgentService {
     this.unsubscribe = session.subscribe((event) => this.handleSessionEvent(event));
     this.session = session;
     this.sessionKey = key;
+    this.activeCwd = cwd;
     this.fileChangeTracker.setSessionCwd(cwd);
     this.sessionDisplayContextWindow = runtime.displayContextWindow;
     return session;
@@ -824,6 +871,35 @@ export class AgentService {
           content: [{ type: "text", text: `User answered: ${answer}` }],
           details: { question: params.question, answer },
         };
+      },
+    });
+
+    const requestPlanReview = defineTool({
+      name: "request_plan_review",
+      label: "Plan review",
+      description: "Submit a Markdown implementation plan to the native Pi Forge review panel and wait for explicit approval or anchored change requests. Plan approval never grants shell, network, filesystem, or other tool permissions.",
+      promptSnippet: "Submit substantial implementation plans for explicit native review",
+      promptGuidelines: [
+        "Use request_plan_review when the user asks to review or approve a plan before implementation.",
+        "After changes are requested, revise the full plan and submit it again as a new version.",
+        "Never treat plan approval as permission for a dangerous or out-of-scope tool call.",
+      ],
+      parameters: planReviewParameters,
+      executionMode: "sequential",
+      execute: async (toolCallId, params, signal) => {
+        const runId = this.activeRunId;
+        const conversationId = this.session?.sessionManager.getSessionId();
+        if (!runId || !conversationId) throw new Error("没有可用于计划审阅的活动会话。");
+        const review = this.planReviews.request({ cwd, conversationId, runId, toolCallId, title: params.title, markdown: params.markdown });
+        const pending = review.status === "pending" ? this.requestPlanReview(review, signal) : undefined;
+        this.emit({ type: "plan.review.requested", runId, review });
+        const resolved = pending ? await pending : review;
+        const version = resolved.versions.find((entry) => entry.id === resolved.activeVersionId);
+        const feedback = version?.annotations.map((annotation) => `- ${annotation.quote}\n  ${annotation.comment}`).join("\n") ?? "";
+        const text = resolved.status === "approved"
+          ? "The user approved this plan. This approval does not grant any tool permission."
+          : `The user requested changes to this plan:\n${feedback}`;
+        return { content: [{ type: "text", text }], details: { planReview: resolved } };
       },
     });
 
@@ -1016,7 +1092,7 @@ export class AgentService {
       },
     }));
 
-    return [askUser, listAttachments, readAttachment, spawnSubagent, ...(browserAnnotate ? [browserAnnotate] : []), ...adaptedMcpTools];
+    return [askUser, requestPlanReview, listAttachments, readAttachment, spawnSubagent, ...(browserAnnotate ? [browserAnnotate] : []), ...adaptedMcpTools];
   }
 
   private async createModelRuntime(config: AgentRuntimeConfig) {
@@ -1128,8 +1204,10 @@ export class AgentService {
         this.emit({ type: "thinking.delta", runId, text: event.assistantMessageEvent.delta });
       }
     } else if (event.type === "message_end" && event.message.role === "assistant") {
-      this.emit({ type: "response.usage", runId, usage: responseUsage(event.message) });
+      const usage = responseUsage(event.message);
+      this.emit({ type: "response.usage", runId, usage });
       this.emitContextUsage(runId);
+      void this.captureContextBudgetSnapshot(runId, usage);
     } else if (event.type === "compaction_end") {
       this.emitContextUsage(runId);
     } else if (event.type === "queue_update") {
@@ -1179,6 +1257,30 @@ export class AgentService {
     }
   }
 
+  private async captureContextBudgetSnapshot(runId: string, usage: ResponseUsage): Promise<void> {
+    const cwd = this.activeCwd;
+    const session = this.session;
+    if (!cwd || !session) return;
+    const conversationId = session.sessionManager.getSessionId();
+    const contextTokens = session.getContextUsage()?.tokens ?? null;
+    try {
+      const report = await this.getContextBudget(cwd);
+      this.contextBudgetHistory.record({
+        cwd,
+        conversationId,
+        runId,
+        provider: usage.provider,
+        model: usage.responseModel ?? usage.model,
+        estimatorId: report.estimator.id,
+        estimatedResourceTokens: report.totalEstimatedTokens,
+        actualInputTokens: usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens,
+        actualContextTokens: contextTokens,
+      });
+    } catch {
+      // Budget telemetry is best effort and must never interrupt an Agent run.
+    }
+  }
+
   private requestUser(callId: string, question: string, options: QuestionOption[], signal?: AbortSignal): Promise<string> {
     const runId = this.activeRunId;
     if (!runId) return Promise.resolve("No active user session");
@@ -1194,6 +1296,25 @@ export class AgentService {
       this.pendingQuestions.set(callId, { resolve: finish });
       signal?.addEventListener("abort", cancel, { once: true });
       this.emit({ type: "question.requested", runId, callId, question, options });
+    });
+  }
+
+  private requestPlanReview(review: PlanReviewArtifact, signal?: AbortSignal): Promise<PlanReviewArtifact> {
+    return new Promise((resolve, reject) => {
+      const finish = (resolved: PlanReviewArtifact) => {
+        signal?.removeEventListener("abort", cancel);
+        resolve(resolved);
+      };
+      const fail = (error: Error) => {
+        signal?.removeEventListener("abort", cancel);
+        reject(error);
+      };
+      const cancel = () => {
+        this.pendingPlanReviews.delete(review.id);
+        fail(new Error("计划审阅已中止；待审阅版本仍已保存。"));
+      };
+      this.pendingPlanReviews.set(review.id, { resolve: finish, reject: fail });
+      signal?.addEventListener("abort", cancel, { once: true });
     });
   }
 
@@ -1213,6 +1334,7 @@ export class AgentService {
     this.session?.dispose();
     this.session = undefined;
     this.sessionKey = undefined;
+    this.activeCwd = undefined;
     this.fileChangeTracker.setSessionCwd(undefined);
     this.fileChangeTracker.clearPendingMutations();
     this.sessionDisplayContextWindow = 0;
@@ -1221,5 +1343,7 @@ export class AgentService {
     this.running = false;
     for (const pending of this.pendingQuestions.values()) pending.resolve("会话已结束");
     this.pendingQuestions.clear();
+    for (const pending of this.pendingPlanReviews.values()) pending.reject(new Error("Runtime 会话已结束；待审阅计划仍已保存。"));
+    this.pendingPlanReviews.clear();
   }
 }

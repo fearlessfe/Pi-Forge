@@ -108,22 +108,88 @@ export type ContextBudgetGroup = {
   items: ContextBudgetItem[];
 };
 
+export type ContextBudgetEstimator = {
+  id: "anthropic-tokenizer-v1" | "gpt-tokenizer-o200k-v1" | "gpt-tokenizer-cl100k-v1" | "utf8-bytes-v1";
+  kind: "model-tokenizer" | "fallback";
+  provider: string;
+  model: string;
+  tokenizer: string;
+  local: true;
+  bytesPerToken?: 4;
+};
+
+export type ContextBudgetSnapshot = {
+  id: string;
+  cwd: string;
+  conversationId: string;
+  runId: string;
+  createdAt: string;
+  provider: string;
+  model: string;
+  estimatorId: ContextBudgetEstimator["id"];
+  estimatedResourceTokens: number;
+  actualInputTokens: number;
+  actualContextTokens: number | null;
+  deltaTokens: number;
+  estimatedSharePercent: number | null;
+};
+
 export type ContextBudgetReport = {
   cwd: string;
-  estimator: {
-    id: "utf8-bytes-v1";
-    bytesPerToken: 4;
-  };
+  estimator: ContextBudgetEstimator;
   baselineEstimatedTokens: number;
   onDemandEstimatedTokens: number;
   totalEstimatedTokens: number;
   availableEstimatedTokens: number;
   estimatedSavingsTokens: number;
   groups: ContextBudgetGroup[];
+  history: ContextBudgetSnapshot[];
 };
 
 export type ContextBudgetRequest = {
   cwd?: string;
+};
+
+export type PlanReviewDecision = "approved" | "changes_requested";
+
+export type PlanReviewAnnotation = {
+  id: string;
+  anchorId: string;
+  quote: string;
+  comment: string;
+  createdAt: string;
+};
+
+export type PlanReviewVersion = {
+  id: string;
+  number: number;
+  markdown: string;
+  contentHash: string;
+  createdAt: string;
+  annotations: PlanReviewAnnotation[];
+  decision?: PlanReviewDecision;
+  decidedAt?: string;
+};
+
+export type PlanReviewArtifact = {
+  id: string;
+  cwd: string;
+  conversationId: string;
+  runId: string;
+  toolCallId: string;
+  title: string;
+  status: "pending" | PlanReviewDecision;
+  activeVersionId: string;
+  createdAt: string;
+  updatedAt: string;
+  versions: PlanReviewVersion[];
+};
+
+export type ResolvePlanReviewInput = {
+  reviewId: string;
+  versionId: string;
+  decision: PlanReviewDecision;
+  annotations: Array<Pick<PlanReviewAnnotation, "anchorId" | "quote" | "comment">>;
 };
 
 export type McpServerScope = "user" | "project";
@@ -437,6 +503,8 @@ export type AgentEvent =
   | { type: "tool.updated"; runId: string; callId: string; name: string; output: string; details?: ToolActivityDetails }
   | { type: "tool.completed"; runId: string; callId: string; name: string; output: string; isError: boolean; details?: ToolActivityDetails }
   | { type: "question.requested"; runId: string; callId: string; question: string; options: QuestionOption[] }
+  | { type: "plan.review.requested"; runId: string; review: PlanReviewArtifact }
+  | { type: "plan.review.resolved"; runId: string; review: PlanReviewArtifact }
   | { type: "response.usage"; runId: string; usage: ResponseUsage }
   | { type: "context.updated"; runId: string; usage: ContextUsageInfo }
   | { type: "queue.updated"; runId: string; queue: QueuedMessages }
@@ -853,6 +921,8 @@ export type PiDesktopApi = {
     revealChange(changeId: string): Promise<void>;
     reset(): Promise<void>;
     answerQuestion(callId: string, answer: string): Promise<void>;
+    listPlanReviews(conversationId?: string): Promise<PlanReviewArtifact[]>;
+    resolvePlanReview(input: ResolvePlanReviewInput): Promise<PlanReviewArtifact>;
     listRecoveries(): Promise<RuntimeRecoveryInfo[]>;
     retryRecovery(id: string): Promise<{ runId: string }>;
     discardRecovery(id: string): Promise<void>;

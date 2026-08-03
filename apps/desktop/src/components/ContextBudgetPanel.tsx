@@ -1,4 +1,4 @@
-import { Clock3, Gauge, Layers3, RefreshCw, Zap } from "lucide-react";
+import { Activity, Clock3, Gauge, Layers3, RefreshCw, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
   ContextBudgetCategory,
@@ -50,6 +50,13 @@ export function ContextBudgetReportView({ report }: { report: ContextBudgetRepor
     { label: "按需加载", value: report.onDemandEstimatedTokens, icon: Clock3 },
     { label: "可禁用节省", value: report.estimatedSavingsTokens, icon: Zap },
   ];
+  const history = [...report.history].slice(0, 12).reverse();
+  const historyMaximum = Math.max(1, ...history.flatMap((snapshot) => [snapshot.estimatedResourceTokens, snapshot.actualContextTokens ?? snapshot.actualInputTokens]));
+  const chartPoints = (select: (index: number) => number) => history.map((_, index) => {
+    const x = history.length <= 1 ? 50 : index / (history.length - 1) * 100;
+    const y = 100 - select(index) / historyMaximum * 92;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
   return (
     <>
       <section className="grid grid-cols-4 gap-loose max-[1180px]:grid-cols-2" aria-label={t("Context Budget 摘要")}>
@@ -60,6 +67,21 @@ export function ContextBudgetReportView({ report }: { report: ContextBudgetRepor
             <small className="mt-tight block text-caption text-label-2">{t(label)} · tokens</small>
           </article>
         ))}
+      </section>
+
+      <section className="rounded-md border border-separator bg-bg-grouped p-card" aria-labelledby="context-budget-history-title">
+        <header className="flex items-start justify-between gap-card">
+          <span><h3 className="inline-flex items-center gap-base text-callout font-semibold text-label" id="context-budget-history-title"><Activity size={16} />{t("实际装配趋势")}</h3><p className="mt-tight text-caption text-label-3">{t("用 Provider 返回的输入 tokens 对照资源预算；只保存数值和模型元数据，不保存上下文正文。")}</p></span>
+          <small className="rounded-full border border-separator bg-fill px-base py-base text-mini text-label-2">{report.estimator.kind === "model-tokenizer" ? t("模型 tokenizer") : t("安全回退")}</small>
+        </header>
+        {history.length > 0 ? <>
+          <svg className="mt-loose h-[132px] w-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={t("资源预算与实际上下文趋势图")}>
+            <line x1="0" y1="100" x2="100" y2="100" className="stroke-separator" vectorEffect="non-scaling-stroke" />
+            <polyline points={chartPoints((index) => history[index].actualContextTokens ?? history[index].actualInputTokens)} fill="none" className="stroke-label-3" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+            <polyline points={chartPoints((index) => history[index].estimatedResourceTokens)} fill="none" className="stroke-accent" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+          </svg>
+          <div className="mt-base flex flex-wrap items-center justify-between gap-base text-caption text-label-3"><span className="inline-flex items-center gap-base"><i className="h-0.5 w-5 bg-accent" />{t("资源估算")}</span><span className="inline-flex items-center gap-base"><i className="h-0.5 w-5 bg-label-3" />{t("实际上下文")}</span><span>{t("最近 {count} 次模型请求", { count: history.length })}</span></div>
+        </> : <div className="mt-loose rounded-sm border border-dashed border-separator px-card py-section text-center text-caption text-label-3">{t("完成一次模型请求后，这里会显示实际装配趋势。")}</div>}
       </section>
 
       <section className="grid grid-cols-2 gap-loose max-[1120px]:grid-cols-1" aria-labelledby="context-budget-groups-title">
@@ -91,7 +113,10 @@ export function ContextBudgetReportView({ report }: { report: ContextBudgetRepor
       </section>
 
       <aside className="rounded-md border border-blue/32 bg-blue/8 px-card py-loose text-caption leading-[1.55] text-label-2">
-        <strong className="text-blue">{t("估算方法")}</strong> · {t("按 UTF-8 字节数 ÷ 4 向上取整；基础上下文随请求装配，Skills 正文与 Prompts 在调用时按需进入。Extension 与 MCP 只计算可确定的 tool schema，不读取或展示凭据与正文。")}
+        <strong className="text-blue">{t("估算方法")}</strong> · {report.estimator.kind === "model-tokenizer"
+          ? t("使用 {tokenizer} 在本地按当前模型 {model} 计数；不会向 Provider 发送资源正文。", { tokenizer: report.estimator.tokenizer, model: report.estimator.model })
+          : t("当前模型没有可用的本地 tokenizer，按 UTF-8 字节数 ÷ 4 安全回退。")}
+        <span> {t("基础上下文随请求装配，Skills 正文与 Prompts 在调用时按需进入。Extension 与 MCP 只计算可确定的 tool schema。")}</span>
       </aside>
     </>
   );

@@ -43,6 +43,7 @@ describe("NewChatView analysis presentation", () => {
         modelProvider="anthropic"
         modelProviders={[]}
         modelSupportsImages
+        planReviews={[]}
         prompt=""
         attachments={{ images: [], files: [] }}
         isRunning
@@ -54,6 +55,7 @@ describe("NewChatView analysis presentation", () => {
         onChooseWorkspace={noop}
         onOpenTerminal={noop}
         onOpenContextBudget={noop}
+        onResolvePlanReview={async () => undefined}
         onModelChange={noop}
         onSubmit={noop}
         onStop={noop}
@@ -87,12 +89,13 @@ describe("ContextIndicator", () => {
   it("shows the conversation resource budget in an accessible disclosure", () => {
     const budget: ContextBudgetReport = {
       cwd: "/workspace",
-      estimator: { id: "utf8-bytes-v1", bytesPerToken: 4 },
+      estimator: { id: "gpt-tokenizer-o200k-v1", kind: "model-tokenizer", provider: "openai", model: "gpt-5", tokenizer: "o200k_base", local: true },
       baselineEstimatedTokens: 1_600,
       onDemandEstimatedTokens: 800,
       totalEstimatedTokens: 2_400,
       availableEstimatedTokens: 2_400,
       estimatedSavingsTokens: 600,
+      history: [],
       groups: [{
         category: "skills",
         enabledItems: 1,

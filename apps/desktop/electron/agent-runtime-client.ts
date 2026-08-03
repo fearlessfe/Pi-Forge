@@ -8,10 +8,12 @@ import type {
   ConversationHistoryDetail,
   ConversationHistoryItem,
   PermissionRuntime,
+  PlanReviewArtifact,
   PluginRuntimeStatus,
   ProviderCatalogEntry,
   QueuedMessages,
   ResourceInventory,
+  ResolvePlanReviewInput,
   SaveModelSettings,
   SendPromptInput,
   TaskFileChange,
@@ -145,6 +147,8 @@ export class AgentRuntimeClient {
   refreshCapabilities(): Promise<PluginRuntimeStatus> { return this.request("refreshCapabilities"); }
   getPluginRuntime(): Promise<PluginRuntimeStatus> { return this.request("getPluginRuntime"); }
   answerQuestion(callId: string, answer: string): Promise<void> { return this.request("answerQuestion", callId, answer); }
+  listPlanReviews(conversationId?: string): Promise<PlanReviewArtifact[]> { return this.request("listPlanReviews", conversationId); }
+  resolvePlanReview(input: ResolvePlanReviewInput): Promise<PlanReviewArtifact> { return this.request("resolvePlanReview", input); }
   reset(): Promise<void> { return this.request("reset"); }
   testConfiguration(input: SaveModelSettings): Promise<string> { return this.request("testConfiguration", input); }
 
@@ -166,6 +170,7 @@ export class AgentRuntimeClient {
     const continuation = [
       "Continue the task that was interrupted when the Agent Runtime exited.",
       "Inspect the existing conversation and workspace before making changes; do not repeat completed tool actions.",
+      "If a request_plan_review call was interrupted, submit the same full plan again; Pi Forge will reuse its persisted version and any existing decision.",
       "Original request:",
       record.input.prompt,
     ].join("\n\n");

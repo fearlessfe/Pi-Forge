@@ -113,6 +113,8 @@ export function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[
         return { ...current, fileChanges: event.changes };
       case "context.updated":
       case "queue.updated":
+      case "plan.review.requested":
+      case "plan.review.resolved":
       case "agent.event":
         return current;
     }

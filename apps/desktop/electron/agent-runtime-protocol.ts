@@ -1,6 +1,6 @@
 import type { AgentEvent, RuntimeRecoveryInfo } from "../src/contracts.js";
 
-export const agentRuntimeProtocolVersion = 2;
+export const agentRuntimeProtocolVersion = 3;
 
 export type AgentRuntimeInit = {
   protocolVersion: typeof agentRuntimeProtocolVersion;
@@ -44,6 +44,8 @@ export type AgentRuntimeMethod =
   | "refreshCapabilities"
   | "getPluginRuntime"
   | "answerQuestion"
+  | "listPlanReviews"
+  | "resolvePlanReview"
   | "reset"
   | "testConfiguration"
   | "updateConfiguration";

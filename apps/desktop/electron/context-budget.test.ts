@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildContextBudgetReport,
+  createContextTokenEstimator,
   estimateContextTokens,
   stableContextValue,
 } from "./context-budget.js";
@@ -11,6 +12,23 @@ describe("context budget estimation", () => {
     expect(estimateContextTokens("abcd")).toBe(1);
     expect(estimateContextTokens("abcde")).toBe(2);
     expect(estimateContextTokens("上下文")).toBe(3);
+  });
+
+  it("selects local model tokenizers with an explicit fallback", () => {
+    const anthropic = createContextTokenEstimator("anthropic", "claude-sonnet-4-6");
+    const openai = createContextTokenEstimator("openai", "gpt-5");
+    const legacyOpenai = createContextTokenEstimator("openai", "gpt-4-turbo");
+    const fallback = createContextTokenEstimator("google", "gemini-3-flash-preview");
+    const unconfigured = createContextTokenEstimator(undefined, undefined);
+
+    expect(anthropic.metadata).toMatchObject({ id: "anthropic-tokenizer-v1", kind: "model-tokenizer", local: true });
+    expect(openai.metadata).toMatchObject({ id: "gpt-tokenizer-o200k-v1", tokenizer: "o200k_base" });
+    expect(legacyOpenai.metadata).toMatchObject({ id: "gpt-tokenizer-cl100k-v1", tokenizer: "cl100k_base" });
+    expect(fallback.metadata).toMatchObject({ id: "utf8-bytes-v1", kind: "fallback", bytesPerToken: 4 });
+    expect(unconfigured.metadata).toMatchObject({ id: "utf8-bytes-v1", provider: "unknown", model: "unknown" });
+    expect(anthropic.count("Hello 上下文")).toBeGreaterThan(0);
+    expect(openai.count("Hello 上下文")).toBeGreaterThan(0);
+    expect(fallback.count("上下文")).toBe(3);
   });
 
   it("serializes schemas independently of object insertion order", () => {

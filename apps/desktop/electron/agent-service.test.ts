@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { InMemoryCredentialStore, type AssistantMessage, type ToolResultMessage, type Usage, type UserMessage } from "@earendil-works/pi-ai";
 import type { AgentEvent, SaveModelSettings } from "../src/contracts.js";
+import { planReviewBlocks } from "../src/plan-review.js";
 
 vi.mock("electron", () => ({
   safeStorage: {
@@ -842,10 +843,22 @@ describe("AgentService with a real Pi session", () => {
       ]));
 
       expect(requests).toHaveLength(2);
-      expect(requests[0].tools).toEqual(expect.arrayContaining([expect.objectContaining({ function: expect.objectContaining({ name: "ask_user" }) })]));
+      expect(requests[0].tools).toEqual(expect.arrayContaining([
+        expect.objectContaining({ function: expect.objectContaining({ name: "ask_user" }) }),
+        expect.objectContaining({ function: expect.objectContaining({ name: "request_plan_review" }) }),
+      ]));
       expect(requests[1].messages).toEqual(expect.arrayContaining([
         expect.objectContaining({ role: "tool", content: expect.stringContaining("User answered: Approved") }),
       ]));
+      await vi.waitFor(async () => {
+        const budget = await service.getContextBudget(cwd);
+        expect(budget.history[0]).toMatchObject({
+          conversationId: expect.any(String),
+          runId: first,
+          actualInputTokens: expect.any(Number),
+          estimatedResourceTokens: expect.any(Number),
+        });
+      });
 
       const second = await service.send("second prompt", cwd);
       await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === second)).toBe(true), { timeout: 8_000 });
@@ -858,6 +871,51 @@ describe("AgentService with a real Pi session", () => {
           content: expect.arrayContaining([expect.objectContaining({ type: "text", text: "second prompt" })]),
         }),
       ]));
+    } finally {
+      service.dispose();
+      await close(server);
+    }
+  });
+
+  it("waits for a versioned native plan review and returns anchored feedback to the model", async () => {
+    const requests: ChatRequest[] = [];
+    const markdown = "# Migration\n\n1. Update the contract\n2. Add tests";
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (part) => { body += part; });
+      req.on("end", () => {
+        requests.push(JSON.parse(body) as ChatRequest);
+        if (requests.length === 1) {
+          writeSse(res, [
+            chunk({ role: "assistant" }),
+            chunk({ tool_calls: [{ index: 0, id: "call-plan", type: "function", function: { name: "request_plan_review", arguments: JSON.stringify({ title: "Migration", markdown }) } }] }),
+            chunk({}, "tool_calls"),
+          ]);
+        } else {
+          writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "I will revise the plan." }), chunk({}, "stop")]);
+        }
+      });
+    });
+    const port = await listen(server);
+    const cwd = createDirectory("plan-review-workspace");
+    const agentDir = createDirectory("plan-review-agent");
+    const events: AgentEvent[] = [];
+    let service: AgentService;
+    service = new AgentService({ resolve: () => ({ provider: "openai-compatible", baseUrl: `http://127.0.0.1:${port}/v1`, modelId: "gpt-5", thinkingLevel: "off", apiKey: "local" }) }, agentDir, cwd, (event) => {
+      events.push(event);
+      if (event.type === "plan.review.requested") {
+        service.resolvePlanReview({ reviewId: event.review.id, versionId: event.review.activeVersionId, decision: "changes_requested", annotations: [{ anchorId: planReviewBlocks(markdown)[1].id, quote: "ignored", comment: "Add a rollback step." }] });
+      }
+    });
+
+    try {
+      const runId = await service.send("Prepare a migration plan", cwd);
+      await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
+      expect(events.some((event) => event.type === "plan.review.requested")).toBe(true);
+      expect(events.some((event) => event.type === "plan.review.resolved" && event.review.status === "changes_requested")).toBe(true);
+      expect(requests[1].messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: "tool", content: expect.stringContaining("Add a rollback step") })]));
+      expect(service.listPlanReviews()[0]).toMatchObject({ title: "Migration", status: "changes_requested", versions: [expect.objectContaining({ number: 1, decision: "changes_requested" })] });
     } finally {
       service.dispose();
       await close(server);

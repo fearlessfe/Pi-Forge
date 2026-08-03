@@ -1,6 +1,10 @@
 import { Buffer } from "node:buffer";
+import { countTokens as countAnthropicTokens } from "@anthropic-ai/tokenizer";
+import { countTokens as countO200kTokens } from "gpt-tokenizer";
+import { countTokens as countCl100kTokens } from "gpt-tokenizer/encoding/cl100k_base";
 import type {
   ContextBudgetCategory,
+  ContextBudgetEstimator,
   ContextBudgetItem,
   ContextBudgetReport,
 } from "../src/contracts.js";
@@ -26,6 +30,11 @@ export const contextBudgetCategories: ContextBudgetCategory[] = [
   "mcpSchemas",
 ];
 
+export type ContextTokenEstimator = {
+  metadata: ContextBudgetEstimator;
+  count(text: string): number;
+};
+
 /**
  * Deterministic, model-independent approximation used throughout the report.
  * UTF-8 bytes are used instead of JavaScript character count so CJK and emoji
@@ -35,6 +44,51 @@ export const contextBudgetCategories: ContextBudgetCategory[] = [
 export function estimateContextTokens(text: string): number {
   const bytes = Buffer.byteLength(text, "utf8");
   return bytes === 0 ? 0 : Math.ceil(bytes / 4);
+}
+
+function normalizedModelFamily(provider: string, model: string): "anthropic" | "openai" | "fallback" {
+  const providerId = provider.toLowerCase();
+  const modelId = model.toLowerCase();
+  if (providerId.includes("anthropic") || modelId.startsWith("claude")) return "anthropic";
+  if (
+    providerId === "openai"
+    || providerId === "openai-codex"
+    || providerId === "azure-openai-responses"
+    || providerId.startsWith("openai-")
+    || /^(?:gpt|o[1-9]|codex)/.test(modelId)
+  ) return "openai";
+  return "fallback";
+}
+
+export function createContextTokenEstimator(
+  provider = "unknown",
+  model = "unknown",
+): ContextTokenEstimator {
+  const family = normalizedModelFamily(provider, model);
+  if (family === "anthropic") {
+    return {
+      metadata: { id: "anthropic-tokenizer-v1", kind: "model-tokenizer", provider, model, tokenizer: "@anthropic-ai/tokenizer", local: true },
+      count: (text) => text ? countAnthropicTokens(text) : 0,
+    };
+  }
+  if (family === "openai") {
+    const usesO200k = /^(?:gpt-(?:4o|4\.1|4\.5|5)|o[1-9]|codex)/i.test(model);
+    return {
+      metadata: {
+        id: usesO200k ? "gpt-tokenizer-o200k-v1" : "gpt-tokenizer-cl100k-v1",
+        kind: "model-tokenizer",
+        provider,
+        model,
+        tokenizer: usesO200k ? "o200k_base" : "cl100k_base",
+        local: true,
+      },
+      count: usesO200k ? countO200kTokens : countCl100kTokens,
+    };
+  }
+  return {
+    metadata: { id: "utf8-bytes-v1", kind: "fallback", provider, model, tokenizer: "UTF-8 bytes / 4", local: true, bytesPerToken: 4 },
+    count: estimateContextTokens,
+  };
 }
 
 function sum(items: ContextBudgetItem[], select: (item: ContextBudgetItem) => number): number {
@@ -52,7 +106,11 @@ export function stableContextValue(value: unknown): string {
   return JSON.stringify(value) ?? String(value);
 }
 
-export function buildContextBudgetReport(cwd: string, resources: ContextBudgetResource[]): ContextBudgetReport {
+export function buildContextBudgetReport(
+  cwd: string,
+  resources: ContextBudgetResource[],
+  estimator: ContextTokenEstimator = createContextTokenEstimator("unknown", "unknown"),
+): ContextBudgetReport {
   const ordered = [...resources].sort((left, right) => (
     contextBudgetCategories.indexOf(left.category) - contextBudgetCategories.indexOf(right.category)
     || left.name.localeCompare(right.name)
@@ -61,8 +119,8 @@ export function buildContextBudgetReport(cwd: string, resources: ContextBudgetRe
   ));
   const ids = new Map<string, number>();
   const items: ContextBudgetItem[] = ordered.map((resource) => {
-    const baselineEstimatedTokens = estimateContextTokens(resource.baselineText ?? "");
-    const onDemandEstimatedTokens = estimateContextTokens(resource.onDemandText ?? "");
+    const baselineEstimatedTokens = estimator.count(resource.baselineText ?? "");
+    const onDemandEstimatedTokens = estimator.count(resource.onDemandText ?? "");
     const estimatedTokens = baselineEstimatedTokens + onDemandEstimatedTokens;
     const key = `${resource.category}:${resource.scope}:${resource.name}`;
     const occurrence = (ids.get(key) ?? 0) + 1;
@@ -102,12 +160,13 @@ export function buildContextBudgetReport(cwd: string, resources: ContextBudgetRe
   });
   return {
     cwd,
-    estimator: { id: "utf8-bytes-v1", bytesPerToken: 4 },
+    estimator: estimator.metadata,
     baselineEstimatedTokens: groups.reduce((total, group) => total + group.baselineEstimatedTokens, 0),
     onDemandEstimatedTokens: groups.reduce((total, group) => total + group.onDemandEstimatedTokens, 0),
     totalEstimatedTokens: groups.reduce((total, group) => total + group.estimatedTokens, 0),
     availableEstimatedTokens: groups.reduce((total, group) => total + group.availableEstimatedTokens, 0),
     estimatedSavingsTokens: groups.reduce((total, group) => total + group.estimatedSavingsTokens, 0),
     groups,
+    history: [],
   };
 }

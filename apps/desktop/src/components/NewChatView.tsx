@@ -29,7 +29,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { CommandInfo, ContextBudgetReport, ContextUsageInfo, ProviderCatalogEntry, ProviderId, QueuedMessages, ResponseUsage, TaskFileChange } from "../contracts";
+import type { CommandInfo, ContextBudgetReport, ContextUsageInfo, PlanReviewArtifact, ProviderCatalogEntry, ProviderId, QueuedMessages, ResolvePlanReviewInput, ResponseUsage, TaskFileChange } from "../contracts";
 import { classifyAttachmentFile, hasComposerAttachments, inlineTextFileBytes, maxImageBytes, maxTextFileBytes, type ComposerAttachments, type ComposerFile, type ComposerImage } from "../composer-attachments";
 import { normalizeVisibleActivities } from "../conversation-activity";
 import { fileExtension, isArtifactChange } from "../file-changes";
@@ -39,6 +39,7 @@ import { useI18n } from "../i18n";
 import type { ChatActivity, ChatTurn, Project } from "../types";
 import { parseModelValue } from "./model-selector-value";
 import { BrandMark } from "./BrandMark";
+import { PlanReviewPanel } from "./PlanReviewPanel";
 
 type NewChatViewProps = {
   project: Project | null;
@@ -49,6 +50,7 @@ type NewChatViewProps = {
   modelSupportsImages: boolean;
   contextUsage?: ContextUsageInfo;
   contextBudget?: ContextBudgetReport;
+  planReviews: PlanReviewArtifact[];
   prompt: string;
   attachments: ComposerAttachments;
   isRunning: boolean;
@@ -60,6 +62,7 @@ type NewChatViewProps = {
   onChooseWorkspace: () => void;
   onOpenTerminal: () => void;
   onOpenContextBudget: () => void;
+  onResolvePlanReview: (input: ResolvePlanReviewInput) => Promise<void>;
   onModelChange: (provider: ProviderId, modelId: string) => void;
   onSubmit: (promptOverride?: string) => void;
   onStop: () => void;
@@ -926,6 +929,7 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
         <div className="mx-auto w-[min(760px,100%)]">
           {props.turns.map((turn) => <ConversationTurn key={turn.id} turn={turn} running={props.isRunning} onRetry={props.onRetry} onForkTurn={props.onForkTurn} onAnswerQuestion={props.onAnswerQuestion} onOpenChange={props.onOpenChange} onAcceptChanges={props.onAcceptChanges} onRevertChanges={props.onRevertChanges} />)}
         </div>
+        <PlanReviewPanel reviews={props.planReviews} onResolve={props.onResolvePlanReview} />
       </div>
       <footer className="relative bg-linear-to-b from-transparent via-20% via-bg to-bg px-[52px] pt-[14px] pb-[17px]">
         {props.isRunning && runningTurn && <RunningTaskStatus turn={runningTurn} onStop={props.onStop} />}

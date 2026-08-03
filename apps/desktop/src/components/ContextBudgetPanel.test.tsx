@@ -6,12 +6,13 @@ import { ContextBudgetReportView, heaviestContextBudgetItems } from "./ContextBu
 
 const report: ContextBudgetReport = {
   cwd: "/workspace",
-  estimator: { id: "utf8-bytes-v1", bytesPerToken: 4 },
+  estimator: { id: "gpt-tokenizer-o200k-v1", kind: "model-tokenizer", provider: "openai", model: "gpt-5", tokenizer: "o200k_base", local: true },
   baselineEstimatedTokens: 120,
   onDemandEstimatedTokens: 80,
   totalEstimatedTokens: 200,
   availableEstimatedTokens: 260,
   estimatedSavingsTokens: 150,
+  history: [],
   groups: [
     {
       category: "skills",

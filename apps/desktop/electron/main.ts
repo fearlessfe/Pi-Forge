@@ -27,6 +27,7 @@ import {
   requireMcpServerInput,
   requireModelSettings,
   requireQueuePromptInput,
+  requireResolvePlanReviewInput,
   requireSendPromptInput,
 } from "./ipc-input-validation.js";
 
@@ -575,6 +576,10 @@ function registerIpc(
     if (typeof callId !== "string" || typeof answer !== "string") throw new Error("回答格式无效。");
     return agent.answerQuestion(callId, answer);
   });
+  ipcMain.handle("agent:list-plan-reviews", (_event, conversationId: unknown) => agent.listPlanReviews(
+    conversationId === undefined ? undefined : requireString(conversationId, "对话 ID 无效。"),
+  ));
+  ipcMain.handle("agent:resolve-plan-review", (_event, value: unknown) => agent.resolvePlanReview(requireResolvePlanReviewInput(value)));
   ipcMain.handle("agent:reset", () => agent.reset());
   ipcMain.handle("agent:list-recoveries", () => agent.listRecoveries());
   ipcMain.handle("agent:retry-recovery", async (_event, id: unknown) => ({ runId: await agent.retryRecovery(requireString(id, "恢复任务无效。")) }));

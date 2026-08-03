@@ -4,6 +4,7 @@ import {
   requireMcpServerInput,
   requireModelSettings,
   requireQueuePromptInput,
+  requireResolvePlanReviewInput,
   requireSendPromptInput,
   validatePromptExtras,
 } from "./ipc-input-validation.js";
@@ -18,6 +19,12 @@ describe("IPC input validation", () => {
     expect(requireContextBudgetRequest({ cwd: "/workspace" })).toEqual({ cwd: "/workspace" });
     expect(() => requireContextBudgetRequest({ cwd: 42 })).toThrow("Context Budget 请求无效");
     expect(() => requireContextBudgetRequest({ cwd: "/workspace", readFile: true })).toThrow("Context Budget 请求无效");
+  });
+
+  it("strictly validates bounded plan review decisions", () => {
+    expect(requireResolvePlanReviewInput({ reviewId: "review-1", versionId: "version-1", decision: "approved", annotations: [] })).toEqual({ reviewId: "review-1", versionId: "version-1", decision: "approved", annotations: [] });
+    expect(() => requireResolvePlanReviewInput({ reviewId: "review-1", versionId: "version-1", decision: "skip", annotations: [] })).toThrow("计划审阅结果无效");
+    expect(() => requireResolvePlanReviewInput({ reviewId: "review-1", versionId: "version-1", decision: "approved", annotations: [], readFile: true })).toThrow("计划审阅结果无效");
   });
 
   it("accepts and normalizes bounded send and queue inputs", () => {

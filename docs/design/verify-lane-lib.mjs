@@ -235,12 +235,13 @@ export function installMockBridge() {
   };
   const contextBudget = {
     cwd: trust.path,
-    estimator: { id: "utf8-bytes-v1", bytesPerToken: 4 },
+    estimator: { id: "gpt-tokenizer-o200k-v1", kind: "model-tokenizer", provider: "openai", model: "gpt-5", tokenizer: "o200k_base", local: true },
     baselineEstimatedTokens: 1640,
     onDemandEstimatedTokens: 760,
     totalEstimatedTokens: 2400,
     availableEstimatedTokens: 2400,
     estimatedSavingsTokens: 620,
+    history: [{ id: "snapshot-1", cwd: trust.path, conversationId: "conv-demo-1", runId: "run-demo-1", createdAt: now, provider: "openai", model: "gpt-5", estimatorId: "gpt-tokenizer-o200k-v1", estimatedResourceTokens: 2400, actualInputTokens: 10400, actualContextTokens: 11800, deltaTokens: 9400, estimatedSharePercent: 20.34 }],
     groups: [{
       category: "skills",
       enabledItems: 1,
@@ -404,6 +405,8 @@ export function installMockBridge() {
       revealChange: resolve(undefined),
       reset: resolve(undefined),
       answerQuestion: resolve(undefined),
+      listPlanReviews: resolve([]),
+      resolvePlanReview: resolve(undefined),
       listRecoveries: resolve([]),
       retryRecovery: resolve({ runId: "mock-run" }),
       discardRecovery: resolve(undefined),

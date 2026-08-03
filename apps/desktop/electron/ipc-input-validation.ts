@@ -14,6 +14,7 @@ import {
   type PromptFileAttachment,
   type PromptImage,
   type QueuePromptInput,
+  type ResolvePlanReviewInput,
   type SaveMcpServerInput,
   type SaveModelSettings,
   type SendPromptInput,
@@ -59,6 +60,17 @@ export const queuePromptInputSchema = Type.Object({
 
 export const contextBudgetRequestSchema = Type.Object({
   cwd: Type.Optional(Type.String({ maxLength: 4096 })),
+}, { additionalProperties: false });
+
+export const resolvePlanReviewInputSchema = Type.Object({
+  reviewId: Type.String({ minLength: 1, maxLength: 256 }),
+  versionId: Type.String({ minLength: 1, maxLength: 256 }),
+  decision: Type.Union([Type.Literal("approved"), Type.Literal("changes_requested")]),
+  annotations: Type.Array(Type.Object({
+    anchorId: Type.String({ minLength: 1, maxLength: 256 }),
+    quote: Type.String({ maxLength: 500 }),
+    comment: Type.String({ minLength: 1, maxLength: 4_000 }),
+  }, { additionalProperties: false }), { maxItems: 50 }),
 }, { additionalProperties: false });
 
 export const modelSettingsInputSchema = Type.Object({
@@ -213,6 +225,10 @@ export function requireQueuePromptInput(value: unknown): QueuePromptInput {
 
 export function requireContextBudgetRequest(value: unknown): ContextBudgetRequest {
   return requireSchema<ContextBudgetRequest>(contextBudgetRequestSchema, value ?? {}, "Context Budget 请求无效。");
+}
+
+export function requireResolvePlanReviewInput(value: unknown): ResolvePlanReviewInput {
+  return requireSchema<ResolvePlanReviewInput>(resolvePlanReviewInputSchema, value, "计划审阅结果无效。");
 }
 
 export function requireModelSettings(value: unknown): SaveModelSettings {

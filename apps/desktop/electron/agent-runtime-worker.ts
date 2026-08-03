@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
-import type { BrowserAnnotationCapture, SaveModelSettings } from "../src/contracts.js";
+import type { BrowserAnnotationCapture, ResolvePlanReviewInput, SaveModelSettings } from "../src/contracts.js";
 import { AgentService, type AgentRuntimeConfig, type PromptExtras } from "./agent-service.js";
 import { CapabilityStore } from "./capability-store.js";
 import { ModelMetadataStore } from "./model-metadata-store.js";
@@ -196,6 +196,8 @@ async function invoke(request: RuntimeRequest): Promise<unknown> {
     case "refreshCapabilities": return agent.refreshCapabilities();
     case "getPluginRuntime": return agent.getPluginRuntime();
     case "answerQuestion": return agent.answerQuestion(args[0] as string, args[1] as string);
+    case "listPlanReviews": return agent.listPlanReviews(args[0] as string | undefined);
+    case "resolvePlanReview": return agent.resolvePlanReview(args[0] as ResolvePlanReviewInput);
     case "reset": return agent.reset();
     case "testConfiguration": return agent.testConfiguration(args[0] as SaveModelSettings);
     case "updateConfiguration": {
