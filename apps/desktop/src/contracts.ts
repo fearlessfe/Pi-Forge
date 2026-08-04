@@ -138,8 +138,15 @@ export type ContextBudgetSnapshot = {
 export type ContextBudgetReport = {
   cwd: string;
   estimator: ContextBudgetEstimator;
+  /** Complete fixed context sent before conversation messages: assembled system prompt + active tool schemas. */
   baselineEstimatedTokens: number;
+  systemPromptEstimatedTokens: number;
+  toolSchemaEstimatedTokens: number;
+  activeToolCount: number;
+  /** Resource-only baseline used for attribution; these tokens are already included in the assembled context. */
+  resourceBaselineEstimatedTokens: number;
   onDemandEstimatedTokens: number;
+  /** Complete fixed context plus currently enabled on-demand resource bodies. */
   totalEstimatedTokens: number;
   availableEstimatedTokens: number;
   estimatedSavingsTokens: number;

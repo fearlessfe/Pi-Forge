@@ -14,7 +14,7 @@ type ContextBudgetPanelProps = {
 };
 
 const categoryLabels: Record<ContextBudgetCategory, string> = {
-  systemPrompt: "系统提示词",
+  systemPrompt: "自定义系统提示词",
   agents: "AGENTS.md",
   skills: "Skills",
   prompts: "Prompts",
@@ -45,14 +45,11 @@ export function heaviestContextBudgetItems(report: ContextBudgetReport, limit = 
 export function ContextBudgetReportView({ report }: { report: ContextBudgetReport }) {
   const { t, locale } = useI18n();
   const heaviest = heaviestContextBudgetItems(report);
-  const baselineSavings = report.groups.flatMap((group) => group.items)
-    .filter((item) => item.enabled && item.disableSupported && item.estimateStatus === "estimated")
-    .reduce((total, item) => total + item.baselineEstimatedTokens, 0);
   const summary = [
-    { label: "默认上下文", value: report.baselineEstimatedTokens, icon: Gauge },
-    { label: "按需加载", value: report.onDemandEstimatedTokens, icon: Clock3 },
-    { label: "潜在总量", value: report.totalEstimatedTokens, icon: Layers3 },
-    { label: "默认可节省", value: baselineSavings, icon: Zap },
+    { label: "完整默认上下文", value: report.baselineEstimatedTokens, icon: Gauge },
+    { label: "系统提示词", value: report.systemPromptEstimatedTokens, icon: Layers3 },
+    { label: "工具 schemas", value: report.toolSchemaEstimatedTokens, icon: Zap, detail: t("{count} 个启用工具", { count: report.activeToolCount }) },
+    { label: "按需资源", value: report.onDemandEstimatedTokens, icon: Clock3 },
   ];
   const history = report.history.filter((snapshot) => snapshot.estimateBasis === "baseline").slice(0, 12).reverse();
   const historyMaximum = Math.max(1, ...history.flatMap((snapshot) => [snapshot.estimatedResourceTokens, snapshot.actualContextTokens ?? snapshot.actualInputTokens]));
@@ -64,46 +61,46 @@ export function ContextBudgetReportView({ report }: { report: ContextBudgetRepor
   return (
     <>
       <section className="grid grid-cols-4 gap-loose max-[1180px]:grid-cols-2" aria-label={t("Context Budget 摘要")}>
-        {summary.map(({ label, value, icon: Icon }) => (
+        {summary.map(({ label, value, icon: Icon, detail }) => (
           <article className="rounded-md border border-separator bg-bg-grouped p-card" key={label}>
             <span className="mb-loose inline-flex size-control-md items-center justify-center rounded-sm bg-accent/16 text-accent"><Icon size={16} /></span>
             <strong className="block font-mono text-title font-semibold text-label">{tokens(value, locale)}</strong>
-            <small className="mt-tight block text-caption text-label-2">{t(label)} · tokens</small>
+            <small className="mt-tight block text-caption text-label-2">{t(label)} · tokens{detail ? ` · ${detail}` : ""}</small>
           </article>
         ))}
       </section>
 
       <section className="rounded-md border border-separator bg-bg-grouped p-card" aria-labelledby="context-budget-history-title">
         <header className="flex items-start justify-between gap-card">
-          <span><h3 className="inline-flex items-center gap-base text-callout font-semibold text-label" id="context-budget-history-title"><Activity size={16} />{t("默认上下文趋势")}</h3><p className="mt-tight text-caption text-label-3">{t("用 Provider 返回的输入 tokens 对照默认资源估算；只保存数值和模型元数据，不保存上下文正文。")}</p></span>
+          <span><h3 className="inline-flex items-center gap-base text-callout font-semibold text-label" id="context-budget-history-title"><Activity size={16} />{t("默认上下文趋势")}</h3><p className="mt-tight text-caption text-label-3">{t("用 Provider 返回的输入 tokens 对照完整默认上下文估算；只保存数值和模型元数据，不保存上下文正文。")}</p></span>
           <small className="rounded-full border border-separator bg-fill px-base py-base text-mini text-label-2">{report.estimator.kind === "model-tokenizer" ? t("模型 tokenizer") : t("安全回退")}</small>
         </header>
         {history.length > 0 ? <>
-          <svg className="mt-loose h-[132px] w-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={t("默认资源估算与实际上下文趋势图")}>
+          <svg className="mt-loose h-[132px] w-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={t("完整默认上下文估算与实际上下文趋势图")}>
             <line x1="0" y1="100" x2="100" y2="100" className="stroke-separator" vectorEffect="non-scaling-stroke" />
             <polyline points={chartPoints((index) => history[index].actualContextTokens ?? history[index].actualInputTokens)} fill="none" className="stroke-label-3" strokeWidth="2" vectorEffect="non-scaling-stroke" />
             <polyline points={chartPoints((index) => history[index].estimatedResourceTokens)} fill="none" className="stroke-accent" strokeWidth="2" vectorEffect="non-scaling-stroke" />
           </svg>
-          <div className="mt-base flex flex-wrap items-center justify-between gap-base text-caption text-label-3"><span className="inline-flex items-center gap-base"><i className="h-0.5 w-5 bg-accent" />{t("默认资源估算")}</span><span className="inline-flex items-center gap-base"><i className="h-0.5 w-5 bg-label-3" />{t("实际上下文")}</span><span>{t("最近 {count} 次模型请求", { count: history.length })}</span></div>
+          <div className="mt-base flex flex-wrap items-center justify-between gap-base text-caption text-label-3"><span className="inline-flex items-center gap-base"><i className="h-0.5 w-5 bg-accent" />{t("完整默认上下文估算")}</span><span className="inline-flex items-center gap-base"><i className="h-0.5 w-5 bg-label-3" />{t("实际上下文")}</span><span>{t("最近 {count} 次模型请求", { count: history.length })}</span></div>
         </> : <div className="mt-loose rounded-sm border border-dashed border-separator px-card py-section text-center text-caption text-label-3">{t("完成一次模型请求后，这里会显示实际装配趋势。")}</div>}
       </section>
 
       <section className="grid grid-cols-2 gap-loose max-[1120px]:grid-cols-1" aria-labelledby="context-budget-groups-title">
-        <h3 className="col-span-full text-callout font-semibold text-label" id="context-budget-groups-title">{t("默认上下文按类别")}</h3>
+        <header className="col-span-full"><h3 className="text-callout font-semibold text-label" id="context-budget-groups-title">{t("资源贡献按类别")}</h3><p className="mt-tight text-caption text-label-3">{t("这些资源已经包含在上方完整默认上下文中，不会重复相加；资源基础合计 {tokens}。", { tokens: tokens(report.resourceBaselineEstimatedTokens, locale) })}</p></header>
         {report.groups.map((group) => (
           <article className="rounded-md border border-separator bg-bg-grouped p-card" key={group.category}>
             <header className="flex items-start justify-between gap-card">
               <span className="min-w-0"><strong className="block text-body font-semibold text-label">{t(categoryLabels[group.category])}</strong><small className="mt-tight block text-caption text-label-3">{t("已启用 {enabled} / {total} 项", { enabled: group.enabledItems, total: group.totalItems })}</small></span>
               <strong className="font-mono text-callout text-label">{tokens(group.baselineEstimatedTokens, locale)}</strong>
             </header>
-            <div className="mt-loose h-1.5 overflow-hidden rounded-full bg-fill-2" aria-hidden="true"><i className="block h-full rounded-full bg-accent" style={{ width: `${report.baselineEstimatedTokens > 0 && group.baselineEstimatedTokens > 0 ? Math.max(3, group.baselineEstimatedTokens / report.baselineEstimatedTokens * 100) : 0}%` }} /></div>
+            <div className="mt-loose h-1.5 overflow-hidden rounded-full bg-fill-2" aria-hidden="true"><i className="block h-full rounded-full bg-accent" style={{ width: `${report.resourceBaselineEstimatedTokens > 0 && group.baselineEstimatedTokens > 0 ? Math.max(3, group.baselineEstimatedTokens / report.resourceBaselineEstimatedTokens * 100) : 0}%` }} /></div>
             <footer className="mt-base flex justify-between gap-base text-mini text-label-3"><span>{t("基础 {tokens}", { tokens: tokens(group.baselineEstimatedTokens, locale) })}</span><span>{t("按需 {tokens}", { tokens: tokens(group.onDemandEstimatedTokens, locale) })}</span></footer>
           </article>
         ))}
       </section>
 
       <section aria-labelledby="context-budget-heavy-title">
-        <header className="mb-loose flex items-end justify-between gap-card"><span><h3 className="text-callout font-semibold text-label" id="context-budget-heavy-title">{t("最重默认资源")}</h3><p className="mt-tight text-caption text-label-3">{t("只按每次请求都会装配的默认成本排序。")}</p></span><small className="text-caption text-label-3">{t("潜在资源总量 {tokens}", { tokens: tokens(report.totalEstimatedTokens, locale) })}</small></header>
+        <header className="mb-loose flex items-end justify-between gap-card"><span><h3 className="text-callout font-semibold text-label" id="context-budget-heavy-title">{t("最重默认资源")}</h3><p className="mt-tight text-caption text-label-3">{t("只按每次请求都会装配的默认成本排序。")}</p></span><small className="text-caption text-label-3">{t("完整默认 + 按需 {tokens}", { tokens: tokens(report.totalEstimatedTokens, locale) })}</small></header>
         <ol className="grid list-none gap-base p-0">
           {heaviest.map((item) => (
             <li className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-card rounded-md border border-separator bg-bg-grouped px-card py-loose max-[1040px]:grid-cols-[minmax(0,1fr)_auto]" key={item.id}>
@@ -120,7 +117,7 @@ export function ContextBudgetReportView({ report }: { report: ContextBudgetRepor
         <strong className="text-blue">{t("估算方法")}</strong> · {report.estimator.kind === "model-tokenizer"
           ? t("使用 {tokenizer} 在本地按当前模型 {model} 计数；不会向 Provider 发送资源正文。", { tokenizer: report.estimator.tokenizer, model: report.estimator.model })
           : t("当前模型没有可用的本地 tokenizer，按 UTF-8 字节数 ÷ 4 安全回退。")}
-        <span> {t("基础上下文随请求装配，Skills 正文与 Prompts 在调用时按需进入。Extension 与 MCP 只计算可确定的 tool schema。")}</span>
+        <span> {t("完整默认上下文直接读取真实内存会话组装后的系统提示词与启用工具 schemas；Skills 与 Prompts 正文只计入按需资源。发送前的 ~ 数值不含 Provider 协议封装，实际请求以 Provider 返回的 input tokens 为准。")}</span>
       </aside>
     </>
   );

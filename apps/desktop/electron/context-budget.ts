@@ -35,6 +35,12 @@ export type ContextTokenEstimator = {
   count(text: string): number;
 };
 
+export type AssembledDefaultContext = {
+  systemPromptText: string;
+  toolSchemasText: string;
+  activeToolCount: number;
+};
+
 /**
  * Deterministic, model-independent approximation used throughout the report.
  * UTF-8 bytes are used instead of JavaScript character count so CJK and emoji
@@ -110,6 +116,11 @@ export function buildContextBudgetReport(
   cwd: string,
   resources: ContextBudgetResource[],
   estimator: ContextTokenEstimator = createContextTokenEstimator("unknown", "unknown"),
+  assembledContext: AssembledDefaultContext = {
+    systemPromptText: "",
+    toolSchemasText: "",
+    activeToolCount: 0,
+  },
 ): ContextBudgetReport {
   const ordered = [...resources].sort((left, right) => (
     contextBudgetCategories.indexOf(left.category) - contextBudgetCategories.indexOf(right.category)
@@ -158,12 +169,21 @@ export function buildContextBudgetReport(
       items: categoryItems,
     };
   });
+  const resourceBaselineEstimatedTokens = groups.reduce((total, group) => total + group.baselineEstimatedTokens, 0);
+  const systemPromptEstimatedTokens = estimator.count(assembledContext.systemPromptText);
+  const toolSchemaEstimatedTokens = estimator.count(assembledContext.toolSchemasText);
+  const baselineEstimatedTokens = systemPromptEstimatedTokens + toolSchemaEstimatedTokens;
+  const onDemandEstimatedTokens = groups.reduce((total, group) => total + group.onDemandEstimatedTokens, 0);
   return {
     cwd,
     estimator: estimator.metadata,
-    baselineEstimatedTokens: groups.reduce((total, group) => total + group.baselineEstimatedTokens, 0),
-    onDemandEstimatedTokens: groups.reduce((total, group) => total + group.onDemandEstimatedTokens, 0),
-    totalEstimatedTokens: groups.reduce((total, group) => total + group.estimatedTokens, 0),
+    baselineEstimatedTokens,
+    systemPromptEstimatedTokens,
+    toolSchemaEstimatedTokens,
+    activeToolCount: assembledContext.activeToolCount,
+    resourceBaselineEstimatedTokens,
+    onDemandEstimatedTokens,
+    totalEstimatedTokens: baselineEstimatedTokens + onDemandEstimatedTokens,
     availableEstimatedTokens: groups.reduce((total, group) => total + group.availableEstimatedTokens, 0),
     estimatedSavingsTokens: groups.reduce((total, group) => total + group.estimatedSavingsTokens, 0),
     groups,

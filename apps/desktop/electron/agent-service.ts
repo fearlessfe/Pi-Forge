@@ -207,6 +207,21 @@ function messageContentText(content: unknown): string {
   }).join("\n");
 }
 
+function activeToolSchemas(session: AgentSession): { text: string; count: number } {
+  const schemas = session.getActiveToolNames().flatMap((name) => {
+    const definition = session.getToolDefinition(name);
+    return definition ? [{
+      name: definition.name,
+      description: definition.description,
+      parameters: definition.parameters,
+    }] : [];
+  });
+  return {
+    text: schemas.length > 0 ? stableContextValue(schemas) : "",
+    count: schemas.length,
+  };
+}
+
 function resultDetails(result: unknown): ToolActivityDetails | undefined {
   if (!result || typeof result !== "object" || !("details" in result)) return undefined;
   const details = (result as { details?: unknown }).details;
@@ -670,12 +685,40 @@ export class AgentService {
     }
 
     const config = this.settings.resolve();
-    const report = buildContextBudgetReport(
-      resolvedCwd,
-      budgetResources,
-      createContextTokenEstimator(config.provider, config.modelId),
-    );
-    return { ...report, history: this.contextBudgetHistory.list(resolvedCwd) };
+    const estimator = createContextTokenEstimator(config.provider, config.modelId);
+    const runtime = await this.createModelRuntime(config);
+    const resourceLoader = this.createSessionResourceLoader(resolvedCwd, resourceSettings);
+    await resourceLoader.reload();
+    const customTools = await this.createCustomTools(resolvedCwd, runtime);
+    let previewSession: AgentSession | undefined;
+    try {
+      const created = await createAgentSession({
+        cwd: resolvedCwd,
+        agentDir: this.agentDir,
+        model: runtime.model,
+        thinkingLevel: config.thinkingLevel,
+        modelRuntime: runtime.modelRuntime,
+        resourceLoader,
+        customTools,
+        sessionManager: SessionManager.inMemory(resolvedCwd),
+      });
+      previewSession = created.session;
+      this.capabilityPolicy.applyToolPolicy(previewSession);
+      const toolSchemas = activeToolSchemas(previewSession);
+      const report = buildContextBudgetReport(
+        resolvedCwd,
+        budgetResources,
+        estimator,
+        {
+          systemPromptText: previewSession.systemPrompt,
+          toolSchemasText: toolSchemas.text,
+          activeToolCount: toolSchemas.count,
+        },
+      );
+      return { ...report, history: this.contextBudgetHistory.list(resolvedCwd) };
+    } finally {
+      previewSession?.dispose();
+    }
   }
 
   async reloadPackages(): Promise<boolean> {
@@ -769,18 +812,9 @@ export class AgentService {
     return SessionManager.create(cwd, this.sessionDir);
   }
 
-  private async ensureSession(cwd: string, config: AgentRuntimeConfig, conversationId?: string): Promise<AgentSession> {
-    const key = JSON.stringify([cwd, conversationId, config.provider, config.baseUrl, config.modelId, config.thinkingLevel, config.apiKey]);
-    if (this.session && this.sessionKey === key) {
-      this.activeCwd = cwd;
-      return this.session;
-    }
-    this.disposeSession();
-
-    const runtime = await this.createModelRuntime(config);
-    const resourceSettings = this.resources.getSettings();
+  private createSessionResourceLoader(cwd: string, resourceSettings: ResourceSettings) {
     const projectContextEnabled = resourceSettings.workspaceContextEnabled && this.resources.isProjectTrusted(cwd);
-    const resourceLoader = createDesktopResourceLoader({
+    return createDesktopResourceLoader({
       cwd,
       agentDir: this.agentDir,
       projectContextEnabled,
@@ -829,6 +863,19 @@ export class AgentService {
       filterExtensions: (base, targetCwd) => this.capabilityPolicy.filterCapabilityExtensions(base, targetCwd),
       isPluginSourceEnabled: (source, targetCwd) => this.capabilityPolicy.isPluginSourceEnabled(source, targetCwd),
     });
+  }
+
+  private async ensureSession(cwd: string, config: AgentRuntimeConfig, conversationId?: string): Promise<AgentSession> {
+    const key = JSON.stringify([cwd, conversationId, config.provider, config.baseUrl, config.modelId, config.thinkingLevel, config.apiKey]);
+    if (this.session && this.sessionKey === key) {
+      this.activeCwd = cwd;
+      return this.session;
+    }
+    this.disposeSession();
+
+    const runtime = await this.createModelRuntime(config);
+    const resourceSettings = this.resources.getSettings();
+    const resourceLoader = this.createSessionResourceLoader(cwd, resourceSettings);
     await resourceLoader.reload();
 
     const customTools = await this.createCustomTools(cwd, runtime);

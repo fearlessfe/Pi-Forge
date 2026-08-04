@@ -67,10 +67,18 @@ describe("context budget estimation", () => {
         disableSupported: true,
         estimateStatus: "unavailable",
       },
-    ]);
+    ], undefined, {
+      systemPromptText: "abcd",
+      toolSchemasText: "",
+      activeToolCount: 0,
+    });
 
     expect(report).toMatchObject({
       baselineEstimatedTokens: 1,
+      systemPromptEstimatedTokens: 1,
+      toolSchemaEstimatedTokens: 0,
+      activeToolCount: 0,
+      resourceBaselineEstimatedTokens: 1,
       onDemandEstimatedTokens: 5,
       totalEstimatedTokens: 6,
       availableEstimatedTokens: 6,

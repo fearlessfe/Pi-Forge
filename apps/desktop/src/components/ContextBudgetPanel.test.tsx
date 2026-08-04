@@ -8,6 +8,10 @@ const report: ContextBudgetReport = {
   cwd: "/workspace",
   estimator: { id: "gpt-tokenizer-o200k-v1", kind: "model-tokenizer", provider: "openai", model: "gpt-5", tokenizer: "o200k_base", local: true },
   baselineEstimatedTokens: 120,
+  systemPromptEstimatedTokens: 70,
+  toolSchemaEstimatedTokens: 50,
+  activeToolCount: 8,
+  resourceBaselineEstimatedTokens: 40,
   onDemandEstimatedTokens: 80,
   totalEstimatedTokens: 200,
   availableEstimatedTokens: 260,
@@ -86,8 +90,11 @@ describe("ContextBudgetReportView", () => {
     const markup = renderToStaticMarkup(<I18nProvider><ContextBudgetReportView report={report} /></I18nProvider>);
 
     expect(markup).toContain("~200");
-    expect(markup).toContain("默认上下文");
-    expect(markup).toContain("潜在总量");
+    expect(markup).toContain("完整默认上下文");
+    expect(markup).toContain("系统提示词");
+    expect(markup).toContain("工具 schemas");
+    expect(markup).toContain("8 个启用工具");
+    expect(markup).toContain("资源基础合计 ~40");
     expect(markup).toContain("review");
     expect(markup).not.toContain("legacy");
     expect(markup).toContain("禁用默认节省 ~40");

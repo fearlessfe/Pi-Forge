@@ -100,11 +100,23 @@ describe("AgentService resource inventory", () => {
       }],
       callTool: async () => ({ text: "", details: undefined }),
     };
-    const service = new AgentService({ resolve: () => ({}) as never }, agentDir, cwd, () => {}, undefined, undefined, undefined, undefined, undefined, undefined, resources, mcp);
+    const service = new AgentService({
+      resolve: () => ({
+        provider: "openai-compatible",
+        baseUrl: "http://127.0.0.1:1/v1",
+        modelId: "gpt-5",
+        thinkingLevel: "off",
+        apiKey: "local-test-key",
+      }),
+    }, agentDir, cwd, () => {}, undefined, undefined, undefined, undefined, undefined, undefined, resources, mcp);
     const report = await service.getContextBudget(cwd);
 
     expect(report.totalEstimatedTokens).toBeGreaterThan(0);
     expect(report.baselineEstimatedTokens).toBeGreaterThan(0);
+    expect(report.systemPromptEstimatedTokens).toBeGreaterThan(0);
+    expect(report.toolSchemaEstimatedTokens).toBeGreaterThan(0);
+    expect(report.activeToolCount).toBeGreaterThan(0);
+    expect(report.resourceBaselineEstimatedTokens).toBeGreaterThan(0);
     expect(report.onDemandEstimatedTokens).toBeGreaterThan(0);
     expect(report.groups.map((group) => group.category)).toEqual([
       "systemPrompt", "agents", "skills", "prompts", "extensions", "mcpSchemas",
