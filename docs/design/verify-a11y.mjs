@@ -1,5 +1,5 @@
 /**
- * 可访问性验收车道（Chromium + mock bridge）—— docs/design-refresh-apple.md 第六节
+ * 可访问性验收车道（Chromium + mock bridge）—— docs-internal/design-refresh-apple.md 第六节
  * 验收矩阵第 3/5/6 项（reducedMotion / 缩放 / forced-colors）的自动化补证。
  *
  * 覆盖三组检查（均走渲染层 mock，共享 verify-lane-lib.mjs）：

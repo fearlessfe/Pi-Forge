@@ -73,7 +73,7 @@ type SettingsViewProps = {
   onDismissAuth: () => void;
 };
 
-/* 设置视图共享工具类组合（token v2，docs/design-refresh-apple.md 3.2/3.5）：
+/* 设置视图共享工具类组合（token v2，docs-internal/design-refresh-apple.md 3.2/3.5）：
    按钮 13px/600 走 control-lg 高度档；表单控件 bg-fill + border-separator + radius-sm。 */
 const primaryButtonClass =
   "inline-flex h-control-lg cursor-pointer items-center justify-center gap-[6px] rounded-sm border-0 bg-accent px-card text-body font-semibold text-accent-ink transition-colors duration-150 ease-apple active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40";

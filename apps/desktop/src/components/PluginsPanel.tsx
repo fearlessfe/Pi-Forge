@@ -28,7 +28,7 @@ type PluginsPanelProps = {
   workspaceCwd?: string;
 };
 
-/* 插件中心工具类组合（token v2，docs/design-refresh-apple.md 3.2/3.5）：
+/* 插件中心工具类组合（token v2，docs-internal/design-refresh-apple.md 3.2/3.5）：
    badge 语义色 16% 底 + 本色文字（alpha 仅 8/16/32 档）；
    卡片去边框改 bg-bg-grouped 填充分层，内层用 bg-bg；按钮 13px/600 走 control 高度档。 */
 const primaryButtonClass =

@@ -4,7 +4,7 @@ import type { AppearancePreference } from "../src/contracts.js";
 
 type StoredAppearanceFile = { version: 1; theme: AppearancePreference };
 
-/* 最近一次界面主题的轻量持久化（docs/design-refresh-apple.md 3.6）：
+/* 最近一次界面主题的轻量持久化（docs-internal/design-refresh-apple.md 3.6）：
    createWindow() 据此决定初始背景色，避免浅色用户启动时先闪一帧深色。
    无记录时跟随系统，文件损坏时也安全回落系统偏好。 */
 export class AppearanceStore {

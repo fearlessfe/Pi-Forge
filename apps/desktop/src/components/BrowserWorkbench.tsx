@@ -35,7 +35,7 @@ function errorMessage(error: unknown): string {
     .replace(/^Error invoking remote method '[^']+': Error: /, "");
 }
 
-/* 浏览器工作台工具类组合（token v2，docs/design-refresh-apple.md 3.2/3.5）：
+/* 浏览器工作台工具类组合（token v2，docs-internal/design-refresh-apple.md 3.2/3.5）：
    工具栏/地址栏/状态栏全部走语义 token，浅色主题下不再有深色孤岛。 */
 const navButtonClass =
   "grid size-control-md cursor-pointer place-items-center rounded-sm border-0 bg-transparent text-label-3 transition-colors duration-150 ease-apple hover:bg-fill hover:text-label active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40";

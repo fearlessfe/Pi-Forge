@@ -1,5 +1,5 @@
 /**
- * Token 工具类持久验证 —— docs/design-refresh-apple.md 3.2/3.3（D0）。
+ * Token 工具类持久验证 —— docs-internal/design-refresh-apple.md 3.2/3.3（D0）。
  *
  * 用 tailwindcss 的 Node API compile() 编译 apps/desktop/src/styles.css，
  * 对候选类清单跑 build()，断言 token v2 对应的工具类全部生成；

@@ -1,5 +1,5 @@
 /**
- * 黄金图回归门禁（pixelmatch 像素对比）—— docs/design-refresh-apple.md 第六节验收矩阵第 1 项。
+ * 黄金图回归门禁（pixelmatch 像素对比）—— docs-internal/design-refresh-apple.md 第六节验收矩阵第 1 项。
  *
  * 把 docs/design/shots/（verify:renderer / verify:a11y / verify:electron 产出的场景截图）
  * 与 docs/design/golden/ 基准逐图做像素对比：

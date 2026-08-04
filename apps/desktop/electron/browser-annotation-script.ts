@@ -1,6 +1,6 @@
 import type { AppearanceTheme } from "../src/contracts.js";
 
-/* 标注浮层注入网页 Shadow DOM，自带配色（docs/design-refresh-apple.md 3.2）。
+/* 标注浮层注入网页 Shadow DOM，自带配色（docs-internal/design-refresh-apple.md 3.2）。
    主题在 start() 时由调用方传入（BrowserService 注入时取当前主题）；
    标注会话中途切换主题不实时重绘，重新开始标注即按新主题渲染。 */
 export const browserAnnotationBootstrap = String.raw`

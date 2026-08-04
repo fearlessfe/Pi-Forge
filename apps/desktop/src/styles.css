@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ==========================================================================
-   Token v2（docs/design-refresh-apple.md 3.2）
+   Token v2（docs-internal/design-refresh-apple.md 3.2）
    语义色 / 材质 / 阴影等随主题翻转的值定义在下方"主题变量层"，
    通过 `@theme inline` 桥接为 Tailwind 工具类；组件 className 不写 dark: 变体。
    注意：窗口基底色变量名为 `--bg-window`（区别于已删除的旧变量 `--bg`），
@@ -44,7 +44,7 @@
   --shadow-1: 0 1px 2px rgb(0 0 0 / 18%);
   --shadow-2: 0 8px 24px rgb(0 0 0 / 32%);
   --shadow-3: 0 16px 48px rgb(0 0 0 / 40%);
-  /* 终端（xterm 经 getComputedStyle 读取，docs/design-refresh-apple.md 3.6）；
+  /* 终端（xterm 经 getComputedStyle 读取，docs-internal/design-refresh-apple.md 3.6）；
      深色一套以原 TerminalPanel.tsx 硬编码值为基准，bright 为其加亮变体 */
   --terminal-background: #090c11;
   --terminal-foreground: #d7dee6;
@@ -198,7 +198,7 @@
 }
 
 /* ==========================================================================
-   定制层骨架（docs/design-refresh-apple.md 3.4，目标总量 <1500 行）
+   定制层骨架（docs-internal/design-refresh-apple.md 3.4，目标总量 <1500 行）
    显式声明层顺序：components 层位于 Tailwind utilities 之前、token/base 之后。
    以下 7 个分区在 D2~D5 逐步填充/迁入，分区规则只写在本层内：
    ========================================================================== */
@@ -747,7 +747,7 @@
   }
 }
 
-/* ---- D1 base：全局排版基线（docs/design-refresh-apple.md 3.2 可读性底线） ---- */
+/* ---- D1 base：全局排版基线（docs-internal/design-refresh-apple.md 3.2 可读性底线） ---- */
 body {
   font-size: 13px;
   line-height: 1.45;

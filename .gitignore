@@ -9,3 +9,6 @@ coverage/
 skills-lock.json
 docs/design/shots/
 docs/design/baseline-d0-old/
+docs-internal/
+.omx/
+outputs/

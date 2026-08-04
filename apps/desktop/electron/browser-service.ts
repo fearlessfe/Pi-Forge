@@ -21,7 +21,7 @@ import { formatBrowserAnnotation, normalizeBrowserUrl } from "./browser-utils.js
 const annotationWorldId = 999;
 const maxElements = 20;
 
-/* 原生 WebContentsView 背景随主题切换（docs/design-refresh-apple.md 3.6），
+/* 原生 WebContentsView 背景随主题切换（docs-internal/design-refresh-apple.md 3.6），
    深色对齐 token v2 --bg-window，浅色对齐浅色 --bg-window。 */
 const viewBackground: Record<AppearanceTheme, string> = { dark: "#1C1C1E", light: "#F5F5F7" };
 

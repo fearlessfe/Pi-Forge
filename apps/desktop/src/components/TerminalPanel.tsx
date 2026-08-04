@@ -14,7 +14,7 @@ type TerminalPanelProps = {
 };
 
 /* xterm 主题不在 TSX 里维护两套硬编码色值：从 styles.css 主题变量层的 --terminal-*
-   读取（docs/design-refresh-apple.md 3.6），主题切换由 dataset.theme 驱动。 */
+   读取（docs-internal/design-refresh-apple.md 3.6），主题切换由 dataset.theme 驱动。 */
 function terminalVar(styles: CSSStyleDeclaration, name: string): string | undefined {
   return styles.getPropertyValue(name).trim() || undefined;
 }
@@ -49,7 +49,7 @@ function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': Error: /, "");
 }
 
-/* 终端面板工具类组合（token v2，docs/design-refresh-apple.md 3.2/3.5）：
+/* 终端面板工具类组合（token v2，docs-internal/design-refresh-apple.md 3.2/3.5）：
    外壳 bg-bg-grouped + shadow-3；工作区底色走 --terminal-background（bg-terminal-bg），
    与 xterm 渲染进程内主题同步（3.6）保持一致，浅色主题下不再是深色孤岛。 */
 const panelShellClass =

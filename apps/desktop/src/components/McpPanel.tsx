@@ -50,7 +50,7 @@ function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': Error: /, "");
 }
 
-/* 设置面板共享工具类组合（token v2，docs/design-refresh-apple.md 3.2/3.5）：
+/* 设置面板共享工具类组合（token v2，docs-internal/design-refresh-apple.md 3.2/3.5）：
    与 D3-1 SettingsView 同一语言 —— 按钮 text-body/600 + control 档；
    表单控件 bg-fill + border-separator + rounded-sm + focus-visible:ring-2 ring-accent/32。 */
 const primaryButtonClass =

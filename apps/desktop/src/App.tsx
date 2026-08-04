@@ -20,7 +20,7 @@ type Notice = {
 };
 
 /* notice 是运行期按类型拼接的动态语义类，基础类与修饰类保留在 styles.css 定制层
-   （docs/design-refresh-apple.md 3.5 规则 2），此处用静态映射代替字符串拼接。 */
+   （docs-internal/design-refresh-apple.md 3.5 规则 2），此处用静态映射代替字符串拼接。 */
 const noticeToneClass: Record<Notice["type"], string> = {
   success: "notice notice--success",
   info: "notice notice--info",
@@ -159,7 +159,7 @@ export function App() {
     document.documentElement.dataset.nativeMaterial = nativeMaterial ? "true" : "false";
     document.documentElement.style.colorScheme = resolvedTheme;
     window.localStorage.setItem("pi-theme", theme);
-    // 跨进程主题同步（docs/design-refresh-apple.md 3.6）：主进程据此切换窗口/原生视图背景并持久化。
+    // 跨进程主题同步（docs-internal/design-refresh-apple.md 3.6）：主进程据此切换窗口/原生视图背景并持久化。
     // IPC 失败不阻塞渲染层主题切换，仅告警；下一次主题切换时本 effect 会自然重试。
     let cancelled = false;
     const appearance = window.piDesktop?.appearance;

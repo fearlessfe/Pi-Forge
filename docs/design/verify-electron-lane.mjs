@@ -1,5 +1,5 @@
 /**
- * Electron 验收车道（Playwright _electron.launch）—— docs/design-refresh-apple.md 第五节 D0。
+ * Electron 验收车道（Playwright _electron.launch）—— docs-internal/design-refresh-apple.md 第五节 D0。
  *
  * 覆盖边界：本车道验证真实 Electron 运行时——真实 preload/IPC、窗口背景色断言、
  * documentElement 主题标记。D0 最小闭环：启动 → App 渲染 → 主题断言 →

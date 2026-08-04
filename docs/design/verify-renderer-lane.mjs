@@ -1,5 +1,5 @@
 /**
- * 渲染层验收车道（Chromium + mock bridge）—— docs/design-refresh-apple.md 第五节 D0。
+ * 渲染层验收车道（Chromium + mock bridge）—— docs-internal/design-refresh-apple.md 第五节 D0。
  *
  * 覆盖边界：本车道只验收纯渲染层（React DOM）——新对话 / 活跃对话 / 设置 / 插件中心
  * 四个场景 × dark/light 双主题截图。window.piDesktop 由 addInitScript 注入完整 mock，

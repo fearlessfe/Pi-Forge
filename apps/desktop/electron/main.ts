@@ -41,7 +41,7 @@ let browserService: BrowserService | undefined;
 let observabilityService: ObservabilityService | undefined;
 let applicationShutdownStarted = false;
 
-/* 窗口/原生视图背景随主题切换，对齐 token v2 --bg-window（docs/design-refresh-apple.md 3.2/3.6）。
+/* 窗口/原生视图背景随主题切换，对齐 token v2 --bg-window（docs-internal/design-refresh-apple.md 3.2/3.6）。
    初始外观取 AppearanceStore 里最近一次偏好（无记录跟随系统）；macOS 使用透明原生材质，
    其余平台继续使用解析后的纯色背景，避免启动闪烁。 */
 const windowBackground: Record<AppearanceTheme, string> = { dark: "#1C1C1E", light: "#F5F5F7" };

@@ -12,7 +12,7 @@ function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': Error: /, "");
 }
 
-/* 设置面板共享工具类组合（token v2，docs/design-refresh-apple.md 3.2/3.5），与 D3-1 SettingsView 同一语言。 */
+/* 设置面板共享工具类组合（token v2，docs-internal/design-refresh-apple.md 3.2/3.5），与 D3-1 SettingsView 同一语言。 */
 const secondaryButtonClass =
   "inline-flex h-control-lg cursor-pointer items-center justify-center gap-base rounded-sm border border-separator bg-bg-grouped-2 px-card text-body font-semibold text-label-2 transition-colors duration-150 ease-apple hover:bg-fill active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40";
 const settingsErrorClass = "mt-loose rounded-sm border border-red/32 bg-red/8 px-loose py-loose text-caption text-red";
