@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { ContextBudgetReport } from "../contracts";
-import { ContextIndicator, NewChatView } from "./NewChatView";
+import { ContextIndicator, NewChatView, nextProjectResourceSelection } from "./NewChatView";
 import { parseModelValue } from "./model-selector-value";
 
 describe("parseModelValue", () => {
@@ -14,6 +14,22 @@ describe("parseModelValue", () => {
     "ignores an invalid Radix Select value: %s",
     (value) => expect(parseModelValue(value)).toBeNull(),
   );
+});
+
+describe("nextProjectResourceSelection", () => {
+  it("switches global inheritance to an exact one-resource project selection", () => {
+    expect(nextProjectResourceSelection("inherit", "skill", "review", {
+      skills: ["review", "release"],
+      mcpServers: ["user:search"],
+    })).toEqual({ skills: ["review"], mcpServers: [] });
+  });
+
+  it("toggles resources without discarding the rest of a custom selection", () => {
+    expect(nextProjectResourceSelection("custom", "mcp", "user:search", {
+      skills: ["review"],
+      mcpServers: ["user:search", "user:docs"],
+    })).toEqual({ skills: ["review"], mcpServers: ["user:docs"] });
+  });
 });
 
 describe("NewChatView analysis presentation", () => {

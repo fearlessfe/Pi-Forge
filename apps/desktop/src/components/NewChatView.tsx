@@ -32,7 +32,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { CommandInfo, ContextBudgetReport, ContextUsageInfo, McpOverview, PlanReviewArtifact, ProviderCatalogEntry, ProviderId, QueuedMessages, ResolvePlanReviewInput, ResourceInventory, ResponseUsage, TaskFileChange } from "../contracts";
+import type { CommandInfo, ContextBudgetReport, ContextUsageInfo, McpOverview, PlanReviewArtifact, ProjectResourceSelection, ProviderCatalogEntry, ProviderId, QueuedMessages, ResolvePlanReviewInput, ResourceInventory, ResponseUsage, TaskFileChange } from "../contracts";
 import { classifyAttachmentFile, hasComposerAttachments, inlineTextFileBytes, maxImageBytes, maxTextFileBytes, type ComposerAttachments, type ComposerFile, type ComposerImage } from "../composer-attachments";
 import { normalizeVisibleActivities } from "../conversation-activity";
 import { fileExtension, isArtifactChange } from "../file-changes";
@@ -479,6 +479,20 @@ function DirectoryMenu({
   );
 }
 
+export function nextProjectResourceSelection(
+  mode: "inherit" | "custom",
+  kind: "skill" | "mcp",
+  key: string,
+  current: ProjectResourceSelection,
+): ProjectResourceSelection {
+  if (mode === "inherit") {
+    return kind === "skill" ? { skills: [key], mcpServers: [] } : { skills: [], mcpServers: [key] };
+  }
+  const entries = kind === "skill" ? current.skills : current.mcpServers;
+  const selected = entries.includes(key) ? entries.filter((entry) => entry !== key) : [...entries, key];
+  return kind === "skill" ? { ...current, skills: selected } : { ...current, mcpServers: selected };
+}
+
 function ProjectResourceMenu({
   project,
   isRunning,
@@ -523,15 +537,34 @@ function ProjectResourceMenu({
     if (project) void load();
   }, [project?.path]);
 
-  async function applySelection(selection?: { skills: string[]; mcpServers: string[] }) {
+  async function saveSelection(selection?: { skills: string[]; mcpServers: string[] }) {
     if (!project || !window.piDesktop?.resources) return;
     setSaving(true);
     setError("");
     try {
-      await window.piDesktop.resources.setProjectSelection(project.path, selection);
-      await load();
+      const settings = await window.piDesktop.resources.setProjectSelection(project.path, selection);
+      setInventory((current) => current ? {
+        ...current,
+        projectSettings: settings,
+        skills: current.skills.map((skill) => {
+          const projectEnabled = settings.selectionMode === "custom" ? settings.selectedSkills.includes(skill.name) : true;
+          return { ...skill, projectEnabled, enabled: skill.globalEnabled && projectEnabled };
+        }),
+      } : current);
+      setOverview((current) => current ? {
+        ...current,
+        servers: current.servers.map((server) => ({
+          ...server,
+          projectEnabled: settings.selectionMode === "custom" ? settings.selectedMcpServers.includes(server.key) : true,
+        })),
+      } : current);
+      setDraftSkills(settings.selectionMode === "custom"
+        ? settings.selectedSkills
+        : inventory?.skills.filter((skill) => skill.globalEnabled).map((skill) => skill.name) ?? []);
+      setDraftServers(settings.selectionMode === "custom"
+        ? settings.selectedMcpServers
+        : overview?.servers.filter((server) => server.enabled).map((server) => server.key) ?? []);
       onResourcesChanged();
-      setOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -540,11 +573,17 @@ function ProjectResourceMenu({
   }
 
   function toggleSkill(name: string) {
-    setDraftSkills((current) => current.includes(name) ? current.filter((entry) => entry !== name) : [...current, name]);
+    void saveSelection(nextProjectResourceSelection(custom ? "custom" : "inherit", "skill", name, {
+      skills: draftSkills,
+      mcpServers: draftServers,
+    }));
   }
 
   function toggleServer(key: string) {
-    setDraftServers((current) => current.includes(key) ? current.filter((entry) => entry !== key) : [...current, key]);
+    void saveSelection(nextProjectResourceSelection(custom ? "custom" : "inherit", "mcp", key, {
+      skills: draftSkills,
+      mcpServers: draftServers,
+    }));
   }
 
   if (!project) return null;
@@ -581,7 +620,7 @@ function ProjectResourceMenu({
                   return <button className="flex min-h-[38px] items-center gap-base rounded-sm border-0 bg-transparent px-base text-left text-caption text-label-2 hover:bg-fill disabled:opacity-45" type="button" aria-pressed={checked} disabled={disabled || !skill.globalEnabled} onClick={() => toggleSkill(skill.name)} key={`${skill.source}:${skill.filePath}`}>
                     <span className={`grid size-[18px] shrink-0 place-items-center rounded-[5px] border ${checked && skill.globalEnabled ? "border-accent bg-accent text-accent-ink" : "border-separator bg-bg"}`}>{checked && skill.globalEnabled && <Check size={12} />}</span>
                     <span className="min-w-0 flex-1 truncate font-semibold">{skill.name}</span>
-                    {!skill.globalEnabled && <small className="text-label-3">{t("全局已停用")}</small>}
+                    {!skill.globalEnabled ? <small className="text-label-3">{t("全局已停用")}</small> : !custom && <small className="text-accent">{t("仅使用")}</small>}
                   </button>;
                 })}
                 {inventory.skills.length === 0 && <small className="px-base py-loose text-caption text-label-3">{t("没有可用的 Skills")}</small>}
@@ -596,7 +635,7 @@ function ProjectResourceMenu({
                   return <button className="flex min-h-[38px] items-center gap-base rounded-sm border-0 bg-transparent px-base text-left text-caption text-label-2 hover:bg-fill disabled:opacity-45" type="button" aria-pressed={checked} disabled={disabled || !server.enabled} onClick={() => toggleServer(server.key)} key={server.key}>
                     <span className={`grid size-[18px] shrink-0 place-items-center rounded-[5px] border ${checked && server.enabled ? "border-accent bg-accent text-accent-ink" : "border-separator bg-bg"}`}>{checked && server.enabled && <Check size={12} />}</span>
                     <span className="min-w-0 flex-1 truncate font-semibold">{server.name}</span>
-                    <small className="text-label-3">{server.scope}</small>
+                    <small className={!custom ? "text-accent" : "text-label-3"}>{t(!custom ? "仅使用" : server.scope)}</small>
                   </button>;
                 })}
                 {overview.servers.length === 0 && <small className="px-base py-loose text-caption text-label-3">{t("尚未配置 MCP Server")}</small>}
@@ -605,8 +644,8 @@ function ProjectResourceMenu({
           </div>}
 
           <footer className="flex items-center justify-between gap-card border-t border-separator pt-card">
-            <button className="inline-flex h-control-md items-center gap-base rounded-sm border-0 bg-transparent px-base text-caption font-semibold text-label-3 hover:bg-fill hover:text-label-2 disabled:opacity-40" type="button" disabled={disabled || !custom} onClick={() => void applySelection()}><RotateCcw size={13} />{t("恢复全局配置")}</button>
-            <button className="inline-flex h-control-md items-center rounded-sm bg-accent px-loose text-caption font-semibold text-accent-ink disabled:opacity-40" type="button" disabled={disabled || loading || !inventory || !overview} onClick={() => void applySelection({ skills: draftSkills, mcpServers: draftServers })}>{t(saving ? "正在应用…" : "仅使用选中资源")}</button>
+            <small className="max-w-[280px] text-caption leading-[1.45] text-label-3">{t(custom ? "更改会立即保存。" : "继承全局时点击任一资源，会立即切换为仅使用该资源。")}</small>
+            {custom && <button className="inline-flex h-control-md shrink-0 items-center gap-base rounded-sm border border-separator bg-transparent px-loose text-caption font-semibold text-label-2 hover:bg-fill disabled:opacity-40" type="button" disabled={disabled} onClick={() => void saveSelection()}><RotateCcw size={13} />{t("恢复全局配置")}</button>}
           </footer>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
