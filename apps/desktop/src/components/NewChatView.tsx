@@ -341,22 +341,22 @@ export function ContextIndicator({
   if (!budget) return <span className={className}>{usageIndicator}</span>;
 
   const heaviest = budget.groups.flatMap((group) => group.items)
-    .filter((item) => item.estimateStatus === "estimated" && item.estimatedTokens > 0)
-    .sort((left, right) => right.estimatedTokens - left.estimatedTokens || left.name.localeCompare(right.name))
+    .filter((item) => item.estimateStatus === "estimated" && item.baselineEstimatedTokens > 0)
+    .sort((left, right) => right.baselineEstimatedTokens - left.baselineEstimatedTokens || left.name.localeCompare(right.name))
     .slice(0, 3);
   return (
     <details className={`group relative ${className}`}>
       <summary className="flex cursor-pointer list-none items-center gap-base rounded-sm px-tight py-tight text-caption text-label-3 transition-colors duration-150 ease-apple hover:bg-fill focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/32 [&::-webkit-details-marker]:hidden" aria-label={t("查看上下文与资源预算")}>
         {usageIndicator}
-        <span className="inline-flex items-center gap-tight rounded-full bg-accent/8 px-base py-tight text-accent"><Gauge size={12} /><span>{t("资源")}</span><strong className="font-mono font-semibold">{formatTokens(budget.totalEstimatedTokens)}</strong></span>
+        <span className="inline-flex items-center gap-tight rounded-full bg-accent/8 px-base py-tight text-accent"><Gauge size={12} /><span>{t("默认")}</span><strong className="font-mono font-semibold">~{formatTokens(budget.baselineEstimatedTokens)}</strong></span>
         <ChevronDown className="transition-transform duration-150 ease-apple group-open:rotate-180" size={12} aria-hidden="true" />
       </summary>
       <section className="absolute right-0 bottom-[calc(100%+8px)] z-30 w-[340px] max-w-[calc(100vw-32px)] rounded-md border border-separator bg-bg p-card text-left shadow-3" aria-label={t("资源预算明细")}>
-        <header><strong className="text-callout font-semibold text-label">{t("资源预算")}</strong><p className="mt-tight text-caption leading-normal text-label-3">{t("这是当前上下文的组成部分，不会与上下文用量重复相加。")}</p></header>
+        <header><strong className="text-callout font-semibold text-label">{t("默认上下文预算")}</strong><p className="mt-tight text-caption leading-normal text-label-3">{t("默认值只统计每次请求都会装配的资源；Skill 与 Prompt 正文按需加载，不计入默认上下文。")}</p></header>
         <dl className="mt-loose grid grid-cols-3 gap-base">
-          {[{ label: "基础资源", value: budget.baselineEstimatedTokens }, { label: "按需资源", value: budget.onDemandEstimatedTokens }, { label: "可禁用节省", value: budget.estimatedSavingsTokens }].map((entry) => <div className="rounded-sm bg-bg-grouped px-base py-base" key={entry.label}><dt className="text-mini text-label-3">{t(entry.label)}</dt><dd className="mt-tight font-mono text-caption font-semibold text-label">~{formatTokens(entry.value)}</dd></div>)}
+          {[{ label: "默认资源", value: budget.baselineEstimatedTokens }, { label: "按需资源", value: budget.onDemandEstimatedTokens }, { label: "潜在总量", value: budget.totalEstimatedTokens }].map((entry) => <div className="rounded-sm bg-bg-grouped px-base py-base" key={entry.label}><dt className="text-mini text-label-3">{t(entry.label)}</dt><dd className="mt-tight font-mono text-caption font-semibold text-label">~{formatTokens(entry.value)}</dd></div>)}
         </dl>
-        <div className="mt-loose border-t border-separator pt-loose"><strong className="text-caption font-semibold text-label-2">{t("最重资源")}</strong><ol className="mt-base grid list-none gap-base p-0">{heaviest.map((item) => <li className="flex items-center justify-between gap-base text-caption" key={item.id}><span className="min-w-0 truncate text-label-2">{item.name}</span><span className="flex-none font-mono text-label-3">~{formatTokens(item.estimatedTokens)}</span></li>)}</ol>{heaviest.length === 0 && <p className="mt-base text-caption text-label-3">{t("当前没有可估算的上下文资源。")}</p>}</div>
+        <div className="mt-loose border-t border-separator pt-loose"><strong className="text-caption font-semibold text-label-2">{t("最重默认资源")}</strong><ol className="mt-base grid list-none gap-base p-0">{heaviest.map((item) => <li className="flex items-center justify-between gap-base text-caption" key={item.id}><span className="min-w-0 truncate text-label-2">{item.name}</span><span className="flex-none font-mono text-label-3">~{formatTokens(item.baselineEstimatedTokens)}</span></li>)}</ol>{heaviest.length === 0 && <p className="mt-base text-caption text-label-3">{t("当前没有可估算的默认上下文资源。")}</p>}</div>
         <button className="mt-loose inline-flex h-control-md w-full cursor-pointer items-center justify-center gap-base rounded-sm border border-separator bg-bg-grouped-2 px-loose text-caption font-semibold text-label-2 transition-colors duration-150 ease-apple hover:bg-fill focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/32" type="button" onClick={onOpenBudget}>{t("查看完整 Context Budget")}<ExternalLink size={13} /></button>
       </section>
     </details>

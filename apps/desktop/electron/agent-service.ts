@@ -1272,7 +1272,8 @@ export class AgentService {
         provider: usage.provider,
         model: usage.responseModel ?? usage.model,
         estimatorId: report.estimator.id,
-        estimatedResourceTokens: report.totalEstimatedTokens,
+        estimateBasis: "baseline",
+        estimatedResourceTokens: report.baselineEstimatedTokens,
         actualInputTokens: usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens,
         actualContextTokens: contextTokens,
       });

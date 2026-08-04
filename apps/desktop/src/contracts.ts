@@ -127,6 +127,7 @@ export type ContextBudgetSnapshot = {
   provider: string;
   model: string;
   estimatorId: ContextBudgetEstimator["id"];
+  estimateBasis: "baseline" | "potential";
   estimatedResourceTokens: number;
   actualInputTokens: number;
   actualContextTokens: number | null;

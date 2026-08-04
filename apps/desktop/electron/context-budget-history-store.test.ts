@@ -20,6 +20,7 @@ describe("ContextBudgetHistoryStore", () => {
       provider: "openai",
       model: "gpt-5",
       estimatorId: "gpt-tokenizer-o200k-v1",
+      estimateBasis: "baseline",
       estimatedResourceTokens: 2_000,
       actualInputTokens: 7_000,
       actualContextTokens: 8_000,
@@ -28,6 +29,32 @@ describe("ContextBudgetHistoryStore", () => {
     expect(snapshot).toMatchObject({ deltaTokens: 6_000, estimatedSharePercent: 25 });
     expect(JSON.parse(fs.readFileSync(path.join(directory, "context-budget-history.json"), "utf8"))).not.toHaveProperty("content");
     expect(new ContextBudgetHistoryStore(directory).list(cwd)).toEqual([snapshot]);
+  });
+
+  it("marks legacy snapshots as potential estimates so they are not mixed with the default trend", () => {
+    const directory = temporaryDirectory();
+    const cwd = path.join(directory, "workspace");
+    const filePath = path.join(directory, "context-budget-history.json");
+    fs.writeFileSync(filePath, JSON.stringify({
+      version: 1,
+      snapshots: [{
+        id: "legacy",
+        cwd,
+        conversationId: "conversation-1",
+        runId: "run-1",
+        createdAt: new Date().toISOString(),
+        provider: "openai",
+        model: "gpt-5",
+        estimatorId: "gpt-tokenizer-o200k-v1",
+        estimatedResourceTokens: 2_000,
+        actualInputTokens: 7_000,
+        actualContextTokens: 8_000,
+        deltaTokens: 6_000,
+        estimatedSharePercent: 25,
+      }],
+    }));
+
+    expect(new ContextBudgetHistoryStore(directory).list(cwd)[0]?.estimateBasis).toBe("potential");
   });
 
   it("ignores malformed persisted records", () => {

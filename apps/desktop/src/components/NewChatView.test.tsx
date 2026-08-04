@@ -129,9 +129,10 @@ describe("ContextIndicator", () => {
     /></I18nProvider>);
 
     expect(markup).toContain("<details");
-    expect(markup).toContain("资源</span><strong");
-    expect(markup).toContain("2.4k");
-    expect(markup).toContain("这是当前上下文的组成部分");
+    expect(markup).toContain("默认</span><strong");
+    expect(markup).toContain("~1.6k");
+    expect(markup).not.toContain("默认</span><strong class=\"font-mono font-semibold\">~2.4k");
+    expect(markup).toContain("Skill 与 Prompt 正文按需加载");
     expect(markup).toContain("review");
     expect(markup).toContain("查看完整 Context Budget");
   });

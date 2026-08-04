@@ -855,6 +855,7 @@ describe("AgentService with a real Pi session", () => {
         expect(budget.history[0]).toMatchObject({
           conversationId: expect.any(String),
           runId: first,
+          estimateBasis: "baseline",
           actualInputTokens: expect.any(Number),
           estimatedResourceTokens: expect.any(Number),
         });

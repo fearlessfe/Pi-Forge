@@ -86,16 +86,17 @@ describe("ContextBudgetReportView", () => {
     const markup = renderToStaticMarkup(<I18nProvider><ContextBudgetReportView report={report} /></I18nProvider>);
 
     expect(markup).toContain("~200");
-    expect(markup).toContain("总 Context Budget");
+    expect(markup).toContain("默认上下文");
+    expect(markup).toContain("潜在总量");
     expect(markup).toContain("review");
-    expect(markup).toContain("legacy");
-    expect(markup).toContain("已停用");
-    expect(markup).toContain("禁用预计节省 ~100");
+    expect(markup).not.toContain("legacy");
+    expect(markup).toContain("禁用默认节省 ~40");
+    expect(markup).toContain("另有按需 ~60");
     expect(markup).toContain("Offline MCP");
     expect(markup).toContain("暂无法估算");
   });
 
   it("sorts the heaviest resources deterministically", () => {
-    expect(heaviestContextBudgetItems(report).map((item) => item.name)).toEqual(["review", "legacy", "Offline MCP"]);
+    expect(heaviestContextBudgetItems(report).map((item) => item.name)).toEqual(["review", "Offline MCP"]);
   });
 });

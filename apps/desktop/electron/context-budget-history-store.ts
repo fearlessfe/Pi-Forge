@@ -17,6 +17,7 @@ function parseSnapshot(value: unknown): ContextBudgetSnapshot | undefined {
   if (!value || typeof value !== "object") return undefined;
   const snapshot = value as Record<string, unknown>;
   const estimatedResourceTokens = finiteNonNegative(snapshot.estimatedResourceTokens);
+  const estimateBasis = snapshot.estimateBasis === "baseline" ? "baseline" : "potential";
   const actualInputTokens = finiteNonNegative(snapshot.actualInputTokens);
   const actualContextTokens = snapshot.actualContextTokens === null ? null : finiteNonNegative(snapshot.actualContextTokens);
   const deltaTokens = typeof snapshot.deltaTokens === "number" && Number.isFinite(snapshot.deltaTokens) ? snapshot.deltaTokens : undefined;
@@ -46,6 +47,7 @@ function parseSnapshot(value: unknown): ContextBudgetSnapshot | undefined {
     provider: snapshot.provider,
     model: snapshot.model,
     estimatorId: snapshot.estimatorId as ContextBudgetSnapshot["estimatorId"],
+    estimateBasis,
     estimatedResourceTokens,
     actualInputTokens,
     actualContextTokens,
