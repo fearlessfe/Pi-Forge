@@ -1,11 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ResourceSettings, WorkspaceTrustStatus } from "../src/contracts.js";
+import type { ProjectResourceSettings, ResourceSettings, WorkspaceTrustStatus } from "../src/contracts.js";
+
+type StoredProjectResourceSettings = {
+  skillOverrides: Record<string, boolean>;
+  mcpServerOverrides: Record<string, boolean>;
+};
 
 type StoredResources = ResourceSettings & {
   version: 1;
   trustedProjects: string[];
   knownWorkspaces: string[];
+  projectSettings: Record<string, StoredProjectResourceSettings>;
 };
 
 const defaults: StoredResources = {
@@ -14,9 +20,11 @@ const defaults: StoredResources = {
   disabledSkills: [],
   trustedProjects: [],
   knownWorkspaces: [],
+  projectSettings: {},
 };
 
 const skillNamePattern = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+const mcpServerKeyPattern = /^(?:user|project):[^\0\r\n]{1,2048}$/;
 
 function canonicalPath(value: string): string {
   const resolved = path.resolve(value);
@@ -31,6 +39,15 @@ function uniqueStrings(value: unknown, predicate: (entry: string) => boolean): s
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((entry): entry is string => typeof entry === "string")
     .map((entry) => entry.trim()).filter(predicate))];
+}
+
+function booleanRecord(value: unknown, predicate: (entry: string) => boolean): Record<string, boolean> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const output: Record<string, boolean> = {};
+  for (const [key, enabled] of Object.entries(value as Record<string, unknown>)) {
+    if (predicate(key) && typeof enabled === "boolean") output[key] = enabled;
+  }
+  return output;
 }
 
 export class ResourceStore {
@@ -53,6 +70,34 @@ export class ResourceStore {
     const next = this.validateSettings(input);
     this.write({ ...current, ...next });
     return next;
+  }
+
+  getProjectSettings(cwd: string): ProjectResourceSettings {
+    const projectPath = canonicalPath(cwd);
+    const settings = this.read().projectSettings[projectPath];
+    return {
+      cwd: projectPath,
+      skillOverrides: { ...(settings?.skillOverrides ?? {}) },
+      mcpServerOverrides: { ...(settings?.mcpServerOverrides ?? {}) },
+    };
+  }
+
+  setProjectSkillEnabled(cwd: string, name: string, enabled: boolean): ProjectResourceSettings {
+    if (!skillNamePattern.test(name)) throw new Error("Skill 名称无效。");
+    return this.setProjectOverride(cwd, "skillOverrides", name, enabled);
+  }
+
+  setProjectMcpServerEnabled(cwd: string, key: string, enabled: boolean): ProjectResourceSettings {
+    if (!mcpServerKeyPattern.test(key)) throw new Error("MCP Server 无效。");
+    return this.setProjectOverride(cwd, "mcpServerOverrides", key, enabled);
+  }
+
+  isProjectSkillEnabled(name: string, cwd?: string): boolean {
+    return !cwd || this.getProjectSettings(cwd).skillOverrides[name] !== false;
+  }
+
+  isProjectMcpServerEnabled(key: string, cwd?: string): boolean {
+    return !cwd || this.getProjectSettings(cwd).mcpServerOverrides[key] !== false;
   }
 
   isProjectTrusted(cwd: string): boolean {
@@ -126,6 +171,7 @@ export class ResourceStore {
         ...settings,
         trustedProjects: uniqueStrings(value.trustedProjects, (entry) => path.isAbsolute(entry)).map(canonicalPath),
         knownWorkspaces: uniqueStrings(value.knownWorkspaces, (entry) => path.isAbsolute(entry)).map(canonicalPath),
+        projectSettings: this.validateProjectSettings(value.projectSettings),
       };
     } catch {
       return { ...defaults };
@@ -140,6 +186,41 @@ export class ResourceStore {
       workspaceContextEnabled: input.workspaceContextEnabled,
       disabledSkills: uniqueStrings(input.disabledSkills, (entry) => skillNamePattern.test(entry)),
     };
+  }
+
+  private validateProjectSettings(value: unknown): Record<string, StoredProjectResourceSettings> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const output: Record<string, StoredProjectResourceSettings> = {};
+    for (const [project, settings] of Object.entries(value as Record<string, unknown>)) {
+      if (!path.isAbsolute(project) || !settings || typeof settings !== "object" || Array.isArray(settings)) continue;
+      const input = settings as Record<string, unknown>;
+      output[canonicalPath(project)] = {
+        skillOverrides: booleanRecord(input.skillOverrides, (entry) => skillNamePattern.test(entry)),
+        mcpServerOverrides: booleanRecord(input.mcpServerOverrides, (entry) => mcpServerKeyPattern.test(entry)),
+      };
+    }
+    return output;
+  }
+
+  private setProjectOverride(
+    cwd: string,
+    kind: keyof StoredProjectResourceSettings,
+    key: string,
+    enabled: boolean,
+  ): ProjectResourceSettings {
+    const projectPath = canonicalPath(cwd);
+    const current = this.read();
+    const previous = current.projectSettings[projectPath] ?? { skillOverrides: {}, mcpServerOverrides: {} };
+    const overrides = { ...previous[kind] };
+    if (enabled) delete overrides[key];
+    else overrides[key] = false;
+    const next = { ...previous, [kind]: overrides };
+    const empty = Object.keys(next.skillOverrides).length === 0 && Object.keys(next.mcpServerOverrides).length === 0;
+    const projectSettings = { ...current.projectSettings };
+    if (empty) delete projectSettings[projectPath];
+    else projectSettings[projectPath] = next;
+    this.write({ ...current, projectSettings });
+    return this.getProjectSettings(projectPath);
   }
 
   private write(value: StoredResources): void {

@@ -28,14 +28,21 @@ describe("AgentService resource inventory", () => {
     fs.writeFileSync(path.join(agentDir, "extensions", "status.js"), `export default function (pi) { pi.registerCommand("status", { description: "Show status", handler: async () => {} }); }`);
 
     const resources = {
-      getSettings: () => ({ workspaceContextEnabled: true, disabledSkills: ["review"] }),
+      getSettings: () => ({ workspaceContextEnabled: true, disabledSkills: [] as string[] }),
+      getProjectSettings: (projectPath: string) => ({ cwd: projectPath, skillOverrides: { review: false }, mcpServerOverrides: {} }),
       isProjectTrusted: () => false,
       getTrustStatus: (projectPath: string) => ({ path: projectPath, trusted: false, hasProjectResources: false, resourcePaths: [] }),
     };
     const service = new AgentService({ resolve: () => ({}) as never }, agentDir, cwd, () => {}, undefined, undefined, undefined, undefined, undefined, undefined, resources);
     const inventory = await service.getResourceInventory(cwd);
 
-    expect(inventory.skills).toEqual(expect.arrayContaining([expect.objectContaining({ name: "review", enabled: false, scope: "user" })]));
+    expect(inventory.skills).toEqual(expect.arrayContaining([expect.objectContaining({
+      name: "review",
+      enabled: false,
+      globalEnabled: true,
+      projectEnabled: false,
+      scope: "user",
+    })]));
     expect(inventory.commands).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "/summarize", source: "prompt" }),
       expect.objectContaining({ name: "/status", source: "extension" }),
@@ -78,7 +85,8 @@ describe("AgentService resource inventory", () => {
     fs.writeFileSync(path.join(agentDir, "extensions", "status.js"), "export default function (pi) { pi.registerCommand('status', { description: 'Show status', handler: async () => {} }); }");
 
     const resources = {
-      getSettings: () => ({ workspaceContextEnabled: true, disabledSkills: ["review"] }),
+      getSettings: () => ({ workspaceContextEnabled: true, disabledSkills: [] as string[] }),
+      getProjectSettings: (projectPath: string) => ({ cwd: projectPath, skillOverrides: { review: false }, mcpServerOverrides: {} }),
       isProjectTrusted: () => true,
       getTrustStatus: (projectPath: string) => ({ path: projectPath, trusted: true, hasProjectResources: true, resourcePaths: [path.join(cwd, "AGENTS.md")] }),
     };

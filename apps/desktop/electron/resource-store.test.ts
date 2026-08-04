@@ -69,6 +69,29 @@ describe("ResourceStore", () => {
     expect(store.isKnownWorkspace(path.join(workspace, "nested"))).toBe(false);
   });
 
+  it("persists isolated per-project Skill and MCP overrides", () => {
+    const userData = directory("pi-resource-user");
+    const first = directory("pi-resource-first");
+    const second = directory("pi-resource-second");
+    const store = new ResourceStore(userData);
+
+    store.setProjectSkillEnabled(first, "code-review", false);
+    store.setProjectMcpServerEnabled(first, "user:search", false);
+
+    expect(store.isProjectSkillEnabled("code-review", first)).toBe(false);
+    expect(store.isProjectMcpServerEnabled("user:search", first)).toBe(false);
+    expect(store.isProjectSkillEnabled("code-review", second)).toBe(true);
+    expect(store.isProjectMcpServerEnabled("user:search", second)).toBe(true);
+    expect(new ResourceStore(userData).getProjectSettings(first)).toMatchObject({
+      skillOverrides: { "code-review": false },
+      mcpServerOverrides: { "user:search": false },
+    });
+
+    store.setProjectSkillEnabled(first, "code-review", true);
+    store.setProjectMcpServerEnabled(first, "user:search", true);
+    expect(store.getProjectSettings(first)).toMatchObject({ skillOverrides: {}, mcpServerOverrides: {} });
+  });
+
   it("treats a symlinked workspace and its real target as equal", () => {
     const userData = directory("pi-resource-user");
     const target = directory("pi-resource-target");

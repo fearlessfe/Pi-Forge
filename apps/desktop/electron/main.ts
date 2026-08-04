@@ -330,15 +330,22 @@ function registerIpc(
     const input = requireContextBudgetRequest(value);
     return agent.getContextBudget(optionalKnownWorkspace(input.cwd));
   });
-  ipcMain.handle("resources:set-skill-enabled", async (_event, name: unknown, enabled: unknown, cwd: unknown) => {
+  ipcMain.handle("resources:set-skill-enabled", async (_event, name: unknown, enabled: unknown, cwd: unknown, scope: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改 Skill。");
     const skillName = requireString(name, "Skill 名称无效。");
     if (typeof enabled !== "boolean") throw new Error("Skill 状态无效。");
-    const current = resources.getSettings();
-    const disabledSkills = enabled
-      ? current.disabledSkills.filter((entry) => entry !== skillName)
-      : [...new Set([...current.disabledSkills, skillName])];
-    resources.saveSettings({ ...current, disabledSkills });
+    if (scope === "project") {
+      const workspacePath = optionalKnownWorkspace(cwd, "当前项目无效。");
+      if (!workspacePath) throw new Error("项目级 Skill 设置需要当前项目。");
+      resources.setProjectSkillEnabled(workspacePath, skillName, enabled);
+    } else {
+      if (scope !== undefined && scope !== "user") throw new Error("Skill 设置作用域无效。");
+      const current = resources.getSettings();
+      const disabledSkills = enabled
+        ? current.disabledSkills.filter((entry) => entry !== skillName)
+        : [...new Set([...current.disabledSkills, skillName])];
+      resources.saveSettings({ ...current, disabledSkills });
+    }
     await agent.reset();
     return agent.getResourceInventory(optionalKnownWorkspace(cwd));
   });
@@ -367,6 +374,18 @@ function registerIpc(
   ipcMain.handle("mcp:connect", (_event, key: unknown, cwd: unknown) => mcp.connect(requireString(key, "MCP Server 无效。"), optionalKnownWorkspace(cwd)));
   ipcMain.handle("mcp:disconnect", (_event, key: unknown, cwd: unknown) => mcp.disconnect(requireString(key, "MCP Server 无效。"), optionalKnownWorkspace(cwd)));
   ipcMain.handle("mcp:reconnect", (_event, key: unknown, cwd: unknown) => mcp.reconnect(requireString(key, "MCP Server 无效。"), optionalKnownWorkspace(cwd)));
+  ipcMain.handle("mcp:set-project-enabled", async (_event, key: unknown, enabled: unknown, cwd: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改 MCP 配置。");
+    if (typeof enabled !== "boolean") throw new Error("MCP Server 项目状态无效。");
+    const workspacePath = optionalKnownWorkspace(cwd, "当前项目无效。");
+    if (!workspacePath) throw new Error("项目级 MCP 设置需要当前项目。");
+    const serverKey = requireString(key, "MCP Server 无效。");
+    if (!mcp.overview(workspacePath).servers.some((server) => server.key === serverKey)) throw new Error("找不到该 MCP Server。");
+    resources.setProjectMcpServerEnabled(workspacePath, serverKey, enabled);
+    if (!enabled) await mcp.disconnect(serverKey, workspacePath);
+    await agent.reset();
+    return mcp.overview(workspacePath);
+  });
   ipcMain.handle("terminal:create", (_event, cwd: unknown, cols: unknown, rows: unknown) => terminal.create(
     optionalKnownWorkspace(cwd, "终端工作目录无效。"),
     typeof cols === "number" ? cols : undefined,

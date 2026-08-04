@@ -43,6 +43,31 @@ describe("McpService", () => {
     expect(factory).not.toHaveBeenCalled();
   });
 
+  it("excludes globally configured servers disabled for the current project", async () => {
+    const store = new McpStore(directory("project-policy"), encryption);
+    const project = directory("project-policy-workspace");
+    const server = store.save({
+      id: "search",
+      name: "Search MCP",
+      scope: "user",
+      enabled: true,
+      timeoutMs: 2_000,
+      transport: { type: "streamable-http", url: "https://example.com/mcp", headers: {} },
+    });
+    const factory = vi.fn();
+    const service = new McpService(store, {
+      isProjectTrusted: () => false,
+      isProjectMcpServerEnabled: (key, cwd) => key !== server.key || cwd !== project,
+    }, factory);
+
+    expect(service.overview(project).servers[0]).toMatchObject({ enabled: true, projectEnabled: false });
+    await expect(service.contextInventory(project)).resolves.toEqual([
+      expect.objectContaining({ key: server.key, enabled: false, schemaAvailable: false, tools: [] }),
+    ]);
+    await expect(service.tools(project)).resolves.toEqual([]);
+    expect(factory).not.toHaveBeenCalled();
+  });
+
   it("connects, namespaces tools, forwards calls and exposes lifecycle status", async () => {
     const userData = directory("user");
     const store = new McpStore(userData, encryption);

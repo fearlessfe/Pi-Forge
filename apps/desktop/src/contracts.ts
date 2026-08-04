@@ -35,6 +35,12 @@ export type ResourceSettings = {
   disabledSkills: string[];
 };
 
+export type ProjectResourceSettings = {
+  cwd: string;
+  skillOverrides: Record<string, boolean>;
+  mcpServerOverrides: Record<string, boolean>;
+};
+
 export type WorkspaceTrustStatus = {
   path: string;
   trusted: boolean;
@@ -56,6 +62,8 @@ export type SkillResourceInfo = {
   source: string;
   sourceKind: "package" | "local";
   enabled: boolean;
+  globalEnabled: boolean;
+  projectEnabled?: boolean;
   modelInvocable: boolean;
 };
 
@@ -222,6 +230,7 @@ export type McpServerConfig = {
   name: string;
   scope: McpServerScope;
   enabled: boolean;
+  projectEnabled?: boolean;
   timeoutMs: number;
   transport: McpStdioTransport | McpHttpTransport;
   hasCredentials: boolean;
@@ -864,7 +873,7 @@ export type PiDesktopApi = {
     saveSettings(settings: ResourceSettings): Promise<ResourceSettings>;
     inventory(cwd?: string): Promise<ResourceInventory>;
     contextBudget(input?: ContextBudgetRequest): Promise<ContextBudgetReport>;
-    setSkillEnabled(name: string, enabled: boolean, cwd?: string): Promise<ResourceInventory>;
+    setSkillEnabled(name: string, enabled: boolean, cwd?: string, scope?: "user" | "project"): Promise<ResourceInventory>;
     executeExtensionCommand(input: SendPromptInput): Promise<{ handled: boolean }>;
   };
   mcp: {
@@ -874,6 +883,7 @@ export type PiDesktopApi = {
     connect(key: string, cwd?: string): Promise<McpOverview>;
     disconnect(key: string, cwd?: string): Promise<McpOverview>;
     reconnect(key: string, cwd?: string): Promise<McpOverview>;
+    setProjectEnabled(key: string, enabled: boolean, cwd: string): Promise<McpOverview>;
   };
   terminal: {
     create(cwd?: string, cols?: number, rows?: number): Promise<TerminalSessionInfo>;

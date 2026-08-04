@@ -188,12 +188,27 @@ export function McpPanel({ cwd, projectTrusted, agentRunning }: McpPanelProps) {
     }
   }
 
+  async function setProjectEnabled(key: string, enabled: boolean) {
+    if (!window.piDesktop?.mcp || !cwd) return;
+    setBusy(`project:${key}`);
+    setError("");
+    try {
+      setOverview(await window.piDesktop.mcp.setProjectEnabled(key, enabled, cwd));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy("");
+    }
+  }
+
   return (
     <div className="grid w-full max-w-[820px] content-start gap-card">
       <header className="flex min-h-[62px] items-start justify-between gap-5">
         <div className="min-w-0"><h2 className="mb-2 text-large-title font-semibold text-label">{t("MCP Servers")}</h2><p className="text-body text-label-2">{t("连接 stdio 或 Streamable HTTP Server，并将其工具安全地提供给 Agent。")}</p></div>
         <div className="flex items-center gap-base"><button className={secondaryButtonClass} type="button" disabled={Boolean(busy)} onClick={() => void refresh()}><RefreshCw className={busy === "refresh" ? "is-spinning" : ""} size={14} />{t("刷新")}</button><button className={primaryButtonClass} type="button" disabled={agentRunning} onClick={() => setForm({ ...emptyForm })}><Plus size={14} />{t("添加 Server")}</button></div>
       </header>
+
+      {cwd && <div className="rounded-sm border border-blue/32 bg-blue/8 px-loose py-loose text-caption leading-[1.55] text-label-2">{t("项目开关只影响当前项目。停用后该 Server 不会连接，其工具 schemas 也不会进入当前项目的默认上下文。")}</div>}
 
       {form && <form className="rounded-md border border-separator bg-bg-grouped p-card" onSubmit={(event) => void save(event)}>
         <header className="mb-card flex items-center justify-between"><span className="inline-flex items-center gap-base text-label"><Server size={16} /><strong className="text-body font-semibold">{t(form.previousKey ? "编辑 MCP Server" : "添加 MCP Server")}</strong></span><button className="grid size-control-sm cursor-pointer place-items-center rounded-sm border-0 bg-transparent text-label-3 transition-colors duration-150 ease-apple hover:bg-fill hover:text-label active:bg-fill-2 active:scale-[0.98]" type="button" onClick={() => setForm(undefined)} aria-label={t("关闭")}><X size={16} /></button></header>
@@ -224,11 +239,12 @@ export function McpPanel({ cwd, projectTrusted, agentRunning }: McpPanelProps) {
       <section className="grid gap-loose">
         {overview.servers.map((server) => {
           const runtime = overview.runtimes.find((entry) => entry.key === server.key);
+          const effectiveEnabled = server.enabled && server.projectEnabled !== false;
           return <article className="flex items-center gap-3 rounded-md border border-separator bg-bg-grouped p-card max-[1080px]:flex-wrap max-[1080px]:items-start" key={server.key}>
             <span className={`mcp-state is-${runtime?.state ?? "disconnected"}`}><Cable size={16} /></span>
             <span className="grid min-w-0 flex-1 gap-tight"><strong className="text-body font-semibold text-label">{server.name}</strong><small className="truncate text-caption text-label-3">{server.scope} · {server.transport.type} · {server.id}{server.hasCredentials ? ` · ${t("凭据已保存")}` : ""}</small>{runtime?.error && <em className="truncate text-caption not-italic text-red">{runtime.error}</em>}{runtime?.tools.length ? <span className="flex flex-wrap gap-tight">{runtime.tools.map((tool) => <code className="rounded-sm bg-fill px-base py-tight font-mono text-caption text-label-2" key={tool.remoteName}>{tool.remoteName}</code>)}</span> : null}</span>
-            <span className={policyBadgeClass(runtime?.state === "connected")}>{t(runtime?.state ?? (server.enabled ? "disconnected" : "disabled"))}</span>
-            <span className="flex items-center gap-base max-[1080px]:w-full max-[1080px]:justify-end"><button className="cursor-pointer border-0 bg-transparent text-caption font-semibold text-label-2 transition-colors duration-150 ease-apple hover:text-label active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40" type="button" disabled={Boolean(busy) || !server.enabled} onClick={() => void action(runtime?.state === "connected" ? "disconnect" : "connect", server.key)}>{t(runtime?.state === "connected" ? "断开" : "连接")}</button><button className="cursor-pointer border-0 bg-transparent text-caption font-semibold text-label-2 transition-colors duration-150 ease-apple hover:text-label active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40" type="button" disabled={Boolean(busy) || !server.enabled} onClick={() => void action("reconnect", server.key)}>{t("重连")}</button><button className="cursor-pointer border-0 bg-transparent text-caption font-semibold text-label-2 transition-colors duration-150 ease-apple hover:text-label active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40" type="button" disabled={Boolean(busy) || agentRunning} onClick={() => setForm(editForm(server))}>{t("编辑")}</button><button className="cursor-pointer border-0 bg-transparent text-caption font-semibold text-label-2 transition-colors duration-150 ease-apple hover:text-label active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40" type="button" disabled={Boolean(busy) || agentRunning} onClick={() => void action("remove", server.key)} aria-label={t("删除")}><Trash2 size={14} /></button></span>
+            <span className={policyBadgeClass(runtime?.state === "connected")}>{t(runtime?.state ?? (effectiveEnabled ? "disconnected" : "disabled"))}</span>
+            <span className="flex items-center gap-base max-[1080px]:w-full max-[1080px]:justify-end">{cwd && <button className="cursor-pointer border-0 bg-transparent text-caption font-semibold text-accent transition-colors duration-150 ease-apple hover:text-label active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40" type="button" disabled={Boolean(busy) || agentRunning || !server.enabled} onClick={() => void setProjectEnabled(server.key, server.projectEnabled === false)}>{t(server.projectEnabled === false ? "项目启用" : "项目停用")}</button>}<button className="cursor-pointer border-0 bg-transparent text-caption font-semibold text-label-2 transition-colors duration-150 ease-apple hover:text-label active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40" type="button" disabled={Boolean(busy) || !effectiveEnabled} onClick={() => void action(runtime?.state === "connected" ? "disconnect" : "connect", server.key)}>{t(runtime?.state === "connected" ? "断开" : "连接")}</button><button className="cursor-pointer border-0 bg-transparent text-caption font-semibold text-label-2 transition-colors duration-150 ease-apple hover:text-label active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40" type="button" disabled={Boolean(busy) || !effectiveEnabled} onClick={() => void action("reconnect", server.key)}>{t("重连")}</button><button className="cursor-pointer border-0 bg-transparent text-caption font-semibold text-label-2 transition-colors duration-150 ease-apple hover:text-label active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40" type="button" disabled={Boolean(busy) || agentRunning} onClick={() => setForm(editForm(server))}>{t("编辑")}</button><button className="cursor-pointer border-0 bg-transparent text-caption font-semibold text-label-2 transition-colors duration-150 ease-apple hover:text-label active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40" type="button" disabled={Boolean(busy) || agentRunning} onClick={() => void action("remove", server.key)} aria-label={t("删除")}><Trash2 size={14} /></button></span>
           </article>;
         })}
         {overview.servers.length === 0 && <div className="grid min-h-[180px] place-items-center content-center gap-base text-caption text-label-3"><Cable size={18} /><strong className="text-label-2">{t("尚未配置 MCP Server")}</strong><span>{t("添加一个用户级或可信项目级 Server。")}</span></div>}

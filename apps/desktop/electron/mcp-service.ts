@@ -66,7 +66,10 @@ export type McpContextResource = {
   tools: McpToolDescriptor[];
 };
 
-type TrustReader = { isProjectTrusted(cwd: string): boolean };
+type TrustReader = {
+  isProjectTrusted(cwd: string): boolean;
+  isProjectMcpServerEnabled?(key: string, cwd?: string): boolean;
+};
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -198,7 +201,7 @@ export class McpService {
       }
     }
     const server = this.servers(cwd).find((entry) => entry.key === key);
-    if (server) this.setRuntime(server, server.enabled ? "disconnected" : "disabled");
+    if (server) this.setRuntime(server, this.effectiveEnabled(server) ? "disconnected" : "disabled");
     return this.overview(cwd);
   }
 
@@ -208,7 +211,7 @@ export class McpService {
   }
 
   async tools(cwd?: string): Promise<McpToolDescriptor[]> {
-    const servers = this.servers(cwd).filter((server) => server.enabled);
+    const servers = this.servers(cwd).filter((server) => this.effectiveEnabled(server));
     await Promise.all(servers.map(async (server) => {
       try {
         await this.connectServer(server, cwd);
@@ -221,13 +224,13 @@ export class McpService {
 
   async contextInventory(cwd?: string): Promise<McpContextResource[]> {
     const servers = this.servers(cwd);
-    const tools = this.toolDescriptors(servers.filter((server) => server.enabled));
+    const tools = this.toolDescriptors(servers.filter((server) => this.effectiveEnabled(server)));
     return servers.map((server) => ({
       key: server.key,
       name: server.name,
       scope: server.scope,
-      enabled: server.enabled,
-      schemaAvailable: server.enabled && this.runtime(server).state === "connected",
+      enabled: this.effectiveEnabled(server),
+      schemaAvailable: this.effectiveEnabled(server) && this.runtime(server).state === "connected",
       tools: tools.filter((tool) => tool.serverKey === server.key),
     }));
   }
@@ -279,7 +282,7 @@ export class McpService {
   }
 
   private async connectServer(server: McpServerConfig, cwd?: string): Promise<void> {
-    if (!server.enabled) {
+    if (!this.effectiveEnabled(server)) {
       this.setRuntime(server, "disabled");
       return;
     }
@@ -329,7 +332,14 @@ export class McpService {
   }
 
   private servers(cwd?: string): McpServerConfig[] {
-    return this.store.list(cwd && this.trust.isProjectTrusted(cwd) ? cwd : undefined);
+    return this.store.list(cwd && this.trust.isProjectTrusted(cwd) ? cwd : undefined).map((server) => ({
+      ...server,
+      projectEnabled: cwd ? this.trust.isProjectMcpServerEnabled?.(server.key, cwd) !== false : undefined,
+    }));
+  }
+
+  private effectiveEnabled(server: McpServerConfig): boolean {
+    return server.enabled && server.projectEnabled !== false;
   }
 
   private findServer(key: string, cwd?: string): McpServerConfig {
@@ -343,9 +353,12 @@ export class McpService {
   }
 
   private runtime(server: McpServerConfig): McpServerRuntime {
+    if (!this.effectiveEnabled(server)) {
+      return { key: server.key, state: "disabled", tools: [], updatedAt: new Date().toISOString() };
+    }
     return this.runtimes.get(server.key) ?? {
       key: server.key,
-      state: server.enabled ? "disconnected" : "disabled",
+      state: "disconnected",
       tools: [],
       updatedAt: new Date().toISOString(),
     };

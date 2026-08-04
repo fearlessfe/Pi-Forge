@@ -51,7 +51,7 @@ const api: PiDesktopApi = {
     saveSettings: (settings) => ipcRenderer.invoke("resources:save-settings", settings),
     inventory: (cwd) => ipcRenderer.invoke("resources:inventory", cwd),
     contextBudget: (input) => ipcRenderer.invoke("resources:context-budget", input ?? {}),
-    setSkillEnabled: (name, enabled, cwd) => ipcRenderer.invoke("resources:set-skill-enabled", name, enabled, cwd),
+    setSkillEnabled: (name, enabled, cwd, scope) => ipcRenderer.invoke("resources:set-skill-enabled", name, enabled, cwd, scope),
     executeExtensionCommand: (input) => ipcRenderer.invoke("resources:execute-extension-command", input),
   },
   mcp: {
@@ -61,6 +61,7 @@ const api: PiDesktopApi = {
     connect: (key, cwd) => ipcRenderer.invoke("mcp:connect", key, cwd),
     disconnect: (key, cwd) => ipcRenderer.invoke("mcp:disconnect", key, cwd),
     reconnect: (key, cwd) => ipcRenderer.invoke("mcp:reconnect", key, cwd),
+    setProjectEnabled: (key, enabled, cwd) => ipcRenderer.invoke("mcp:set-project-enabled", key, enabled, cwd),
   },
   terminal: {
     create: (cwd, cols, rows) => ipcRenderer.invoke("terminal:create", cwd, cols, rows),

@@ -23,6 +23,7 @@ import type {
   PlanReviewArtifact,
   PermissionRuntime,
   PermissionSettings,
+  ProjectResourceSettings,
   ModelCatalogEntry,
   PromptFileAttachment,
   PromptImage,
@@ -99,11 +100,12 @@ type ModelSettingsReader = {
 
 type CapabilitySettingsReader = Pick<{ get(): CapabilitySettings }, "get">;
 type PermissionSettingsReader = Pick<{ get(): PermissionSettings }, "get">;
-type ResourceSettingsReader = Pick<{
+type ResourceSettingsReader = {
   getSettings(): ResourceSettings;
+  getProjectSettings?(cwd: string): ProjectResourceSettings;
   isProjectTrusted(cwd: string): boolean;
   getTrustStatus(cwd: string): WorkspaceTrustStatus;
-}, "getSettings" | "isProjectTrusted" | "getTrustStatus">;
+};
 type PluginSecurityReader = Pick<{ isEnabled(source: string, cwd?: string): boolean }, "isEnabled">;
 type McpRuntimePort = {
   tools(cwd?: string): Promise<McpToolDescriptor[]>;
@@ -486,6 +488,8 @@ export class AgentService {
   async getResourceInventory(cwd?: string): Promise<ResourceInventory> {
     const resolvedCwd = this.resolveCwd(cwd);
     const resourceSettings = this.resources.getSettings();
+    const projectSettings = this.projectResourceSettings(resolvedCwd);
+    const disabledSkills = this.effectiveDisabledSkills(resolvedCwd, resourceSettings);
     const projectContextEnabled = resourceSettings.workspaceContextEnabled && this.resources.isProjectTrusted(resolvedCwd);
     const loader = createDesktopResourceLoader({
       cwd: resolvedCwd,
@@ -520,7 +524,7 @@ export class AgentService {
       });
     }
     for (const skill of skillResult.skills) {
-      if (resourceSettings.disabledSkills.includes(skill.name)) continue;
+      if (disabledSkills.includes(skill.name)) continue;
       commands.push({
         name: `/skill:${skill.name}`,
         description: skill.description,
@@ -539,7 +543,9 @@ export class AgentService {
         scope: skill.sourceInfo.scope,
         source: skill.sourceInfo.source,
         sourceKind: skill.sourceInfo.origin === "package" ? "package" : "local",
-        enabled: !resourceSettings.disabledSkills.includes(skill.name),
+        enabled: !disabledSkills.includes(skill.name),
+        globalEnabled: !resourceSettings.disabledSkills.includes(skill.name),
+        projectEnabled: projectSettings.skillOverrides[skill.name] !== false,
         modelInvocable: !skill.disableModelInvocation,
       })),
       diagnostics: [
@@ -554,6 +560,7 @@ export class AgentService {
   async getContextBudget(cwd?: string): Promise<ContextBudgetReport> {
     const resolvedCwd = this.resolveCwd(cwd);
     const resourceSettings = this.resources.getSettings();
+    const disabledSkills = this.effectiveDisabledSkills(resolvedCwd, resourceSettings);
     const projectContextEnabled = resourceSettings.workspaceContextEnabled && this.resources.isProjectTrusted(resolvedCwd);
     const loader = createDesktopResourceLoader({
       cwd: resolvedCwd,
@@ -612,7 +619,7 @@ export class AgentService {
       } catch {
         estimateStatus = "unavailable";
       }
-      const enabled = !resourceSettings.disabledSkills.includes(skill.name);
+      const enabled = !disabledSkills.includes(skill.name);
       budgetResources.push({
         category: "skills",
         name: skill.name,
@@ -818,7 +825,7 @@ export class AgentService {
       cwd,
       agentDir: this.agentDir,
       projectContextEnabled,
-      disabledSkills: resourceSettings.disabledSkills,
+      disabledSkills: this.effectiveDisabledSkills(cwd, resourceSettings),
       extensionFactories: [
         (pi) => {
           const sandboxedBash = createBashTool(cwd, { operations: this.commandSandbox.createOperations() });
@@ -863,6 +870,21 @@ export class AgentService {
       filterExtensions: (base, targetCwd) => this.capabilityPolicy.filterCapabilityExtensions(base, targetCwd),
       isPluginSourceEnabled: (source, targetCwd) => this.capabilityPolicy.isPluginSourceEnabled(source, targetCwd),
     });
+  }
+
+  private projectResourceSettings(cwd: string): ProjectResourceSettings {
+    return this.resources.getProjectSettings?.(cwd) ?? {
+      cwd,
+      skillOverrides: {},
+      mcpServerOverrides: {},
+    };
+  }
+
+  private effectiveDisabledSkills(cwd: string, resourceSettings: ResourceSettings): string[] {
+    const projectDisabled = Object.entries(this.projectResourceSettings(cwd).skillOverrides)
+      .filter(([, enabled]) => !enabled)
+      .map(([name]) => name);
+    return [...new Set([...resourceSettings.disabledSkills, ...projectDisabled])];
   }
 
   private async ensureSession(cwd: string, config: AgentRuntimeConfig, conversationId?: string): Promise<AgentSession> {
