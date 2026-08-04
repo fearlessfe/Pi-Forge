@@ -37,8 +37,16 @@ export type ResourceSettings = {
 
 export type ProjectResourceSettings = {
   cwd: string;
+  selectionMode: "inherit" | "custom";
+  selectedSkills: string[];
+  selectedMcpServers: string[];
   skillOverrides: Record<string, boolean>;
   mcpServerOverrides: Record<string, boolean>;
+};
+
+export type ProjectResourceSelection = {
+  skills: string[];
+  mcpServers: string[];
 };
 
 export type WorkspaceTrustStatus = {
@@ -78,6 +86,7 @@ export type CommandInfo = {
 export type ResourceInventory = {
   cwd: string;
   settings: ResourceSettings;
+  projectSettings: ProjectResourceSettings;
   trust: WorkspaceTrustStatus;
   skills: SkillResourceInfo[];
   diagnostics: ResourceDiagnosticInfo[];
@@ -874,6 +883,7 @@ export type PiDesktopApi = {
     inventory(cwd?: string): Promise<ResourceInventory>;
     contextBudget(input?: ContextBudgetRequest): Promise<ContextBudgetReport>;
     setSkillEnabled(name: string, enabled: boolean, cwd?: string, scope?: "user" | "project"): Promise<ResourceInventory>;
+    setProjectSelection(cwd: string, selection?: ProjectResourceSelection): Promise<ProjectResourceSettings>;
     executeExtensionCommand(input: SendPromptInput): Promise<{ handled: boolean }>;
   };
   mcp: {

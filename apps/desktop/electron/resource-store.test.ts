@@ -92,6 +92,32 @@ describe("ResourceStore", () => {
     expect(store.getProjectSettings(first)).toMatchObject({ skillOverrides: {}, mcpServerOverrides: {} });
   });
 
+  it("persists a strict project resource selection and restores global inheritance", () => {
+    const userData = directory("pi-resource-selection-user");
+    const workspace = directory("pi-resource-selection-project");
+    const store = new ResourceStore(userData);
+
+    store.setProjectSelection(workspace, {
+      skills: ["code-review"],
+      mcpServers: ["user:search"],
+    });
+
+    expect(new ResourceStore(userData).getProjectSettings(workspace)).toMatchObject({
+      selectionMode: "custom",
+      selectedSkills: ["code-review"],
+      selectedMcpServers: ["user:search"],
+    });
+    expect(store.isProjectSkillEnabled("code-review", workspace)).toBe(true);
+    expect(store.isProjectSkillEnabled("future-skill", workspace)).toBe(false);
+    expect(store.isProjectMcpServerEnabled("user:search", workspace)).toBe(true);
+    expect(store.isProjectMcpServerEnabled("user:future", workspace)).toBe(false);
+
+    store.setProjectSelection(workspace);
+    expect(store.getProjectSettings(workspace)).toMatchObject({ selectionMode: "inherit" });
+    expect(store.isProjectSkillEnabled("future-skill", workspace)).toBe(true);
+    expect(store.isProjectMcpServerEnabled("user:future", workspace)).toBe(true);
+  });
+
   it("treats a symlinked workspace and its real target as equal", () => {
     const userData = directory("pi-resource-user");
     const target = directory("pi-resource-target");

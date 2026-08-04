@@ -43,6 +43,7 @@ describe("NewChatView analysis presentation", () => {
         modelProvider="anthropic"
         modelProviders={[]}
         modelSupportsImages
+        resourceRevision={0}
         planReviews={[]}
         prompt=""
         attachments={{ images: [], files: [] }}
@@ -55,6 +56,7 @@ describe("NewChatView analysis presentation", () => {
         onChooseWorkspace={noop}
         onOpenTerminal={noop}
         onOpenContextBudget={noop}
+        onResourcesChanged={noop}
         onResolvePlanReview={async () => undefined}
         onModelChange={noop}
         onSubmit={noop}

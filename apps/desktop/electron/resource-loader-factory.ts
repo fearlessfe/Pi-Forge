@@ -7,13 +7,14 @@ export type DesktopResourceLoaderOptions = {
   agentDir: string;
   projectContextEnabled: boolean;
   disabledSkills?: string[];
+  enabledSkills?: string[];
   extensionFactories?: ResourceLoaderOptions["extensionFactories"];
   filterExtensions(base: LoadExtensionsResult, cwd?: string): LoadExtensionsResult;
   isPluginSourceEnabled(source: string, cwd?: string): boolean;
 };
 
 export function createDesktopResourceLoader(options: DesktopResourceLoaderOptions): DefaultResourceLoader {
-  const { cwd, agentDir, projectContextEnabled, disabledSkills, extensionFactories } = options;
+  const { cwd, agentDir, projectContextEnabled, disabledSkills, enabledSkills, extensionFactories } = options;
   return new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -25,6 +26,7 @@ export function createDesktopResourceLoader(options: DesktopResourceLoaderOption
       ...base,
       skills: base.skills.filter((skill) => (
         (!disabledSkills || !disabledSkills.includes(skill.name))
+        && (!enabledSkills || enabledSkills.includes(skill.name))
         && options.isPluginSourceEnabled(skill.sourceInfo.source, cwd)
       )),
     }),

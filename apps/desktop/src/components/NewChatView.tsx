@@ -3,6 +3,8 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Select from "@radix-ui/react-select";
 import {
   ArrowUp,
+  BookOpen,
+  Cable,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -19,6 +21,7 @@ import {
   MessageCircleQuestion,
   Paperclip,
   RotateCcw,
+  SlidersHorizontal,
   TerminalSquare,
   ShieldCheck,
   Undo2,
@@ -29,7 +32,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { CommandInfo, ContextBudgetReport, ContextUsageInfo, PlanReviewArtifact, ProviderCatalogEntry, ProviderId, QueuedMessages, ResolvePlanReviewInput, ResponseUsage, TaskFileChange } from "../contracts";
+import type { CommandInfo, ContextBudgetReport, ContextUsageInfo, McpOverview, PlanReviewArtifact, ProviderCatalogEntry, ProviderId, QueuedMessages, ResolvePlanReviewInput, ResourceInventory, ResponseUsage, TaskFileChange } from "../contracts";
 import { classifyAttachmentFile, hasComposerAttachments, inlineTextFileBytes, maxImageBytes, maxTextFileBytes, type ComposerAttachments, type ComposerFile, type ComposerImage } from "../composer-attachments";
 import { normalizeVisibleActivities } from "../conversation-activity";
 import { fileExtension, isArtifactChange } from "../file-changes";
@@ -50,6 +53,7 @@ type NewChatViewProps = {
   modelSupportsImages: boolean;
   contextUsage?: ContextUsageInfo;
   contextBudget?: ContextBudgetReport;
+  resourceRevision: number;
   planReviews: PlanReviewArtifact[];
   prompt: string;
   attachments: ComposerAttachments;
@@ -62,6 +66,7 @@ type NewChatViewProps = {
   onChooseWorkspace: () => void;
   onOpenTerminal: () => void;
   onOpenContextBudget: () => void;
+  onResourcesChanged: () => void;
   onResolvePlanReview: (input: ResolvePlanReviewInput) => Promise<void>;
   onModelChange: (provider: ProviderId, modelId: string) => void;
   onSubmit: (promptOverride?: string) => void;
@@ -104,7 +109,7 @@ function useCommandPalette(props: NewChatViewProps) {
       if (active) setCommands([...desktopCommands, ...inventory.commands]);
     }).catch(() => undefined);
     return () => { active = false; };
-  }, [props.project?.path]);
+  }, [props.project?.path, props.resourceRevision]);
 
   const matches = useMemo(() => {
     const value = props.prompt.trimStart();
@@ -474,6 +479,141 @@ function DirectoryMenu({
   );
 }
 
+function ProjectResourceMenu({
+  project,
+  isRunning,
+  compact = false,
+  onResourcesChanged,
+}: Pick<NewChatViewProps, "project" | "isRunning" | "onResourcesChanged"> & { compact?: boolean }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [inventory, setInventory] = useState<ResourceInventory>();
+  const [overview, setOverview] = useState<McpOverview>();
+  const [draftSkills, setDraftSkills] = useState<string[]>([]);
+  const [draftServers, setDraftServers] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    if (!project || !window.piDesktop?.resources || !window.piDesktop?.mcp) return;
+    setLoading(true);
+    setError("");
+    try {
+      const [nextInventory, nextOverview] = await Promise.all([
+        window.piDesktop.resources.inventory(project.path),
+        window.piDesktop.mcp.overview(project.path),
+      ]);
+      setInventory(nextInventory);
+      setOverview(nextOverview);
+      setDraftSkills(nextInventory.skills.filter((skill) => skill.enabled).map((skill) => skill.name));
+      setDraftServers(nextOverview.servers.filter((server) => server.enabled && server.projectEnabled !== false).map((server) => server.key));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    setInventory(undefined);
+    setOverview(undefined);
+    setDraftSkills([]);
+    setDraftServers([]);
+    if (project) void load();
+  }, [project?.path]);
+
+  async function applySelection(selection?: { skills: string[]; mcpServers: string[] }) {
+    if (!project || !window.piDesktop?.resources) return;
+    setSaving(true);
+    setError("");
+    try {
+      await window.piDesktop.resources.setProjectSelection(project.path, selection);
+      await load();
+      onResourcesChanged();
+      setOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function toggleSkill(name: string) {
+    setDraftSkills((current) => current.includes(name) ? current.filter((entry) => entry !== name) : [...current, name]);
+  }
+
+  function toggleServer(key: string) {
+    setDraftServers((current) => current.includes(key) ? current.filter((entry) => entry !== key) : [...current, key]);
+  }
+
+  if (!project) return null;
+  const custom = inventory?.projectSettings.selectionMode === "custom";
+  const selectedCount = (inventory?.skills.filter((skill) => skill.enabled).length ?? 0)
+    + (overview?.servers.filter((server) => server.enabled && server.projectEnabled !== false).length ?? 0);
+  const disabled = isRunning || saving;
+
+  return (
+    <DropdownMenu.Root open={open} onOpenChange={(nextOpen) => { setOpen(nextOpen); if (nextOpen) void load(); }}>
+      <DropdownMenu.Trigger asChild>
+        <button className={compact ? composerToolButtonClass : secondaryButtonClass} type="button" disabled={isRunning} aria-label={t("配置项目资源")} title={t("配置项目资源")}>
+          <SlidersHorizontal size={14} />
+          {!compact && <span>{t(custom ? "已选 {count} 项资源" : "资源 · 继承全局", { count: selectedCount })}</span>}
+          {compact && custom && <span>{selectedCount}</span>}
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content className="dropdown-content grid max-h-[min(620px,calc(100vh-48px))] w-[min(480px,calc(100vw-32px))] gap-loose overflow-hidden p-card" align="start" sideOffset={8}>
+          <header className="flex items-start justify-between gap-card">
+            <span><strong className="block text-body font-semibold text-label">{t("项目资源")}</strong><small className="mt-tight block text-caption leading-[1.45] text-label-3">{t("自定义后，当前项目只加载选中的 Skills 和 MCP。")}</small></span>
+            <span className={`rounded-full px-base py-tight text-mini font-semibold ${custom ? "bg-accent/12 text-accent" : "bg-fill text-label-3"}`}>{t(custom ? "自定义" : "继承全局")}</span>
+          </header>
+
+          {error && <p className="m-0 rounded-sm border border-red/32 bg-red/8 px-base py-base text-caption text-red" role="alert">{error}</p>}
+          {loading && !inventory && <div className="grid min-h-[140px] place-items-center text-caption text-label-3">{t("正在加载项目资源…")}</div>}
+
+          {inventory && overview && <div className="grid min-h-0 gap-card overflow-auto pr-tight">
+            <section>
+              <span className="mb-base flex items-center gap-base text-caption font-semibold text-label-2"><BookOpen size={14} />{t("Skills")}<small className="ml-auto font-normal text-label-3">{draftSkills.length} / {inventory.skills.filter((skill) => skill.globalEnabled).length}</small></span>
+              <div className="grid gap-tight">
+                {inventory.skills.map((skill) => {
+                  const checked = draftSkills.includes(skill.name);
+                  return <button className="flex min-h-[38px] items-center gap-base rounded-sm border-0 bg-transparent px-base text-left text-caption text-label-2 hover:bg-fill disabled:opacity-45" type="button" aria-pressed={checked} disabled={disabled || !skill.globalEnabled} onClick={() => toggleSkill(skill.name)} key={`${skill.source}:${skill.filePath}`}>
+                    <span className={`grid size-[18px] shrink-0 place-items-center rounded-[5px] border ${checked && skill.globalEnabled ? "border-accent bg-accent text-accent-ink" : "border-separator bg-bg"}`}>{checked && skill.globalEnabled && <Check size={12} />}</span>
+                    <span className="min-w-0 flex-1 truncate font-semibold">{skill.name}</span>
+                    {!skill.globalEnabled && <small className="text-label-3">{t("全局已停用")}</small>}
+                  </button>;
+                })}
+                {inventory.skills.length === 0 && <small className="px-base py-loose text-caption text-label-3">{t("没有可用的 Skills")}</small>}
+              </div>
+            </section>
+
+            <section className="border-t border-separator pt-card">
+              <span className="mb-base flex items-center gap-base text-caption font-semibold text-label-2"><Cable size={14} />{t("MCP Servers")}<small className="ml-auto font-normal text-label-3">{draftServers.length} / {overview.servers.filter((server) => server.enabled).length}</small></span>
+              <div className="grid gap-tight">
+                {overview.servers.map((server) => {
+                  const checked = draftServers.includes(server.key);
+                  return <button className="flex min-h-[38px] items-center gap-base rounded-sm border-0 bg-transparent px-base text-left text-caption text-label-2 hover:bg-fill disabled:opacity-45" type="button" aria-pressed={checked} disabled={disabled || !server.enabled} onClick={() => toggleServer(server.key)} key={server.key}>
+                    <span className={`grid size-[18px] shrink-0 place-items-center rounded-[5px] border ${checked && server.enabled ? "border-accent bg-accent text-accent-ink" : "border-separator bg-bg"}`}>{checked && server.enabled && <Check size={12} />}</span>
+                    <span className="min-w-0 flex-1 truncate font-semibold">{server.name}</span>
+                    <small className="text-label-3">{server.scope}</small>
+                  </button>;
+                })}
+                {overview.servers.length === 0 && <small className="px-base py-loose text-caption text-label-3">{t("尚未配置 MCP Server")}</small>}
+              </div>
+            </section>
+          </div>}
+
+          <footer className="flex items-center justify-between gap-card border-t border-separator pt-card">
+            <button className="inline-flex h-control-md items-center gap-base rounded-sm border-0 bg-transparent px-base text-caption font-semibold text-label-3 hover:bg-fill hover:text-label-2 disabled:opacity-40" type="button" disabled={disabled || !custom} onClick={() => void applySelection()}><RotateCcw size={13} />{t("恢复全局配置")}</button>
+            <button className="inline-flex h-control-md items-center rounded-sm bg-accent px-loose text-caption font-semibold text-accent-ink disabled:opacity-40" type="button" disabled={disabled || loading || !inventory || !overview} onClick={() => void applySelection({ skills: draftSkills, mcpServers: draftServers })}>{t(saving ? "正在应用…" : "仅使用选中资源")}</button>
+          </footer>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
 function SendControl({ isRunning, canSend, onStop }: { isRunning: boolean; canSend: boolean; onStop: () => void }) {
   const { t } = useI18n();
   if (isRunning) {
@@ -531,7 +671,7 @@ function InitialComposer(props: NewChatViewProps) {
         </form>
 
         <div className="mt-loose grid min-h-[50px] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-loose rounded-md border border-separator bg-bg-grouped px-loose py-base">
-          <DirectoryMenu project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} />
+          <span className="flex items-center gap-base"><DirectoryMenu project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} /><ProjectResourceMenu project={props.project} isRunning={props.isRunning} onResourcesChanged={props.onResourcesChanged} /></span>
           <span className="min-w-0">
             <strong className="block truncate text-callout font-semibold text-label">{props.project ? props.project.path : t("普通对话")}</strong>
             <small className="mt-tight block truncate text-caption text-label-3">{props.project ? t("Pi 工具将相对 {name} 运行", { name: props.project.name }) : t("未关联工作目录，Pi 使用隔离的空目录")}</small>
@@ -968,6 +1108,7 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
             <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={props.isRunning} onChange={props.onModelChange} />
             <AttachButton supportsImages={props.modelSupportsImages} onClick={composer.openPicker} />
             <DirectoryMenu compact project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} />
+            <ProjectResourceMenu compact project={props.project} isRunning={props.isRunning} onResourcesChanged={props.onResourcesChanged} />
             <button className={composerToolButtonClass} type="button" onClick={props.onOpenTerminal} aria-label={t("打开终端")} title={t("打开终端")}><TerminalSquare size={14} /></button>
             {props.isRunning && <><button className={queueButtonClass} type="button" disabled={!canSend} onClick={() => props.onQueue("steer")}>{t("立即调整")}</button><button className={queueButtonClass} type="submit" disabled={!canSend}>{t("稍后继续")}</button></>}
             <SendControl isRunning={props.isRunning} canSend={canSend} onStop={props.onStop} />

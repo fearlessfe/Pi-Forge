@@ -132,6 +132,7 @@ export function App() {
   const [providerCatalog, setProviderCatalog] = useState<ProviderCatalogEntry[]>([]);
   const [contextUsage, setContextUsage] = useState<ContextUsageInfo>();
   const [contextBudget, setContextBudget] = useState<ContextBudgetReport>();
+  const [resourceProfileRevision, setResourceProfileRevision] = useState(0);
   const [planReviews, setPlanReviews] = useState<PlanReviewArtifact[]>([]);
   const [authFlow, setAuthFlow] = useState<AuthFlowState | null>(null);
   const [prompt, setPrompt] = useState("");
@@ -200,7 +201,7 @@ export function App() {
       if (!cancelled) setContextBudget(undefined);
     });
     return () => { cancelled = true; };
-  }, [project?.path, resourceSettings.workspaceContextEnabled, systemPromptSettings.content, view, workspaceTrust?.trusted]);
+  }, [project?.path, resourceProfileRevision, resourceSettings.workspaceContextEnabled, systemPromptSettings.content, view, workspaceTrust?.trusted]);
 
   useEffect(() => {
     void refreshModelSettings();
@@ -1097,6 +1098,7 @@ export function App() {
                   modelSupportsImages={currentModelSupportsImages}
                   contextUsage={displayedContextUsage}
                   contextBudget={contextBudget}
+                  resourceRevision={resourceProfileRevision}
                   planReviews={planReviews}
                   prompt={prompt}
                   attachments={composerAttachments}
@@ -1109,6 +1111,7 @@ export function App() {
                   onChooseWorkspace={() => void chooseWorkspace()}
                   onOpenTerminal={() => setTerminalOpen(true)}
                   onOpenContextBudget={() => { setSettingsSection("context-budget"); setView("settings"); }}
+                  onResourcesChanged={() => setResourceProfileRevision((current) => current + 1)}
                   onResolvePlanReview={resolvePlanReview}
                   onModelChange={(providerId, modelId) => void selectChatModel(providerId, modelId)}
                   onSubmit={submitPrompt}

@@ -489,7 +489,6 @@ export class AgentService {
     const resolvedCwd = this.resolveCwd(cwd);
     const resourceSettings = this.resources.getSettings();
     const projectSettings = this.projectResourceSettings(resolvedCwd);
-    const disabledSkills = this.effectiveDisabledSkills(resolvedCwd, resourceSettings);
     const projectContextEnabled = resourceSettings.workspaceContextEnabled && this.resources.isProjectTrusted(resolvedCwd);
     const loader = createDesktopResourceLoader({
       cwd: resolvedCwd,
@@ -524,7 +523,7 @@ export class AgentService {
       });
     }
     for (const skill of skillResult.skills) {
-      if (disabledSkills.includes(skill.name)) continue;
+      if (!this.isSkillEnabled(skill.name, projectSettings, resourceSettings)) continue;
       commands.push({
         name: `/skill:${skill.name}`,
         description: skill.description,
@@ -535,6 +534,7 @@ export class AgentService {
     return {
       cwd: resolvedCwd,
       settings: resourceSettings,
+      projectSettings,
       trust: this.resources.getTrustStatus(resolvedCwd),
       skills: skillResult.skills.map((skill) => ({
         name: skill.name,
@@ -543,9 +543,9 @@ export class AgentService {
         scope: skill.sourceInfo.scope,
         source: skill.sourceInfo.source,
         sourceKind: skill.sourceInfo.origin === "package" ? "package" : "local",
-        enabled: !disabledSkills.includes(skill.name),
+        enabled: this.isSkillEnabled(skill.name, projectSettings, resourceSettings),
         globalEnabled: !resourceSettings.disabledSkills.includes(skill.name),
-        projectEnabled: projectSettings.skillOverrides[skill.name] !== false,
+        projectEnabled: this.isProjectSkillEnabled(skill.name, projectSettings),
         modelInvocable: !skill.disableModelInvocation,
       })),
       diagnostics: [
@@ -560,7 +560,7 @@ export class AgentService {
   async getContextBudget(cwd?: string): Promise<ContextBudgetReport> {
     const resolvedCwd = this.resolveCwd(cwd);
     const resourceSettings = this.resources.getSettings();
-    const disabledSkills = this.effectiveDisabledSkills(resolvedCwd, resourceSettings);
+    const projectSettings = this.projectResourceSettings(resolvedCwd);
     const projectContextEnabled = resourceSettings.workspaceContextEnabled && this.resources.isProjectTrusted(resolvedCwd);
     const loader = createDesktopResourceLoader({
       cwd: resolvedCwd,
@@ -619,7 +619,7 @@ export class AgentService {
       } catch {
         estimateStatus = "unavailable";
       }
-      const enabled = !disabledSkills.includes(skill.name);
+      const enabled = this.isSkillEnabled(skill.name, projectSettings, resourceSettings);
       budgetResources.push({
         category: "skills",
         name: skill.name,
@@ -821,11 +821,13 @@ export class AgentService {
 
   private createSessionResourceLoader(cwd: string, resourceSettings: ResourceSettings) {
     const projectContextEnabled = resourceSettings.workspaceContextEnabled && this.resources.isProjectTrusted(cwd);
+    const projectSettings = this.projectResourceSettings(cwd);
     return createDesktopResourceLoader({
       cwd,
       agentDir: this.agentDir,
       projectContextEnabled,
       disabledSkills: this.effectiveDisabledSkills(cwd, resourceSettings),
+      enabledSkills: projectSettings.selectionMode === "custom" ? projectSettings.selectedSkills : undefined,
       extensionFactories: [
         (pi) => {
           const sandboxedBash = createBashTool(cwd, { operations: this.commandSandbox.createOperations() });
@@ -875,9 +877,22 @@ export class AgentService {
   private projectResourceSettings(cwd: string): ProjectResourceSettings {
     return this.resources.getProjectSettings?.(cwd) ?? {
       cwd,
+      selectionMode: "inherit",
+      selectedSkills: [],
+      selectedMcpServers: [],
       skillOverrides: {},
       mcpServerOverrides: {},
     };
+  }
+
+  private isProjectSkillEnabled(name: string, settings: ProjectResourceSettings): boolean {
+    return settings.selectionMode === "custom"
+      ? settings.selectedSkills.includes(name)
+      : settings.skillOverrides[name] !== false;
+  }
+
+  private isSkillEnabled(name: string, projectSettings: ProjectResourceSettings, resourceSettings: ResourceSettings): boolean {
+    return !resourceSettings.disabledSkills.includes(name) && this.isProjectSkillEnabled(name, projectSettings);
   }
 
   private effectiveDisabledSkills(cwd: string, resourceSettings: ResourceSettings): string[] {

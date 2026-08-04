@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentService } from "./agent-service.js";
+import { createDesktopResourceLoader } from "./resource-loader-factory.js";
 
 const cleanup: string[] = [];
 
@@ -29,7 +30,7 @@ describe("AgentService resource inventory", () => {
 
     const resources = {
       getSettings: () => ({ workspaceContextEnabled: true, disabledSkills: [] as string[] }),
-      getProjectSettings: (projectPath: string) => ({ cwd: projectPath, skillOverrides: { review: false }, mcpServerOverrides: {} }),
+      getProjectSettings: (projectPath: string) => ({ cwd: projectPath, selectionMode: "inherit" as const, selectedSkills: [], selectedMcpServers: [], skillOverrides: { review: false }, mcpServerOverrides: {} }),
       isProjectTrusted: () => false,
       getTrustStatus: (projectPath: string) => ({ path: projectPath, trusted: false, hasProjectResources: false, resourcePaths: [] }),
     };
@@ -71,6 +72,49 @@ describe("AgentService resource inventory", () => {
     ]));
   });
 
+  it("enables only explicitly selected Skills in a custom project profile", async () => {
+    const cwd = directory("pi-selection-project");
+    const agentDir = directory("pi-selection-agent");
+    for (const name of ["review", "release"]) {
+      fs.mkdirSync(path.join(agentDir, "skills", name), { recursive: true });
+      fs.writeFileSync(path.join(agentDir, "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name} helper.\n---\n# ${name}\n`);
+    }
+    const resources = {
+      getSettings: () => ({ workspaceContextEnabled: true, disabledSkills: [] as string[] }),
+      getProjectSettings: (projectPath: string) => ({
+        cwd: projectPath,
+        selectionMode: "custom" as const,
+        selectedSkills: ["review"],
+        selectedMcpServers: [],
+        skillOverrides: {},
+        mcpServerOverrides: {},
+      }),
+      isProjectTrusted: () => false,
+      getTrustStatus: (projectPath: string) => ({ path: projectPath, trusted: false, hasProjectResources: false, resourcePaths: [] }),
+    };
+    const service = new AgentService({ resolve: () => ({}) as never }, agentDir, cwd, () => {}, undefined, undefined, undefined, undefined, undefined, undefined, resources);
+    const inventory = await service.getResourceInventory(cwd);
+
+    expect(inventory.projectSettings.selectionMode).toBe("custom");
+    expect(inventory.skills).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "review", enabled: true, projectEnabled: true }),
+      expect.objectContaining({ name: "release", enabled: false, projectEnabled: false }),
+    ]));
+    expect(inventory.commands.some((command) => command.name === "/skill:review")).toBe(true);
+    expect(inventory.commands.some((command) => command.name === "/skill:release")).toBe(false);
+
+    const runtimeLoader = createDesktopResourceLoader({
+      cwd,
+      agentDir,
+      projectContextEnabled: false,
+      enabledSkills: ["review"],
+      filterExtensions: (base) => base,
+      isPluginSourceEnabled: () => true,
+    });
+    await runtimeLoader.reload();
+    expect(runtimeLoader.getSkills().skills.map((skill) => skill.name)).toEqual(["review"]);
+  });
+
   it("builds a content-safe budget from the runtime resource assembly path", async () => {
     const cwd = directory("pi-budget-project");
     const agentDir = directory("pi-budget-agent");
@@ -86,7 +130,7 @@ describe("AgentService resource inventory", () => {
 
     const resources = {
       getSettings: () => ({ workspaceContextEnabled: true, disabledSkills: [] as string[] }),
-      getProjectSettings: (projectPath: string) => ({ cwd: projectPath, skillOverrides: { review: false }, mcpServerOverrides: {} }),
+      getProjectSettings: (projectPath: string) => ({ cwd: projectPath, selectionMode: "inherit" as const, selectedSkills: [], selectedMcpServers: [], skillOverrides: { review: false }, mcpServerOverrides: {} }),
       isProjectTrusted: () => true,
       getTrustStatus: (projectPath: string) => ({ path: projectPath, trusted: true, hasProjectResources: true, resourcePaths: [path.join(cwd, "AGENTS.md")] }),
     };

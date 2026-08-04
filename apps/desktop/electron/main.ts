@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { AgentEvent, AppearancePreference, AppearanceTheme, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ResourceSettings, SaveObservabilitySettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
+import type { AgentEvent, AppearancePreference, AppearanceTheme, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ProjectResourceSelection, ResourceSettings, SaveObservabilitySettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
 import { AgentRuntimeClient } from "./agent-runtime-client.js";
 import { AppearanceStore } from "./appearance-store.js";
 import { AuthService } from "./auth-service.js";
@@ -170,6 +170,20 @@ function requireResourceSettings(value: unknown): ResourceSettings {
     throw new Error("资源设置格式无效。");
   }
   return value as ResourceSettings;
+}
+
+function requireProjectResourceSelection(value: unknown): ProjectResourceSelection | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object") throw new Error("项目资源选择格式无效。");
+  const input = value as Record<string, unknown>;
+  if (!Array.isArray(input.skills) || !input.skills.every((entry) => typeof entry === "string")
+    || !Array.isArray(input.mcpServers) || !input.mcpServers.every((entry) => typeof entry === "string")) {
+    throw new Error("项目资源选择格式无效。");
+  }
+  return {
+    skills: [...new Set(input.skills)],
+    mcpServers: [...new Set(input.mcpServers)],
+  };
 }
 
 function requireObservabilitySettings(value: unknown): SaveObservabilitySettings {
@@ -348,6 +362,32 @@ function registerIpc(
     }
     await agent.reset();
     return agent.getResourceInventory(optionalKnownWorkspace(cwd));
+  });
+  ipcMain.handle("resources:set-project-selection", async (_event, cwd: unknown, value: unknown) => {
+    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改项目资源。");
+    const workspacePath = optionalKnownWorkspace(cwd, "当前项目无效。");
+    if (!workspacePath) throw new Error("项目资源选择需要当前项目。");
+    const selection = requireProjectResourceSelection(value);
+    if (selection) {
+      const [inventory, overview] = await Promise.all([
+        agent.getResourceInventory(workspacePath),
+        Promise.resolve(mcp.overview(workspacePath)),
+      ]);
+      const knownSkills = new Set(inventory.skills.map((skill) => skill.name));
+      const knownServers = new Set(overview.servers.map((server) => server.key));
+      if (selection.skills.some((name) => !knownSkills.has(name))
+        || selection.mcpServers.some((key) => !knownServers.has(key))) {
+        throw new Error("项目资源选择包含未知资源，请刷新后重试。");
+      }
+      resources.setProjectSelection(workspacePath, selection);
+      for (const server of overview.servers) {
+        if (!selection.mcpServers.includes(server.key)) await mcp.disconnect(server.key, workspacePath);
+      }
+    } else {
+      resources.setProjectSelection(workspacePath);
+    }
+    await agent.reset();
+    return resources.getProjectSettings(workspacePath);
   });
   ipcMain.handle("resources:execute-extension-command", async (_event, value: unknown) => {
     if (!value || typeof value !== "object") throw new Error("命令格式无效。");

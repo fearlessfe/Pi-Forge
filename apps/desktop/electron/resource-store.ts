@@ -3,9 +3,15 @@ import path from "node:path";
 import type { ProjectResourceSettings, ResourceSettings, WorkspaceTrustStatus } from "../src/contracts.js";
 
 type StoredProjectResourceSettings = {
+  selectionMode: "inherit" | "custom";
+  selectedSkills: string[];
+  selectedMcpServers: string[];
   skillOverrides: Record<string, boolean>;
   mcpServerOverrides: Record<string, boolean>;
 };
+
+type ProjectOverrideKind = "skillOverrides" | "mcpServerOverrides";
+type ProjectSelectionKind = "selectedSkills" | "selectedMcpServers";
 
 type StoredResources = ResourceSettings & {
   version: 1;
@@ -50,6 +56,16 @@ function booleanRecord(value: unknown, predicate: (entry: string) => boolean): R
   return output;
 }
 
+function emptyProjectSettings(): StoredProjectResourceSettings {
+  return {
+    selectionMode: "inherit",
+    selectedSkills: [],
+    selectedMcpServers: [],
+    skillOverrides: {},
+    mcpServerOverrides: {},
+  };
+}
+
 export class ResourceStore {
   private readonly filePath: string;
 
@@ -77,6 +93,9 @@ export class ResourceStore {
     const settings = this.read().projectSettings[projectPath];
     return {
       cwd: projectPath,
+      selectionMode: settings?.selectionMode ?? "inherit",
+      selectedSkills: [...(settings?.selectedSkills ?? [])],
+      selectedMcpServers: [...(settings?.selectedMcpServers ?? [])],
       skillOverrides: { ...(settings?.skillOverrides ?? {}) },
       mcpServerOverrides: { ...(settings?.mcpServerOverrides ?? {}) },
     };
@@ -84,20 +103,53 @@ export class ResourceStore {
 
   setProjectSkillEnabled(cwd: string, name: string, enabled: boolean): ProjectResourceSettings {
     if (!skillNamePattern.test(name)) throw new Error("Skill 名称无效。");
+    if (this.getProjectSettings(cwd).selectionMode === "custom") {
+      return this.setProjectSelectedEntry(cwd, "selectedSkills", name, enabled);
+    }
     return this.setProjectOverride(cwd, "skillOverrides", name, enabled);
   }
 
   setProjectMcpServerEnabled(cwd: string, key: string, enabled: boolean): ProjectResourceSettings {
     if (!mcpServerKeyPattern.test(key)) throw new Error("MCP Server 无效。");
+    if (this.getProjectSettings(cwd).selectionMode === "custom") {
+      return this.setProjectSelectedEntry(cwd, "selectedMcpServers", key, enabled);
+    }
     return this.setProjectOverride(cwd, "mcpServerOverrides", key, enabled);
   }
 
+  setProjectSelection(cwd: string, selection?: { skills: string[]; mcpServers: string[] }): ProjectResourceSettings {
+    const projectPath = canonicalPath(cwd);
+    const current = this.read();
+    const projectSettings = { ...current.projectSettings };
+    if (!selection) {
+      delete projectSettings[projectPath];
+    } else {
+      projectSettings[projectPath] = {
+        selectionMode: "custom",
+        selectedSkills: uniqueStrings(selection.skills, (entry) => skillNamePattern.test(entry)),
+        selectedMcpServers: uniqueStrings(selection.mcpServers, (entry) => mcpServerKeyPattern.test(entry)),
+        skillOverrides: {},
+        mcpServerOverrides: {},
+      };
+    }
+    this.write({ ...current, projectSettings });
+    return this.getProjectSettings(projectPath);
+  }
+
   isProjectSkillEnabled(name: string, cwd?: string): boolean {
-    return !cwd || this.getProjectSettings(cwd).skillOverrides[name] !== false;
+    if (!cwd) return true;
+    const settings = this.getProjectSettings(cwd);
+    return settings.selectionMode === "custom"
+      ? settings.selectedSkills.includes(name)
+      : settings.skillOverrides[name] !== false;
   }
 
   isProjectMcpServerEnabled(key: string, cwd?: string): boolean {
-    return !cwd || this.getProjectSettings(cwd).mcpServerOverrides[key] !== false;
+    if (!cwd) return true;
+    const settings = this.getProjectSettings(cwd);
+    return settings.selectionMode === "custom"
+      ? settings.selectedMcpServers.includes(key)
+      : settings.mcpServerOverrides[key] !== false;
   }
 
   isProjectTrusted(cwd: string): boolean {
@@ -195,6 +247,9 @@ export class ResourceStore {
       if (!path.isAbsolute(project) || !settings || typeof settings !== "object" || Array.isArray(settings)) continue;
       const input = settings as Record<string, unknown>;
       output[canonicalPath(project)] = {
+        selectionMode: input.selectionMode === "custom" ? "custom" : "inherit",
+        selectedSkills: uniqueStrings(input.selectedSkills, (entry) => skillNamePattern.test(entry)),
+        selectedMcpServers: uniqueStrings(input.selectedMcpServers, (entry) => mcpServerKeyPattern.test(entry)),
         skillOverrides: booleanRecord(input.skillOverrides, (entry) => skillNamePattern.test(entry)),
         mcpServerOverrides: booleanRecord(input.mcpServerOverrides, (entry) => mcpServerKeyPattern.test(entry)),
       };
@@ -204,22 +259,40 @@ export class ResourceStore {
 
   private setProjectOverride(
     cwd: string,
-    kind: keyof StoredProjectResourceSettings,
+    kind: ProjectOverrideKind,
     key: string,
     enabled: boolean,
   ): ProjectResourceSettings {
     const projectPath = canonicalPath(cwd);
     const current = this.read();
-    const previous = current.projectSettings[projectPath] ?? { skillOverrides: {}, mcpServerOverrides: {} };
+    const previous = current.projectSettings[projectPath] ?? emptyProjectSettings();
     const overrides = { ...previous[kind] };
     if (enabled) delete overrides[key];
     else overrides[key] = false;
     const next = { ...previous, [kind]: overrides };
-    const empty = Object.keys(next.skillOverrides).length === 0 && Object.keys(next.mcpServerOverrides).length === 0;
+    const empty = next.selectionMode === "inherit"
+      && Object.keys(next.skillOverrides).length === 0
+      && Object.keys(next.mcpServerOverrides).length === 0;
     const projectSettings = { ...current.projectSettings };
     if (empty) delete projectSettings[projectPath];
     else projectSettings[projectPath] = next;
     this.write({ ...current, projectSettings });
+    return this.getProjectSettings(projectPath);
+  }
+
+  private setProjectSelectedEntry(
+    cwd: string,
+    kind: ProjectSelectionKind,
+    key: string,
+    enabled: boolean,
+  ): ProjectResourceSettings {
+    const projectPath = canonicalPath(cwd);
+    const current = this.read();
+    const previous = current.projectSettings[projectPath] ?? emptyProjectSettings();
+    const selected = enabled
+      ? [...new Set([...previous[kind], key])]
+      : previous[kind].filter((entry) => entry !== key);
+    this.write({ ...current, projectSettings: { ...current.projectSettings, [projectPath]: { ...previous, [kind]: selected } } });
     return this.getProjectSettings(projectPath);
   }
 

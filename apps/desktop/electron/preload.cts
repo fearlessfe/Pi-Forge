@@ -52,6 +52,7 @@ const api: PiDesktopApi = {
     inventory: (cwd) => ipcRenderer.invoke("resources:inventory", cwd),
     contextBudget: (input) => ipcRenderer.invoke("resources:context-budget", input ?? {}),
     setSkillEnabled: (name, enabled, cwd, scope) => ipcRenderer.invoke("resources:set-skill-enabled", name, enabled, cwd, scope),
+    setProjectSelection: (cwd, selection) => ipcRenderer.invoke("resources:set-project-selection", cwd, selection),
     executeExtensionCommand: (input) => ipcRenderer.invoke("resources:execute-extension-command", input),
   },
   mcp: {
