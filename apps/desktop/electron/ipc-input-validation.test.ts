@@ -34,6 +34,7 @@ describe("IPC input validation", () => {
 
   it("strictly validates bounded conversation pages", () => {
     expect(requireConversationListQuery({ cursor: "100", limit: 50, archived: false })).toEqual({ cursor: "100", limit: 50, archived: false });
+    expect(requireConversationListQuery({ cursor: "v1:eyJ1cGRhdGVkQXQiOiIyMDI2IiwiaWQiOiJjLTEifQ", limit: 50 })).toEqual({ cursor: "v1:eyJ1cGRhdGVkQXQiOiIyMDI2IiwiaWQiOiJjLTEifQ", limit: 50 });
     expect(() => requireConversationListQuery({ cursor: "next", limit: 50 })).toThrow("会话列表请求无效");
     expect(() => requireConversationListQuery({ limit: 201 })).toThrow("会话列表请求无效");
   });

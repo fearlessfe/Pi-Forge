@@ -36,5 +36,18 @@ export async function shutdownApplication(
     }),
   ]);
   if (watchdog) clearTimeout(watchdog);
-  return { timedOut: watchdogExpired ? [...pending] : [], failures };
+  // Operations may settle after the watchdog wins. Return snapshots so a
+  // late rejection cannot mutate a result that callers already observed.
+  return { timedOut: watchdogExpired ? [...pending] : [], failures: [...failures] };
+}
+
+export function createApplicationShutdown(
+  tasks: ApplicationShutdownTask[],
+  timeoutMs = 5_000,
+): () => Promise<ApplicationShutdownResult> {
+  let shutdown: Promise<ApplicationShutdownResult> | undefined;
+  return () => {
+    shutdown ??= shutdownApplication(tasks, timeoutMs);
+    return shutdown;
+  };
 }

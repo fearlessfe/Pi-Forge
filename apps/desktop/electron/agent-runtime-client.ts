@@ -251,7 +251,7 @@ export class AgentRuntimeClient {
     this.child = child;
     child.stdout?.on("data", (chunk) => process.stdout.write(`[agent-runtime] ${String(chunk)}`));
     child.stderr?.on("data", (chunk) => process.stderr.write(`[agent-runtime] ${String(chunk)}`));
-    child.on("message", (message: RuntimeToParentMessage) => this.handleMessage(message));
+    child.on("message", (message: RuntimeToParentMessage) => this.handleMessage(child, message));
     child.once("error", (error) => this.handleExit(child, error));
     child.once("exit", (code, signal) => this.handleExit(child, new Error(`Agent Runtime exited (${signal ?? code ?? "unknown"}).`)));
     const init: AgentRuntimeInit = {
@@ -302,11 +302,15 @@ export class AgentRuntimeClient {
     });
   }
 
-  private handleMessage(message: RuntimeToParentMessage): void {
+  private handleMessage(child: ChildProcess, message: RuntimeToParentMessage): void {
+    // A killed or disconnected worker may still have messages queued in the
+    // parent event loop. Never let a previous generation resolve the current
+    // ready promise, mutate run state, or invoke privileged host handlers.
+    if (this.child !== child) return;
     if (!message || typeof message !== "object") return;
     if (message.kind === "runtime.ready") {
       if (message.protocolVersion !== agentRuntimeProtocolVersion) {
-        this.rejectReady?.(new Error("Agent Runtime 协议版本不兼容。"));
+        this.markUnresponsive(child, "Agent Runtime 协议版本不兼容。");
         return;
       }
       if (this.readyTimer) clearTimeout(this.readyTimer);

@@ -11,8 +11,9 @@ function lastMatchingIndex<T>(items: T[], predicate: (item: T) => boolean): numb
 }
 
 function activateQueuedTurn(turns: ChatTurn[], event: Extract<AgentEvent, { type: "user.message.started" }>): ChatTurn[] {
-  let targetIndex = turns.findIndex((turn) => turn.status === "queued" && turn.question === event.message);
-  if (targetIndex < 0) targetIndex = turns.findIndex((turn) => turn.status === "queued");
+  const belongsToRun = (turn: ChatTurn) => turn.status === "queued" && (!turn.runId || turn.runId === event.runId);
+  let targetIndex = turns.findIndex((turn) => belongsToRun(turn) && turn.question === event.message);
+  if (targetIndex < 0) targetIndex = turns.findIndex(belongsToRun);
   if (targetIndex < 0) return turns;
 
   return turns.map((turn, index) => {
@@ -25,8 +26,10 @@ function activateQueuedTurn(turns: ChatTurn[], event: Extract<AgentEvent, { type
 }
 
 function settleRun(turns: ChatTurn[], event: Extract<AgentEvent, { type: "run.completed" | "run.error" | "run.stopped" }>): ChatTurn[] {
+  const hasMatchingRun = turns.some((turn) => turn.runId === event.runId);
+  if (!hasMatchingRun) return turns;
   return turns.map((turn) => {
-    const belongsToRun = turn.runId === event.runId || (turn.status === "queued" && !turn.runId);
+    const belongsToRun = turn.runId === event.runId || (hasMatchingRun && turn.status === "queued" && !turn.runId);
     if (!belongsToRun) return turn;
     if (turn.status === "queued") return { ...turn, status: "cancelled" };
     if (turn.status !== "running") return turn;
@@ -37,7 +40,13 @@ function settleRun(turns: ChatTurn[], event: Extract<AgentEvent, { type: "run.co
 }
 
 export function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[] {
-  if (event.type === "runtime.status") return turns;
+  if (event.type === "runtime.status"
+    || event.type === "conversation.updated"
+    || event.type === "context.updated"
+    || event.type === "queue.updated"
+    || event.type === "plan.review.requested"
+    || event.type === "plan.review.resolved"
+    || event.type === "agent.event") return turns;
   if (event.type === "user.message.started") return activateQueuedTurn(turns, event);
   if (event.type === "run.completed" || event.type === "run.error" || event.type === "run.stopped") {
     return settleRun(turns, event);
@@ -111,12 +120,6 @@ export function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[
         return { ...current, usage: mergeAnswerUsage(current.usage, event.usage) };
       case "changes.updated":
         return { ...current, fileChanges: event.changes };
-      case "context.updated":
-      case "queue.updated":
-      case "plan.review.requested":
-      case "plan.review.resolved":
-      case "agent.event":
-        return current;
     }
   });
 }

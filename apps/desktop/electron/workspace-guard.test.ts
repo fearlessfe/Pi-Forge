@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { ResourceStore } from "./resource-store.js";
-import { requireKnownWorkspace, seedKnownWorkspacesFromSessions } from "./workspace-guard.js";
+import { requireKnownWorkspace, resolveWorkspaceFileReference, seedKnownWorkspacesFromSessions } from "./workspace-guard.js";
 
 const cleanup: string[] = [];
 
@@ -39,6 +40,54 @@ describe("requireKnownWorkspace", () => {
     const missing = path.join(directory("pi-guard-parent"), "deleted");
 
     expect(() => requireKnownWorkspace(store, missing)).toThrow("该目录不是已打开的工作区");
+  });
+});
+
+describe("resolveWorkspaceFileReference", () => {
+  it("resolves relative, absolute, encoded file URL, and fragment references inside a known workspace", () => {
+    const store = new ResourceStore(directory("pi-file-user"));
+    const workspace = directory("pi-file-workspace");
+    const nested = path.join(workspace, "docs");
+    const file = path.join(nested, "a guide.md");
+    fs.mkdirSync(nested);
+    fs.writeFileSync(file, "guide");
+    store.addKnownWorkspace(workspace);
+
+    expect(resolveWorkspaceFileReference(store, workspace, "docs/a%20guide.md")).toBe(fs.realpathSync(file));
+    expect(resolveWorkspaceFileReference(store, workspace, `${pathToFileURL(file).href}#L1`)).toBe(fs.realpathSync(file));
+    expect(resolveWorkspaceFileReference(store, workspace, file)).toBe(fs.realpathSync(file));
+    expect(resolveWorkspaceFileReference(store, workspace, `${file}#L12`)).toBe(fs.realpathSync(file));
+    expect(resolveWorkspaceFileReference(store, workspace, "docs/a%20guide.md:12:4")).toBe(fs.realpathSync(file));
+  });
+
+  it("rejects unknown workspaces, missing files, directories, and dangerous protocols", () => {
+    const store = new ResourceStore(directory("pi-file-user"));
+    const workspace = directory("pi-file-workspace");
+    const file = path.join(workspace, "README.md");
+    fs.writeFileSync(file, "readme");
+
+    expect(() => resolveWorkspaceFileReference(store, workspace, file)).toThrow("不是已打开的工作区");
+    store.addKnownWorkspace(workspace);
+    expect(() => resolveWorkspaceFileReference(store, workspace, "missing.md")).toThrow("不存在或无法访问");
+    expect(() => resolveWorkspaceFileReference(store, workspace, ".")).toThrow("不是文件");
+    expect(() => resolveWorkspaceFileReference(store, workspace, "https://example.com/file")).toThrow("只允许本地文件路径");
+    expect(() => resolveWorkspaceFileReference(store, workspace, "data:text/plain,secret")).toThrow("只允许本地文件路径");
+    expect(() => resolveWorkspaceFileReference(store, workspace, "//example.com/secret")).toThrow("只允许本地文件路径");
+    expect(() => resolveWorkspaceFileReference(store, workspace, `${file}?raw=1`)).toThrow("只允许本地文件路径");
+  });
+
+  it("rejects traversal and symlink escapes after realpath resolution", () => {
+    const store = new ResourceStore(directory("pi-file-user"));
+    const workspace = directory("pi-file-workspace");
+    const outside = directory("pi-file-outside");
+    const secret = path.join(outside, "secret.txt");
+    fs.writeFileSync(secret, "secret");
+    fs.symlinkSync(secret, path.join(workspace, "linked-secret"));
+    store.addKnownWorkspace(workspace);
+
+    expect(() => resolveWorkspaceFileReference(store, workspace, `../${path.basename(outside)}/secret.txt`)).toThrow("工作区之外");
+    expect(() => resolveWorkspaceFileReference(store, workspace, "linked-secret")).toThrow("工作区之外");
+    expect(() => resolveWorkspaceFileReference(store, workspace, pathToFileURL(secret).href)).toThrow("工作区之外");
   });
 });
 

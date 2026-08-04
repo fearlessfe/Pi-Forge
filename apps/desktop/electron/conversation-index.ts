@@ -21,6 +21,24 @@ type PersistedIndex = {
   sessions: IndexedConversation[];
 };
 
+type ConversationCursor = { updatedAt: string; id: string };
+
+function encodeCursor(record: IndexedConversation): string {
+  return `v1:${Buffer.from(JSON.stringify({ updatedAt: record.item.updatedAt, id: record.item.id } satisfies ConversationCursor)).toString("base64url")}`;
+}
+
+function decodeCursor(value: string | undefined): ConversationCursor | undefined {
+  if (!value?.startsWith("v1:")) return undefined;
+  try {
+    const parsed = JSON.parse(Buffer.from(value.slice(3), "base64url").toString("utf8")) as Partial<ConversationCursor>;
+    return typeof parsed.updatedAt === "string" && typeof parsed.id === "string"
+      ? { updatedAt: parsed.updatedAt, id: parsed.id }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function contentText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -48,6 +66,7 @@ function validRecord(value: unknown): value is IndexedConversation {
 export class ConversationIndexStore {
   private records: IndexedConversation[] | undefined;
   private syncing: Promise<IndexedConversation[]> | undefined;
+  private generation = 0;
 
   constructor(
     private readonly sessionDir: string,
@@ -55,6 +74,7 @@ export class ConversationIndexStore {
   ) {}
 
   invalidate(): void {
+    this.generation += 1;
     this.records = undefined;
   }
 
@@ -70,12 +90,17 @@ export class ConversationIndexStore {
       return !normalizedQuery || [item.title, item.cwd, item.searchText, ...item.tags]
         .some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
     });
-    const offset = query.cursor && /^\d+$/.test(query.cursor) ? Number(query.cursor) : 0;
+    const cursor = decodeCursor(query.cursor);
+    const legacyOffset = query.cursor && /^\d+$/.test(query.cursor) ? Number(query.cursor) : 0;
+    const cursorOffset = cursor
+      ? filtered.findIndex(({ item }) => item.updatedAt < cursor.updatedAt || (item.updatedAt === cursor.updatedAt && item.id > cursor.id))
+      : undefined;
+    const offset = cursorOffset === undefined ? legacyOffset : cursorOffset < 0 ? filtered.length : cursorOffset;
     const limit = Math.min(200, Math.max(1, Math.trunc(query.limit ?? 100)));
     const end = Math.min(filtered.length, offset + limit);
     return {
       items: filtered.slice(offset, end).map((record) => record.item),
-      nextCursor: end < filtered.length ? String(end) : undefined,
+      nextCursor: end < filtered.length ? encodeCursor(filtered[end - 1]) : undefined,
       total: filtered.length,
     };
   }
@@ -86,14 +111,22 @@ export class ConversationIndexStore {
 
   private async sync(): Promise<IndexedConversation[]> {
     if (this.syncing) return this.syncing;
-    const syncing = this.syncOnce().finally(() => {
+    const syncing = this.syncUntilCurrent().finally(() => {
       if (this.syncing === syncing) this.syncing = undefined;
     });
     this.syncing = syncing;
     return syncing;
   }
 
-  private async syncOnce(): Promise<IndexedConversation[]> {
+  private async syncUntilCurrent(): Promise<IndexedConversation[]> {
+    while (true) {
+      const generation = this.generation;
+      const records = await this.syncOnce(generation);
+      if (generation === this.generation) return records;
+    }
+  }
+
+  private async syncOnce(generation: number): Promise<IndexedConversation[]> {
     const previous = this.records ?? await this.readPersisted();
     const previousByPath = new Map(previous.map((record) => [path.resolve(record.sessionPath), record]));
     let entries: fs.Dirent[] = [];
@@ -122,7 +155,7 @@ export class ConversationIndexStore {
         ? idsByPath.get(path.resolve(record.parentSessionPath))
         : undefined;
     }
-    next.sort((left, right) => right.mtimeMs - left.mtimeMs || left.item.id.localeCompare(right.item.id));
+    next.sort((left, right) => right.item.updatedAt.localeCompare(left.item.updatedAt) || left.item.id.localeCompare(right.item.id));
     const changed = previous.length !== next.length || next.some((record, index) => {
       const existing = previous[index];
       return !existing
@@ -131,8 +164,16 @@ export class ConversationIndexStore {
         || existing.size !== record.size
         || existing.item.parentConversationId !== record.item.parentConversationId;
     });
+    if (generation !== this.generation) return next;
     this.records = next;
-    if (changed) await this.persist(next);
+    if (changed) {
+      try {
+        await this.persist(next);
+      } catch {
+        // The JSON index is only a cache. Read-only filesystems and failed
+        // atomic replacements must not make valid session JSONL unreadable.
+      }
+    }
     return next;
   }
 
@@ -183,7 +224,11 @@ export class ConversationIndexStore {
     await fs.promises.mkdir(this.sessionDir, { recursive: true, mode: 0o700 });
     const target = path.join(this.sessionDir, indexFilename);
     const temporary = `${target}.${process.pid}.tmp`;
-    await fs.promises.writeFile(temporary, JSON.stringify({ version: indexVersion, sessions: records } satisfies PersistedIndex), { mode: 0o600 });
-    await fs.promises.rename(temporary, target);
+    try {
+      await fs.promises.writeFile(temporary, JSON.stringify({ version: indexVersion, sessions: records } satisfies PersistedIndex), { mode: 0o600 });
+      await fs.promises.rename(temporary, target);
+    } finally {
+      await fs.promises.rm(temporary, { force: true }).catch(() => undefined);
+    }
   }
 }

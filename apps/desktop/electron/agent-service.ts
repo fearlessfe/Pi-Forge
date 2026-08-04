@@ -334,20 +334,22 @@ export class AgentService {
     });
     this.emitContextUsage(runId, session);
 
-    void session.prompt(expandDesktopCommand(composePromptText(prompt, preparedAttachments)), images.length > 0 ? { images } : undefined).then(() => {
+    void session.prompt(expandDesktopCommand(composePromptText(prompt, preparedAttachments)), images.length > 0 ? { images } : undefined).then(async () => {
       if (this.activeRunId !== runId) return;
       const modelError = session.agent.state.errorMessage;
       this.persistFileChanges(runId);
       this.activeRunId = undefined;
       this.running = false;
       this.emitContextUsage(runId, session);
+      await this.emitConversationUpsert(session.sessionManager.getSessionId(), modelError ? "run-error" : "run-completed");
       if (modelError) this.emit({ type: "run.error", runId, message: modelError });
       else this.emit({ type: "run.completed", runId });
-    }).catch((error: unknown) => {
+    }).catch(async (error: unknown) => {
       if (this.activeRunId === runId) {
         this.persistFileChanges(runId);
         this.activeRunId = undefined;
         this.running = false;
+        await this.emitConversationUpsert(session.sessionManager.getSessionId(), "run-error");
         this.emit({ type: "run.error", runId, message: errorMessage(error) });
       }
     });
@@ -386,7 +388,9 @@ export class AgentService {
   }
 
   async forkConversation(conversationId: string, entryId?: string): Promise<ConversationHistoryItem> {
-    return this.conversationHistory.forkConversation(conversationId, entryId);
+    const conversation = await this.conversationHistory.forkConversation(conversationId, entryId);
+    this.emit({ type: "conversation.updated", kind: "upsert", reason: "forked", conversation });
+    return conversation;
   }
 
   async exportConversation(conversationId: string, format: "markdown" | "json"): Promise<{ filename: string; mimeType: "text/markdown" | "application/json"; content: string }> {
@@ -394,19 +398,23 @@ export class AgentService {
   }
 
   async setConversationArchived(conversationId: string, archived: boolean): Promise<void> {
-    return this.conversationHistory.setConversationArchived(conversationId, archived);
+    await this.conversationHistory.setConversationArchived(conversationId, archived);
+    await this.emitConversationUpsert(conversationId, "archive-changed");
   }
 
   async setConversationTags(conversationId: string, tags: string[]): Promise<void> {
-    return this.conversationHistory.setConversationTags(conversationId, tags);
+    await this.conversationHistory.setConversationTags(conversationId, tags);
+    await this.emitConversationUpsert(conversationId, "tags-changed");
   }
 
   async renameConversation(conversationId: string, title: string): Promise<void> {
-    return this.conversationHistory.renameConversation(conversationId, title);
+    await this.conversationHistory.renameConversation(conversationId, title);
+    await this.emitConversationUpsert(conversationId, "renamed");
   }
 
   async deleteConversation(conversationId: string): Promise<void> {
-    return this.conversationHistory.deleteConversation(conversationId);
+    await this.conversationHistory.deleteConversation(conversationId);
+    this.emit({ type: "conversation.updated", kind: "delete", reason: "deleted", conversationId });
   }
 
   async abort(): Promise<void> {
@@ -416,9 +424,11 @@ export class AgentService {
     await this.session?.abort();
     if (runId && this.activeRunId === runId) {
       this.persistFileChanges(runId);
-      this.emit({ type: "run.stopped", runId });
+      const conversationId = this.session?.sessionManager.getSessionId();
       this.activeRunId = undefined;
       this.running = false;
+      if (conversationId) await this.emitConversationUpsert(conversationId, "run-stopped");
+      this.emit({ type: "run.stopped", runId });
     }
   }
 
@@ -813,6 +823,20 @@ export class AgentService {
   dispose(): void {
     this.disposeSession();
     void this.commandSandbox.reset();
+  }
+
+  private async emitConversationUpsert(
+    conversationId: string,
+    reason: Extract<AgentEvent, { type: "conversation.updated"; kind: "upsert" }>["reason"],
+  ): Promise<void> {
+    try {
+      this.conversationHistory.invalidate();
+      const conversation = await this.conversationHistory.conversationItem(conversationId);
+      this.emit({ type: "conversation.updated", kind: "upsert", reason, conversation });
+    } catch {
+      // The terminal run event must still be delivered if a session was
+      // concurrently removed or its rebuildable index cannot be refreshed.
+    }
   }
 
   private async sessionManager(cwd: string, conversationId?: string): Promise<SessionManager> {

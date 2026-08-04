@@ -15,7 +15,7 @@ import { SettingsStore } from "./settings-store.js";
 import { ModelMetadataStore } from "./model-metadata-store.js";
 import { SystemPromptStore } from "./system-prompt-store.js";
 import { ResourceStore } from "./resource-store.js";
-import { requireKnownWorkspace, seedKnownWorkspacesFromSessions } from "./workspace-guard.js";
+import { requireKnownWorkspace, resolveWorkspaceFileReference, seedKnownWorkspacesFromSessions } from "./workspace-guard.js";
 import { McpStore } from "./mcp-store.js";
 import { McpService } from "./mcp-service.js";
 import { TerminalService } from "./terminal-service.js";
@@ -296,6 +296,15 @@ function registerIpc(
     const status = resources.setProjectTrusted(workspacePath, trusted);
     await agent.reset();
     return status;
+  });
+  ipcMain.handle("workspace:open-file", async (_event, cwd: unknown, reference: unknown) => {
+    const filePath = resolveWorkspaceFileReference(
+      resources,
+      requireString(cwd, "工作区路径无效。"),
+      requireString(reference, "工作区文件引用无效。"),
+    );
+    const failure = await shell.openPath(filePath);
+    if (failure) throw new Error(`无法打开文件：${failure}`);
   });
   ipcMain.handle("resources:get-settings", () => resources.getSettings());
   ipcMain.handle("resources:save-settings", async (_event, value: unknown) => {

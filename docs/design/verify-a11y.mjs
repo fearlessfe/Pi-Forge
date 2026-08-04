@@ -139,6 +139,43 @@ async function assertForcedColorsFocusRing(page) {
   console.log("[a11y-lane] forced-colors 断言通过：侧栏导航按钮 focus 后 outline 2px solid 保留。");
 }
 
+/** UX-01：对话状态只通过 polite/atomic live region 播报，且 composer 可由纯键盘 Tab 到达。 */
+async function assertConversationAnnouncementsAndKeyboard(page) {
+  const liveRegion = page.locator('[aria-label="当前对话"] > [role="status"][aria-live="polite"][aria-atomic="true"]');
+  if (await liveRegion.count() !== 1) {
+    throw new Error("[UX-01] 当前对话必须且只能有一个 polite + atomic 状态 live region。");
+  }
+  const liveRegionStyle = await liveRegion.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      position: style.position,
+      width: style.width,
+      height: style.height,
+      overflow: style.overflow,
+    };
+  });
+  if (liveRegionStyle.position !== "absolute" || liveRegionStyle.width !== "1px"
+    || liveRegionStyle.height !== "1px" || liveRegionStyle.overflow !== "hidden") {
+    throw new Error(`[UX-01] live region 应保持视觉隐藏但对辅助技术可见，实际 ${JSON.stringify(liveRegionStyle)}。`);
+  }
+
+  const composer = page.getByLabel("继续对话");
+  let tabs = 0;
+  for (; tabs < 120; tabs += 1) {
+    await page.keyboard.press("Tab");
+    if (await composer.evaluate((element) => element === document.activeElement)) break;
+  }
+  if (tabs === 120) throw new Error("[UX-01] composer 无法在 120 次 Tab 内由纯键盘到达。");
+  const keyboardFocus = await composer.evaluate((element) => ({
+    focusVisible: element.matches(":focus-visible"),
+    label: element.getAttribute("aria-label"),
+  }));
+  if (!keyboardFocus.focusVisible || keyboardFocus.label !== "继续对话") {
+    throw new Error(`[UX-01] composer 键盘焦点或可访问名称异常：${JSON.stringify(keyboardFocus)}。`);
+  }
+  console.log(`[a11y-lane] UX-01 断言通过：polite/atomic live region 语义正确，composer 经 ${tabs + 1} 次 Tab 可达且 focus-visible。`);
+}
+
 /** C 组：缩放断言。无横向溢出（body min-width 960px 远小于缩放后视口），且关键控件完全在视口内。 */
 async function assertNoOverflow(page, zoom) {
   const overflow = await page.evaluate(() => ({
@@ -185,6 +222,7 @@ try {
     await assertReducedMotion(page);
     await shot(page, path.join(outputDir, "a11y-reduced-motion-new-chat-dark.png"));
     await gotoScenario(page, "dark", "active-chat");
+    await assertConversationAnnouncementsAndKeyboard(page);
     await shot(page, path.join(outputDir, "a11y-reduced-motion-active-chat-dark.png"));
     await context.close();
   }

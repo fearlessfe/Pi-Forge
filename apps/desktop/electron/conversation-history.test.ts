@@ -7,6 +7,7 @@ import type { AssistantMessage, ToolResultMessage, Usage, UserMessage } from "@e
 import type { ProviderCatalogEntry, SubagentRunInfo, TaskFileChange } from "../src/contracts.js";
 import type { SubagentRunStore } from "./subagent-run-store.js";
 import { ConversationHistory, displayUserPrompt, extractFileAttachments, initProjectPrompt, type ConversationHistoryDeps } from "./conversation-history.js";
+import { ConversationIndexStore } from "./conversation-index.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -153,7 +154,7 @@ describe("ConversationHistory", () => {
     const history = new ConversationHistory(sessionDir, fallbackCwd, createDeps());
     const first = await history.listConversationPage({ limit: 2 });
     expect(first.items).toHaveLength(2);
-    expect(first.nextCursor).toBe("2");
+    expect(first.nextCursor).toMatch(/^v1:/);
     expect(first.total).toBe(5);
     const second = await history.listConversationPage({ cursor: first.nextCursor, limit: 2 });
     expect(second.items).toHaveLength(2);
@@ -166,6 +167,89 @@ describe("ConversationHistory", () => {
     fs.writeFileSync(path.join(sessionDir, "pi-desktop-conversation-index.v1.json"), "{broken");
     const rebuilt = new ConversationHistory(sessionDir, fallbackCwd, createDeps());
     await expect(rebuilt.listConversationPage({ limit: 10 })).resolves.toMatchObject({ total: 5 });
+  });
+
+  it("keeps a keyset page stable when a newer conversation is inserted", async () => {
+    const sessionDir = createDirectory("history-keyset-insert");
+    const fallbackCwd = createDirectory("history-keyset-insert-fallback");
+    for (let index = 0; index < 4; index += 1) {
+      const id = `original-${index}`;
+      const timestamp = new Date(1_700_000_000_000 + index * 1_000).toISOString();
+      const sessionPath = path.join(sessionDir, `${id}.jsonl`);
+      fs.writeFileSync(sessionPath, `${JSON.stringify({ type: "session", version: 3, id, timestamp, cwd: fallbackCwd })}\n${JSON.stringify({ type: "message", id: `${id}-message`, parentId: null, timestamp, message: { role: "user", content: `original ${index}`, timestamp: index } })}\n`);
+      const modified = new Date(1_700_000_000_000 + index * 1_000);
+      fs.utimesSync(sessionPath, modified, modified);
+    }
+
+    const history = new ConversationHistory(sessionDir, fallbackCwd, createDeps());
+    const first = await history.listConversationPage({ limit: 2 });
+    const insertedTimestamp = new Date(1_800_000_000_000).toISOString();
+    const insertedPath = path.join(sessionDir, "inserted-newer.jsonl");
+    fs.writeFileSync(insertedPath, `${JSON.stringify({ type: "session", version: 3, id: "inserted-newer", timestamp: insertedTimestamp, cwd: fallbackCwd })}\n${JSON.stringify({ type: "message", id: "inserted-message", parentId: null, timestamp: insertedTimestamp, message: { role: "user", content: "newest", timestamp: 10 } })}\n`);
+    const newest = new Date(1_800_000_000_000);
+    fs.utimesSync(insertedPath, newest, newest);
+
+    const second = await history.listConversationPage({ cursor: first.nextCursor, limit: 10 });
+    expect(new Set([...first.items, ...second.items].map((item) => item.id))).toEqual(new Set(["original-0", "original-1", "original-2", "original-3"]));
+    expect(second.items.some((item) => item.id === "inserted-newer")).toBe(false);
+  });
+
+  it("restarts an in-flight index scan after invalidation", async () => {
+    const sessionDir = createDirectory("history-index-generation");
+    const fallbackCwd = createDirectory("history-index-generation-fallback");
+    const beforeTimestamp = new Date(1_700_000_000_000).toISOString();
+    fs.writeFileSync(path.join(sessionDir, "before.jsonl"), `${JSON.stringify({ type: "session", version: 3, id: "before", timestamp: beforeTimestamp, cwd: fallbackCwd })}\n`);
+    const originalReaddir = fs.promises.readdir.bind(fs.promises);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const readdir = vi.spyOn(fs.promises, "readdir").mockImplementationOnce(async (...args) => {
+      const entries = await originalReaddir(...args as Parameters<typeof fs.promises.readdir>);
+      await gate;
+      return entries;
+    });
+    const index = new ConversationIndexStore(sessionDir, fallbackCwd);
+    const pending = index.listAll();
+    await vi.waitFor(() => expect(readdir).toHaveBeenCalled());
+    fs.writeFileSync(path.join(sessionDir, "after.jsonl"), `${JSON.stringify({ type: "session", version: 3, id: "after", timestamp: beforeTimestamp, cwd: fallbackCwd })}\n`);
+    index.invalidate();
+    release();
+    await expect(pending).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "before" }),
+      expect.objectContaining({ id: "after" }),
+    ]));
+  });
+
+  it("still reads JSONL sessions when the rebuildable index cannot be written", async () => {
+    const sessionDir = createDirectory("history-index-readonly");
+    const fallbackCwd = createDirectory("history-index-readonly-fallback");
+    const timestamp = new Date(1_700_000_000_000).toISOString();
+    fs.writeFileSync(path.join(sessionDir, "readable.jsonl"), `${JSON.stringify({ type: "session", version: 3, id: "readable", timestamp, cwd: fallbackCwd })}\n${JSON.stringify({ type: "message", id: "readable-message", parentId: null, timestamp, message: { role: "user", content: "still readable", timestamp: 1 } })}\n`);
+    vi.spyOn(fs.promises, "writeFile").mockRejectedValueOnce(new Error("read-only filesystem"));
+    await expect(new ConversationIndexStore(sessionDir, fallbackCwd).listAll()).resolves.toEqual([
+      expect.objectContaining({ id: "readable" }),
+    ]);
+  });
+
+  it("refreshes externally modified and deleted sessions and applies archive/project filters", async () => {
+    const sessionDir = createDirectory("history-index-external");
+    const fallbackCwd = createDirectory("history-index-external-fallback");
+    const projectCwd = createDirectory("history-index-external-project");
+    const timestamp = new Date(1_700_000_000_000).toISOString();
+    const sessionPath = path.join(sessionDir, "external.jsonl");
+    const header = { type: "session", version: 3, id: "external", timestamp, cwd: projectCwd };
+    const message = { type: "message", id: "external-message", parentId: null, timestamp, message: { role: "user", content: "before edit", timestamp: 1 } };
+    fs.writeFileSync(sessionPath, `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`);
+    const index = new ConversationIndexStore(sessionDir, fallbackCwd);
+    await expect(index.page({ projectId: projectCwd })).resolves.toMatchObject({ total: 1, items: [{ id: "external" }] });
+
+    const metadata = { type: "custom", id: "metadata", parentId: "external-message", timestamp, customType: "pi-desktop:conversation-metadata", data: { tags: ["external-tag"], archived: true } };
+    fs.appendFileSync(sessionPath, `${JSON.stringify(metadata)}\n`);
+    const modified = new Date(1_700_000_010_000);
+    fs.utimesSync(sessionPath, modified, modified);
+    await expect(index.page({ archived: true, projectId: projectCwd, query: "external-tag" })).resolves.toMatchObject({ total: 1, items: [{ id: "external", archived: true }] });
+
+    fs.unlinkSync(sessionPath);
+    await expect(index.listAll()).resolves.toEqual([]);
   });
 
   it("serves a bounded first page from a 1,000-session fixture", async () => {
@@ -182,7 +266,7 @@ describe("ConversationHistory", () => {
     }
     const history = new ConversationHistory(sessionDir, fallbackCwd, createDeps());
     const first = await history.listConversationPage({ limit: 100 });
-    expect(first).toMatchObject({ total: 1_000, nextCursor: "100" });
+    expect(first).toMatchObject({ total: 1_000, nextCursor: expect.stringMatching(/^v1:/) });
     expect(first.items).toHaveLength(100);
     await expect(history.listConversationPage({ query: "fixture 777" })).resolves.toMatchObject({ total: 1 });
   }, 20_000);

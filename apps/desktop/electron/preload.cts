@@ -45,6 +45,7 @@ const api: PiDesktopApi = {
     choose: () => ipcRenderer.invoke("workspace:choose"),
     trustStatus: (path) => ipcRenderer.invoke("workspace:trust-status", path),
     setTrusted: (path, trusted) => ipcRenderer.invoke("workspace:set-trusted", path, trusted),
+    openFile: (cwd, reference) => ipcRenderer.invoke("workspace:open-file", cwd, reference),
   },
   resources: {
     getSettings: () => ipcRenderer.invoke("resources:get-settings"),

@@ -169,6 +169,10 @@ export class ConversationHistory {
     return this.index.page(query);
   }
 
+  invalidate(): void {
+    this.index.invalidate();
+  }
+
   async loadConversation(conversationId: string): Promise<ConversationHistoryDetail> {
     const indexed = await this.index.find(conversationId);
     if (!indexed) throw new Error("找不到该会话，文件可能已被移动或删除。");
@@ -275,6 +279,12 @@ export class ConversationHistory {
       turns,
       contextUsage,
     };
+  }
+
+  async conversationItem(conversationId: string): Promise<ConversationHistoryItem> {
+    const indexed = await this.index.find(conversationId);
+    if (!indexed) throw new Error("找不到该会话，文件可能已被移动或删除。");
+    return indexed.item;
   }
 
   async forkConversation(conversationId: string, entryId?: string): Promise<ConversationHistoryItem> {

@@ -536,6 +536,7 @@ export type AgentEvent =
   | { type: "queue.updated"; runId: string; queue: QueuedMessages }
   | { type: "changes.updated"; runId: string; changes: TaskFileChange[] }
   | { type: "agent.event"; runId: string; event: AgentTraceEvent }
+  | ConversationUpdatedEvent
   | { type: "run.completed"; runId: string }
   | { type: "run.stopped"; runId: string }
   | { type: "run.error"; runId: string; message: string };
@@ -652,6 +653,15 @@ export type ConversationExport = {
   mimeType: "text/markdown" | "application/json";
   content: string;
 };
+
+export type ConversationUpdatedEvent =
+  | {
+      type: "conversation.updated";
+      kind: "upsert";
+      reason: "run-completed" | "run-error" | "run-stopped" | "renamed" | "tags-changed" | "archive-changed" | "forked";
+      conversation: ConversationHistoryItem;
+    }
+  | { type: "conversation.updated"; kind: "delete"; reason: "deleted"; conversationId: string };
 
 export type BrowserBounds = {
   x: number;
@@ -891,6 +901,7 @@ export type PiDesktopApi = {
     choose(): Promise<({ name: string; path: string } & WorkspaceTrustStatus) | null>;
     trustStatus(path: string): Promise<WorkspaceTrustStatus>;
     setTrusted(path: string, trusted: boolean): Promise<WorkspaceTrustStatus>;
+    openFile(cwd: string, reference: string): Promise<void>;
   };
   resources: {
     getSettings(): Promise<ResourceSettings>;
