@@ -19,6 +19,7 @@ import {
   Settings2,
   Sparkles,
   Activity,
+  Gauge,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type {
@@ -41,6 +42,7 @@ import { useI18n } from "../i18n";
 import { SkillsPanel } from "./SkillsPanel";
 import { McpPanel } from "./McpPanel";
 import { ObservabilityPanel } from "./ObservabilityPanel";
+import { ContextBudgetPanel } from "./ContextBudgetPanel";
 
 type SettingsViewProps = {
   activeSection: SettingsSection;
@@ -148,7 +150,7 @@ const sections: Array<{
   group: string;
   items: Array<{ id: SettingsSection; label: string; icon: typeof Sparkles }>;
 }> = [
-  { group: "AI", items: [{ id: "models", label: "大模型", icon: Sparkles }, { id: "model-metadata", label: "模型元信息", icon: Database }, { id: "permissions", label: "权限", icon: LockKeyhole }] },
+  { group: "AI", items: [{ id: "models", label: "大模型", icon: Sparkles }, { id: "model-metadata", label: "模型元信息", icon: Database }, { id: "context-budget", label: "Context Budget", icon: Gauge }, { id: "permissions", label: "权限", icon: LockKeyhole }] },
   { group: "扩展", items: [{ id: "skills", label: "Skills", icon: BookOpen }, { id: "mcp", label: "MCP", icon: Cable }] },
   { group: "可观测性", items: [{ id: "observability", label: "Trace", icon: Activity }] },
   { group: "应用", items: [{ id: "general", label: "通用", icon: Settings2 }, { id: "appearance", label: "外观", icon: Palette }] },
@@ -927,6 +929,7 @@ export function SettingsView(props: SettingsViewProps) {
       <main className="min-w-0 overflow-y-auto bg-bg px-[64px] py-[46px] [@media(max-width:1100px)]:px-10 [@media(max-width:1100px)]:py-[38px]">
         {props.activeSection === "models" && <ModelsPanel settings={props.settings} providerCatalog={props.providerCatalog} authFlow={props.authFlow} onSave={props.onSave} onDiscoverModels={props.onDiscoverModels} onTest={props.onTest} onLogin={props.onLogin} onAnswerAuthPrompt={props.onAnswerAuthPrompt} onCancelAuth={props.onCancelAuth} onLogout={props.onLogout} onDismissAuth={props.onDismissAuth} />}
         {props.activeSection === "model-metadata" && <ModelMetadataPanel settings={props.settings} providerCatalog={props.providerCatalog} onRefreshMetadata={props.onRefreshMetadata} onSaveMetadata={props.onSaveMetadata} onResetMetadata={props.onResetMetadata} />}
+        {props.activeSection === "context-budget" && <ContextBudgetPanel cwd={props.workspaceTrust?.path} workspaceContextEnabled={props.resourceSettings.workspaceContextEnabled} projectTrusted={Boolean(props.workspaceTrust?.trusted)} />}
         {props.activeSection === "skills" && <SkillsPanel cwd={props.workspaceTrust?.path} agentRunning={props.agentRunning} />}
         {props.activeSection === "mcp" && <McpPanel cwd={props.workspaceTrust?.path} projectTrusted={Boolean(props.workspaceTrust?.trusted)} agentRunning={props.agentRunning} />}
         {props.activeSection === "permissions" && <PermissionsPanel runtime={props.permissionRuntime} agentRunning={props.agentRunning} onSave={props.onSavePermissions} />}

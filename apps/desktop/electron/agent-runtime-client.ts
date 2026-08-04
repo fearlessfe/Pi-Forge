@@ -3,14 +3,17 @@ import { randomUUID } from "node:crypto";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 import type {
   AgentEvent,
+  ContextBudgetReport,
   ConversationExport,
   ConversationHistoryDetail,
   ConversationHistoryItem,
   PermissionRuntime,
+  PlanReviewArtifact,
   PluginRuntimeStatus,
   ProviderCatalogEntry,
   QueuedMessages,
   ResourceInventory,
+  ResolvePlanReviewInput,
   SaveModelSettings,
   SendPromptInput,
   TaskFileChange,
@@ -48,7 +51,7 @@ type RuntimeClientOptions = {
   sessionDir: string;
   settings: Pick<SettingsStore, "resolve">;
   credentials: CredentialStore;
-  mcp: Pick<McpService, "tools" | "callTool">;
+  mcp: Pick<McpService, "tools" | "contextInventory" | "callTool">;
   browser: BrowserDebugPort;
   emit(event: AgentEvent): void;
   observe?(event: AgentEvent, prompt?: string): void;
@@ -139,10 +142,13 @@ export class AgentRuntimeClient {
   revertChanges(changeIds?: string[]): Promise<TaskFileChange[]> { return this.request("revertChanges", changeIds); }
   getPermissionRuntime(): Promise<PermissionRuntime> { return this.request("getPermissionRuntime"); }
   getResourceInventory(cwd?: string): Promise<ResourceInventory> { return this.request("getResourceInventory", cwd); }
+  getContextBudget(cwd?: string): Promise<ContextBudgetReport> { return this.request("getContextBudget", cwd); }
   reloadPackages(): Promise<boolean> { return this.request("reloadPackages"); }
   refreshCapabilities(): Promise<PluginRuntimeStatus> { return this.request("refreshCapabilities"); }
   getPluginRuntime(): Promise<PluginRuntimeStatus> { return this.request("getPluginRuntime"); }
   answerQuestion(callId: string, answer: string): Promise<void> { return this.request("answerQuestion", callId, answer); }
+  listPlanReviews(conversationId?: string): Promise<PlanReviewArtifact[]> { return this.request("listPlanReviews", conversationId); }
+  resolvePlanReview(input: ResolvePlanReviewInput): Promise<PlanReviewArtifact> { return this.request("resolvePlanReview", input); }
   reset(): Promise<void> { return this.request("reset"); }
   testConfiguration(input: SaveModelSettings): Promise<string> { return this.request("testConfiguration", input); }
 
@@ -164,6 +170,7 @@ export class AgentRuntimeClient {
     const continuation = [
       "Continue the task that was interrupted when the Agent Runtime exited.",
       "Inspect the existing conversation and workspace before making changes; do not repeat completed tool actions.",
+      "If a request_plan_review call was interrupted, submit the same full plan again; Pi Forge will reuse its persisted version and any existing decision.",
       "Original request:",
       record.input.prompt,
     ].join("\n\n");
@@ -311,6 +318,7 @@ export class AgentRuntimeClient {
         }
         case "credential.delete": result = await this.options.credentials.delete(request.args[0] as string); break;
         case "mcp.tools": result = await this.options.mcp.tools(request.args[0] as string | undefined); break;
+        case "mcp.contextInventory": result = await this.options.mcp.contextInventory(request.args[0] as string | undefined); break;
         case "mcp.callTool": result = await this.options.mcp.callTool(request.args[0] as McpToolDescriptor, request.args[1] as Record<string, unknown>, controller.signal); break;
         case "browser.startAnnotation": result = await this.options.browser.startAnnotation(request.args[0] as string | undefined, request.args[1] as string | undefined, controller.signal); break;
       }

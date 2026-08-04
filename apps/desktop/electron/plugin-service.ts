@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import type {
   InstalledPlugin,
+  PluginContentScanReport,
   PluginManifest,
   PluginPackage,
   PluginProgressEvent,
@@ -16,6 +17,7 @@ import type {
   PluginRiskTier,
   PluginSearchResult,
 } from "../src/contracts.js";
+import { scanPluginTarball } from "./plugin-content-scanner.js";
 import { downloadAndVerifyPluginTarball } from "./plugin-package-verifier.js";
 import { PluginSecurityStore } from "./plugin-security-store.js";
 
@@ -164,6 +166,14 @@ function riskTier(resources: PluginResourceType[], insecure: boolean, hasIntegri
   return "low";
 }
 
+function riskTierWithScan(base: PluginRiskTier, scan: PluginContentScanReport): PluginRiskTier {
+  if (scan.status === "blocked") return "blocked";
+  if (base === "blocked" || base === "high") return base;
+  if (scan.findings.some((finding) => finding.severity === "high" || finding.severity === "critical")) return "high";
+  if (base === "medium" || scan.findings.some((finding) => finding.severity === "medium")) return "medium";
+  return base;
+}
+
 function normalizePackage(
   value: RegistryPackage,
   extras: { score?: unknown; downloads?: { weekly?: unknown; monthly?: unknown } } = {},
@@ -301,6 +311,7 @@ export class PluginService {
           riskTier: security?.riskTier ?? "high",
           resources: security?.resources ?? [],
           installedAt: security?.installedAt,
+          securityScan: security?.securityScan,
           verification,
         };
       });
@@ -316,6 +327,14 @@ export class PluginService {
         version: metadata.version,
         manifest: metadata.manifest,
       });
+      const securityScan = await scanPluginTarball(tarball);
+      if (securityScan.status === "blocked") {
+        const rules = [...new Set(securityScan.findings
+          .filter((finding) => finding.severity === "critical" && finding.confidence === "high")
+          .map((finding) => finding.ruleId))];
+        throw new Error(`插件内容安全扫描发现高置信度严重风险（${rules.join(", ") || "unknown"}），已拒绝安装。`);
+      }
+      const installedRiskTier = riskTierWithScan(metadata.riskTier, securityScan);
       const stagingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-desktop-plugin-install-"));
       fs.chmodSync(stagingDirectory, 0o700);
       const stagedTarball = path.join(stagingDirectory, "package.tgz");
@@ -349,10 +368,11 @@ export class PluginService {
         integrity: metadata.integrity,
         shasum: metadata.shasum,
         provenance: metadata.provenance,
-        riskTier: metadata.riskTier,
+        riskTier: installedRiskTier,
         resources: metadata.resources,
         manifest: metadata.manifest,
         installedAt: new Date().toISOString(),
+        securityScan,
         enabled: false,
       });
       return this.listInstalled();
@@ -371,7 +391,11 @@ export class PluginService {
   }
 
   setEnabled(source: string, enabled: boolean, cwd?: string, scope: "user" | "project" = "user"): InstalledPlugin[] {
-    if (!this.listInstalled().some((item) => item.source === source)) throw new Error("该插件未安装或安装记录已变化。");
+    const installed = this.listInstalled().find((item) => item.source === source);
+    if (!installed) throw new Error("该插件未安装或安装记录已变化。");
+    if (enabled && (installed.riskTier === "blocked" || installed.securityScan?.status === "blocked")) {
+      throw new Error("插件内容安全扫描已阻止启用。请移除该版本并联系发布者修复。");
+    }
     if (scope === "project" && !cwd) throw new Error("项目级插件开关需要工作区路径。");
     this.securityStore.setEnabled(source, enabled, cwd, scope);
     return this.listInstalled(cwd);

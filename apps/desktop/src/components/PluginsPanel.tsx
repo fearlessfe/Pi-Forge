@@ -138,6 +138,18 @@ function usageCopies(plugin: PluginPackage, installed: boolean): string[] {
 }
 
 const riskLabels = { low: "低风险", medium: "中风险", high: "高风险", blocked: "已阻止" } as const;
+const scanStatusLabels = { clean: "内容扫描通过", review: "内容扫描需要审核", blocked: "内容扫描已阻止" } as const;
+const securitySeverityLabels = { critical: "严重", high: "高", medium: "中", low: "低" } as const;
+const securityCategoryLabels = {
+  secrets: "凭据",
+  "hidden-content": "隐藏内容",
+  "prompt-injection": "Prompt 注入",
+  permissions: "权限",
+  execution: "本地执行",
+  network: "网络",
+  mcp: "MCP",
+  coverage: "扫描覆盖",
+} as const;
 
 function PackageCapabilityCard({
   title,
@@ -491,12 +503,29 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
                   <strong className="block truncate font-mono text-body font-semibold text-label">{plugin.name}</strong>
                   <small className={pluginSublineClass}>{plugin.version ? `v${plugin.version}` : plugin.source} · {t(plugin.verification === "verified" ? "完整性已验证" : plugin.verification === "legacy" ? "旧安装，来源未验证" : plugin.verification === "tampered" ? "完整性异常" : "文件缺失")}</small>
                   <small className={pluginSublineClass}>{plugin.publisher ?? t("未知发布者")} · {plugin.provenance === "npm-registry" ? "npm registry" : t("旧版来源")} · {t(riskLabels[plugin.riskTier])}{plugin.integrity ? ` · ${plugin.integrity.slice(0, 22)}…` : ""}</small>
+                  <small className={pluginSublineClass}>{plugin.securityScan
+                    ? `${t(scanStatusLabels[plugin.securityScan.status])} · ${t("{files} 个文件，{findings} 项发现", { files: plugin.securityScan.scannedFiles, findings: plugin.securityScan.findings.length })}`
+                    : t("未进行内容扫描")}</small>
                 </span>
                 <span className="flex gap-[6px]">
-                  <button className={secondaryButtonClass} type="button" disabled={Boolean(operation) || agentRunning || plugin.verification === "tampered" || plugin.verification === "missing"} onClick={() => void setPluginEnabled(plugin, !plugin.enabled, "user")}>{plugin.enabled ? t("全局停用") : t("全局启用")}</button>
+                  <button className={secondaryButtonClass} type="button" disabled={Boolean(operation) || agentRunning || plugin.verification === "tampered" || plugin.verification === "missing" || plugin.securityScan?.status === "blocked"} onClick={() => void setPluginEnabled(plugin, !plugin.enabled, "user")}>{plugin.enabled ? t("全局停用") : t("全局启用")}</button>
                   {workspaceCwd && <button className={secondaryButtonClass} type="button" disabled={Boolean(operation) || agentRunning || !plugin.enabled} onClick={() => void setPluginEnabled(plugin, plugin.projectEnabled === false, "project")}>{plugin.projectEnabled === false ? t("项目启用") : t("项目停用")}</button>}
                 </span>
                 <button className={`${secondaryButtonClass} text-red`} type="button" disabled={Boolean(operation) || agentRunning} onClick={() => void removePlugin(plugin)}><Trash2 size={14} />{t("卸载")}</button>
+                {plugin.securityScan && plugin.securityScan.findings.length > 0 && (
+                  <details className="col-span-full ml-[45px] rounded-sm border border-separator bg-bg px-[11px] py-[9px]">
+                    <summary className="cursor-pointer text-caption font-semibold text-label-2">{t("安全扫描详情")}</summary>
+                    <ul className="mt-[9px] grid list-none gap-[8px] p-0">
+                      {plugin.securityScan.findings.slice(0, 12).map((finding) => (
+                        <li className="grid grid-cols-[auto_minmax(0,1fr)] gap-[8px] text-caption leading-[1.45]" key={`${finding.ruleId}:${finding.path}:${finding.line}`}>
+                          <span className={finding.severity === "critical" || finding.severity === "high" ? "text-red" : finding.severity === "medium" ? "text-orange" : "text-label-3"}>{t(securitySeverityLabels[finding.severity])}</span>
+                          <span className="min-w-0 text-label-2"><strong>{t(securityCategoryLabels[finding.category])} · {t(finding.message)}</strong><small className="mt-[2px] block wrap-anywhere font-mono text-label-3">{finding.path}:{finding.line} · {finding.ruleId}</small><small className="mt-[2px] block text-label-3">{t(finding.remediation)}</small></span>
+                        </li>
+                      ))}
+                    </ul>
+                    {plugin.securityScan.findings.length > 12 && <small className="mt-[9px] block text-caption text-label-3">{t("还有 {count} 项未显示", { count: plugin.securityScan.findings.length - 12 })}</small>}
+                  </details>
+                )}
               </article>
             ))}
             {installed.length === 0 && <div className={pluginEmptyClass}><PackageCheck size={18} /><strong className="text-body font-semibold text-label-2">{t("还没有安装插件")}</strong><span className="text-caption">{t("从“发现插件”中选择一个 Pi Package。")}</span></div>}
@@ -544,7 +573,7 @@ export function PluginsPanel({ agentRunning, workspaceCwd }: PluginsPanelProps) 
 
             <div className="mt-card grid grid-cols-[auto_minmax(0,1fr)] gap-[9px] rounded-md border border-orange/32 bg-orange/8 p-loose text-orange">
               <AlertTriangle size={16} />
-              <span className="min-w-0"><strong className="block text-body font-semibold">{t("该包可以执行本地代码")}</strong><small className="mt-[5px] block text-caption leading-[1.5] text-label-2">{t("npm 安装脚本和 Pi Extension 将以你的本地用户权限运行。请只安装你信任的发布者提供的包。")}</small></span>
+              <span className="min-w-0"><strong className="block text-body font-semibold">{t("该包可以执行本地代码")}</strong><small className="mt-[5px] block text-caption leading-[1.5] text-label-2">{t("安装流程会禁用 npm scripts，但 Pi Extension 启用后仍以你的本地用户权限运行。请只安装你信任的发布者提供的包。")}</small></span>
             </div>
             {candidate.insecure && <div className="mt-[9px] rounded-sm bg-red/8 p-[9px] text-caption text-red">{t("npm 将这个版本标记为存在安全风险，不建议安装。")}</div>}
             {!installedNames.has(candidate.name) && <label className="mt-[15px] grid cursor-pointer grid-cols-[auto_minmax(0,1fr)] gap-[9px] text-caption leading-[1.5] text-label-2"><input className="mt-px accent-accent" type="checkbox" checked={riskAccepted} onChange={(event) => setRiskAccepted(event.target.checked)} /><span>{t("我信任此发布者，并了解插件拥有本地代码执行权限。")}</span></label>}

@@ -12,7 +12,7 @@
   "type": "module",
   "main": "dist-electron/electron/main.js",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.10.0"
   },
   "scripts": {
     "postinstall": "node scripts/ensure-node-pty-helper.mjs",
@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.26",
+    "@anthropic-ai/tokenizer": "^0.0.4",
     "@earendil-works/pi-ai": "0.81.1",
     "@earendil-works/pi-coding-agent": "0.81.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -35,8 +36,10 @@
     "@radix-ui/react-dropdown-menu": "2.1.22",
     "@radix-ui/react-select": "2.3.5",
     "@xterm/xterm": "^6.0.0",
+    "gpt-tokenizer": "^3.4.0",
     "i18next": "^26.3.6",
     "lucide-react": "1.26.0",
+    "mermaid": "^11.16.0",
     "node-pty": "^1.1.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",

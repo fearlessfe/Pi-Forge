@@ -4,7 +4,7 @@ export type Theme = AppearancePreference;
 
 export type AppView = "chat" | "plugins" | "settings";
 
-export type SettingsSection = "models" | "model-metadata" | "skills" | "mcp" | "permissions" | "observability" | "general" | "appearance";
+export type SettingsSection = "models" | "model-metadata" | "context-budget" | "skills" | "mcp" | "permissions" | "observability" | "general" | "appearance";
 
 export type Conversation = {
   id: string;

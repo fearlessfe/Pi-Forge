@@ -23,9 +23,11 @@ import { BrowserService } from "./browser-service.js";
 import { ObservabilityStore } from "./observability-store.js";
 import { ObservabilityService } from "./observability-service.js";
 import {
+  requireContextBudgetRequest,
   requireMcpServerInput,
   requireModelSettings,
   requireQueuePromptInput,
+  requireResolvePlanReviewInput,
   requireSendPromptInput,
 } from "./ipc-input-validation.js";
 
@@ -324,6 +326,10 @@ function registerIpc(
     return saved;
   });
   ipcMain.handle("resources:inventory", (_event, cwd: unknown) => agent.getResourceInventory(optionalKnownWorkspace(cwd)));
+  ipcMain.handle("resources:context-budget", (_event, value: unknown) => {
+    const input = requireContextBudgetRequest(value);
+    return agent.getContextBudget(optionalKnownWorkspace(input.cwd));
+  });
   ipcMain.handle("resources:set-skill-enabled", async (_event, name: unknown, enabled: unknown, cwd: unknown) => {
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再修改 Skill。");
     const skillName = requireString(name, "Skill 名称无效。");
@@ -570,6 +576,10 @@ function registerIpc(
     if (typeof callId !== "string" || typeof answer !== "string") throw new Error("回答格式无效。");
     return agent.answerQuestion(callId, answer);
   });
+  ipcMain.handle("agent:list-plan-reviews", (_event, conversationId: unknown) => agent.listPlanReviews(
+    conversationId === undefined ? undefined : requireString(conversationId, "对话 ID 无效。"),
+  ));
+  ipcMain.handle("agent:resolve-plan-review", (_event, value: unknown) => agent.resolvePlanReview(requireResolvePlanReviewInput(value)));
   ipcMain.handle("agent:reset", () => agent.reset());
   ipcMain.handle("agent:list-recoveries", () => agent.listRecoveries());
   ipcMain.handle("agent:retry-recovery", async (_event, id: unknown) => ({ runId: await agent.retryRecovery(requireString(id, "恢复任务无效。")) }));

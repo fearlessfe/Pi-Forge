@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
-import type { BrowserAnnotationCapture, SaveModelSettings } from "../src/contracts.js";
+import type { BrowserAnnotationCapture, ResolvePlanReviewInput, SaveModelSettings } from "../src/contracts.js";
 import { AgentService, type AgentRuntimeConfig, type PromptExtras } from "./agent-service.js";
 import { CapabilityStore } from "./capability-store.js";
 import { ModelMetadataStore } from "./model-metadata-store.js";
@@ -8,7 +8,7 @@ import { PermissionStore } from "./permission-store.js";
 import { PluginSecurityStore } from "./plugin-security-store.js";
 import { ResourceStore } from "./resource-store.js";
 import { WorkspaceCommandSandbox } from "./workspace-command-sandbox.js";
-import type { McpToolDescriptor } from "./mcp-service.js";
+import type { McpContextResource, McpToolDescriptor } from "./mcp-service.js";
 import {
   agentRuntimeProtocolVersion,
   type AgentRuntimeInit,
@@ -137,6 +137,7 @@ function initialize(input: AgentRuntimeInit): void {
   const credentials = new HostCredentialStore(host);
   const mcp = {
     tools: (cwd?: string) => host.request<McpToolDescriptor[]>("mcp.tools", cwd),
+    contextInventory: (cwd?: string) => host.request<McpContextResource[]>("mcp.contextInventory", cwd),
     callTool: (descriptor: McpToolDescriptor, args: Record<string, unknown>, signal?: AbortSignal) => (
       host.requestWithSignal<{ text: string; details: unknown }>("mcp.callTool", signal, descriptor, args)
     ),
@@ -190,10 +191,13 @@ async function invoke(request: RuntimeRequest): Promise<unknown> {
     case "revertChanges": return agent.revertChanges(args[0] as string[] | undefined);
     case "getPermissionRuntime": return agent.getPermissionRuntime();
     case "getResourceInventory": return agent.getResourceInventory(args[0] as string | undefined);
+    case "getContextBudget": return agent.getContextBudget(args[0] as string | undefined);
     case "reloadPackages": return agent.reloadPackages();
     case "refreshCapabilities": return agent.refreshCapabilities();
     case "getPluginRuntime": return agent.getPluginRuntime();
     case "answerQuestion": return agent.answerQuestion(args[0] as string, args[1] as string);
+    case "listPlanReviews": return agent.listPlanReviews(args[0] as string | undefined);
+    case "resolvePlanReview": return agent.resolvePlanReview(args[0] as ResolvePlanReviewInput);
     case "reset": return agent.reset();
     case "testConfiguration": return agent.testConfiguration(args[0] as SaveModelSettings);
     case "updateConfiguration": {

@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
-import { NewChatView } from "./NewChatView";
+import type { ContextBudgetReport } from "../contracts";
+import { ContextIndicator, NewChatView } from "./NewChatView";
 import { parseModelValue } from "./model-selector-value";
 
 describe("parseModelValue", () => {
@@ -42,6 +43,7 @@ describe("NewChatView analysis presentation", () => {
         modelProvider="anthropic"
         modelProviders={[]}
         modelSupportsImages
+        planReviews={[]}
         prompt=""
         attachments={{ images: [], files: [] }}
         isRunning
@@ -52,6 +54,8 @@ describe("NewChatView analysis presentation", () => {
         onProjectChange={noop}
         onChooseWorkspace={noop}
         onOpenTerminal={noop}
+        onOpenContextBudget={noop}
+        onResolvePlanReview={async () => undefined}
         onModelChange={noop}
         onSubmit={noop}
         onStop={noop}
@@ -78,5 +82,57 @@ describe("NewChatView analysis presentation", () => {
     expect(markup).toContain("Summarize the result");
     expect(markup).toContain("稍后继续 · 等待执行");
     expect(markup).toContain("已排队 1 条消息");
+  });
+});
+
+describe("ContextIndicator", () => {
+  it("shows the conversation resource budget in an accessible disclosure", () => {
+    const budget: ContextBudgetReport = {
+      cwd: "/workspace",
+      estimator: { id: "gpt-tokenizer-o200k-v1", kind: "model-tokenizer", provider: "openai", model: "gpt-5", tokenizer: "o200k_base", local: true },
+      baselineEstimatedTokens: 1_600,
+      onDemandEstimatedTokens: 800,
+      totalEstimatedTokens: 2_400,
+      availableEstimatedTokens: 2_400,
+      estimatedSavingsTokens: 600,
+      history: [],
+      groups: [{
+        category: "skills",
+        enabledItems: 1,
+        totalItems: 1,
+        baselineEstimatedTokens: 600,
+        onDemandEstimatedTokens: 800,
+        estimatedTokens: 1_400,
+        availableEstimatedTokens: 1_400,
+        estimatedSavingsTokens: 600,
+        items: [{
+          id: "skills:user:review",
+          category: "skills",
+          name: "review",
+          source: "user",
+          scope: "user",
+          enabled: true,
+          disableSupported: true,
+          loadMode: "mixed",
+          estimateStatus: "estimated",
+          baselineEstimatedTokens: 600,
+          onDemandEstimatedTokens: 800,
+          estimatedTokens: 1_400,
+          estimatedSavingsTokens: 600,
+        }],
+      }],
+    };
+    const markup = renderToStaticMarkup(<I18nProvider><ContextIndicator
+      usage={{ tokens: 12_000, contextWindow: 128_000, percent: 9.375 }}
+      budget={budget}
+      onOpenBudget={vi.fn()}
+    /></I18nProvider>);
+
+    expect(markup).toContain("<details");
+    expect(markup).toContain("资源</span><strong");
+    expect(markup).toContain("2.4k");
+    expect(markup).toContain("这是当前上下文的组成部分");
+    expect(markup).toContain("review");
+    expect(markup).toContain("查看完整 Context Budget");
   });
 });

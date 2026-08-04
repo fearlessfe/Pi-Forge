@@ -63,4 +63,64 @@ describe("AgentService resource inventory", () => {
       expect.objectContaining({ name: "project-review", scope: "project" }),
     ]));
   });
+
+  it("builds a content-safe budget from the runtime resource assembly path", async () => {
+    const cwd = directory("pi-budget-project");
+    const agentDir = directory("pi-budget-agent");
+    fs.mkdirSync(path.join(cwd, ".git"));
+    fs.writeFileSync(path.join(cwd, "AGENTS.md"), "Project instructions for the agent.");
+    fs.writeFileSync(path.join(agentDir, "APPEND_SYSTEM.md"), "Use concise answers.");
+    fs.mkdirSync(path.join(agentDir, "skills", "review"), { recursive: true });
+    fs.writeFileSync(path.join(agentDir, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Review code carefully.\n---\n# Private review instructions\n");
+    fs.mkdirSync(path.join(agentDir, "prompts"), { recursive: true });
+    fs.writeFileSync(path.join(agentDir, "prompts", "summarize.md"), "---\ndescription: Summarize text.\n---\nSummarize $ARGUMENTS");
+    fs.mkdirSync(path.join(agentDir, "extensions"), { recursive: true });
+    fs.writeFileSync(path.join(agentDir, "extensions", "status.js"), "export default function (pi) { pi.registerCommand('status', { description: 'Show status', handler: async () => {} }); }");
+
+    const resources = {
+      getSettings: () => ({ workspaceContextEnabled: true, disabledSkills: ["review"] }),
+      isProjectTrusted: () => true,
+      getTrustStatus: (projectPath: string) => ({ path: projectPath, trusted: true, hasProjectResources: true, resourcePaths: [path.join(cwd, "AGENTS.md")] }),
+    };
+    const mcp = {
+      tools: async () => [],
+      contextInventory: async () => [{
+        key: "user:search",
+        name: "Search MCP",
+        scope: "user" as const,
+        enabled: true,
+        schemaAvailable: true,
+        tools: [{
+          serverKey: "user:search",
+          name: "mcp__search__query",
+          remoteName: "query",
+          description: "Search documents",
+          inputSchema: { type: "object", properties: { query: { type: "string" } } },
+        }],
+      }],
+      callTool: async () => ({ text: "", details: undefined }),
+    };
+    const service = new AgentService({ resolve: () => ({}) as never }, agentDir, cwd, () => {}, undefined, undefined, undefined, undefined, undefined, undefined, resources, mcp);
+    const report = await service.getContextBudget(cwd);
+
+    expect(report.totalEstimatedTokens).toBeGreaterThan(0);
+    expect(report.baselineEstimatedTokens).toBeGreaterThan(0);
+    expect(report.onDemandEstimatedTokens).toBeGreaterThan(0);
+    expect(report.groups.map((group) => group.category)).toEqual([
+      "systemPrompt", "agents", "skills", "prompts", "extensions", "mcpSchemas",
+    ]);
+    expect(report.groups.find((group) => group.category === "skills")?.items.find((item) => item.name === "review")).toMatchObject({
+      name: "review",
+      enabled: false,
+      disableSupported: true,
+      loadMode: "mixed",
+    });
+    expect(report.groups.find((group) => group.category === "mcpSchemas")?.items[0]).toMatchObject({
+      name: "Search MCP",
+      enabled: true,
+      estimateStatus: "estimated",
+    });
+    expect(JSON.stringify(report)).not.toContain("Private review instructions");
+    expect(JSON.stringify(report)).not.toContain("properties");
+  });
 });

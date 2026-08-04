@@ -7,7 +7,7 @@
 - Security behavior is structural: workspace guards, approval policy, sandbox fallback, project trust, and safe-storage credential handling must not be bypassed for convenience.
 
 ## Commands
-- Requirements match CI: Node `22.19.0`, pnpm `10.17.0`; install with `pnpm install --frozen-lockfile` when reproducing CI (`pnpm install` is fine while intentionally updating the lockfile).
+- Requirements match CI: Node `24.10.0`, pnpm `10.17.0`; install with `pnpm install --frozen-lockfile` when reproducing CI (`pnpm install` is fine while intentionally updating the lockfile).
 - Development: `pnpm dev` (first compiles Electron, then starts Vite on strict `127.0.0.1:4173` and Electron).
 - Required verification: `pnpm lint`, `pnpm typecheck`, `pnpm test`. Coverage/CI test lane: `pnpm test:coverage` (80% statement/branch/function/line thresholds in `apps/desktop/vitest.config.ts`).
 - Focused test: `pnpm --dir apps/desktop exec vitest run src/path/to/file.test.ts`; passing a path through the root `pnpm test` script does not reliably limit Vitest to that file.

@@ -76,6 +76,122 @@ export type ResourceInventory = {
   commands: CommandInfo[];
 };
 
+export type ContextBudgetCategory = "systemPrompt" | "agents" | "skills" | "prompts" | "extensions" | "mcpSchemas";
+
+export type ContextBudgetLoadMode = "baseline" | "on-demand" | "mixed";
+
+export type ContextBudgetItem = {
+  id: string;
+  category: ContextBudgetCategory;
+  name: string;
+  source: string;
+  scope: "user" | "project" | "temporary" | "runtime";
+  enabled: boolean;
+  disableSupported: boolean;
+  loadMode: ContextBudgetLoadMode;
+  estimateStatus: "estimated" | "unavailable";
+  baselineEstimatedTokens: number;
+  onDemandEstimatedTokens: number;
+  estimatedTokens: number;
+  estimatedSavingsTokens: number;
+};
+
+export type ContextBudgetGroup = {
+  category: ContextBudgetCategory;
+  enabledItems: number;
+  totalItems: number;
+  baselineEstimatedTokens: number;
+  onDemandEstimatedTokens: number;
+  estimatedTokens: number;
+  availableEstimatedTokens: number;
+  estimatedSavingsTokens: number;
+  items: ContextBudgetItem[];
+};
+
+export type ContextBudgetEstimator = {
+  id: "anthropic-tokenizer-v1" | "gpt-tokenizer-o200k-v1" | "gpt-tokenizer-cl100k-v1" | "utf8-bytes-v1";
+  kind: "model-tokenizer" | "fallback";
+  provider: string;
+  model: string;
+  tokenizer: string;
+  local: true;
+  bytesPerToken?: 4;
+};
+
+export type ContextBudgetSnapshot = {
+  id: string;
+  cwd: string;
+  conversationId: string;
+  runId: string;
+  createdAt: string;
+  provider: string;
+  model: string;
+  estimatorId: ContextBudgetEstimator["id"];
+  estimatedResourceTokens: number;
+  actualInputTokens: number;
+  actualContextTokens: number | null;
+  deltaTokens: number;
+  estimatedSharePercent: number | null;
+};
+
+export type ContextBudgetReport = {
+  cwd: string;
+  estimator: ContextBudgetEstimator;
+  baselineEstimatedTokens: number;
+  onDemandEstimatedTokens: number;
+  totalEstimatedTokens: number;
+  availableEstimatedTokens: number;
+  estimatedSavingsTokens: number;
+  groups: ContextBudgetGroup[];
+  history: ContextBudgetSnapshot[];
+};
+
+export type ContextBudgetRequest = {
+  cwd?: string;
+};
+
+export type PlanReviewDecision = "approved" | "changes_requested";
+
+export type PlanReviewAnnotation = {
+  id: string;
+  anchorId: string;
+  quote: string;
+  comment: string;
+  createdAt: string;
+};
+
+export type PlanReviewVersion = {
+  id: string;
+  number: number;
+  markdown: string;
+  contentHash: string;
+  createdAt: string;
+  annotations: PlanReviewAnnotation[];
+  decision?: PlanReviewDecision;
+  decidedAt?: string;
+};
+
+export type PlanReviewArtifact = {
+  id: string;
+  cwd: string;
+  conversationId: string;
+  runId: string;
+  toolCallId: string;
+  title: string;
+  status: "pending" | PlanReviewDecision;
+  activeVersionId: string;
+  createdAt: string;
+  updatedAt: string;
+  versions: PlanReviewVersion[];
+};
+
+export type ResolvePlanReviewInput = {
+  reviewId: string;
+  versionId: string;
+  decision: PlanReviewDecision;
+  annotations: Array<Pick<PlanReviewAnnotation, "anchorId" | "quote" | "comment">>;
+};
+
 export type McpServerScope = "user" | "project";
 
 export type McpStdioTransport = {
@@ -387,6 +503,8 @@ export type AgentEvent =
   | { type: "tool.updated"; runId: string; callId: string; name: string; output: string; details?: ToolActivityDetails }
   | { type: "tool.completed"; runId: string; callId: string; name: string; output: string; isError: boolean; details?: ToolActivityDetails }
   | { type: "question.requested"; runId: string; callId: string; question: string; options: QuestionOption[] }
+  | { type: "plan.review.requested"; runId: string; review: PlanReviewArtifact }
+  | { type: "plan.review.resolved"; runId: string; review: PlanReviewArtifact }
   | { type: "response.usage"; runId: string; usage: ResponseUsage }
   | { type: "context.updated"; runId: string; usage: ContextUsageInfo }
   | { type: "queue.updated"; runId: string; queue: QueuedMessages }
@@ -558,6 +676,40 @@ export type PluginResourceType = "extensions" | "skills" | "prompts" | "themes";
 export type PluginRiskTier = "low" | "medium" | "high" | "blocked";
 export type PluginManifest = Partial<Record<PluginResourceType, string[]>>;
 
+export type PluginSecuritySeverity = "critical" | "high" | "medium" | "low";
+export type PluginSecurityConfidence = "high" | "medium";
+export type PluginSecurityCategory =
+  | "secrets"
+  | "hidden-content"
+  | "prompt-injection"
+  | "permissions"
+  | "execution"
+  | "network"
+  | "mcp"
+  | "coverage";
+
+export type PluginSecurityFinding = {
+  ruleId: string;
+  category: PluginSecurityCategory;
+  severity: PluginSecuritySeverity;
+  confidence: PluginSecurityConfidence;
+  path: string;
+  line: number;
+  message: string;
+  remediation: string;
+};
+
+export type PluginContentScanReport = {
+  scannerVersion: 1;
+  status: "clean" | "review" | "blocked";
+  scannedAt: string;
+  scannedFiles: number;
+  scannedBytes: number;
+  skippedFiles: number;
+  truncated: boolean;
+  findings: PluginSecurityFinding[];
+};
+
 export type PluginPackage = {
   name: string;
   version: string;
@@ -601,6 +753,7 @@ export type InstalledPlugin = {
   riskTier: PluginRiskTier;
   resources: PluginResourceType[];
   installedAt?: string;
+  securityScan?: PluginContentScanReport;
   verification: "verified" | "legacy" | "missing" | "tampered";
 };
 
@@ -702,6 +855,7 @@ export type PiDesktopApi = {
     getSettings(): Promise<ResourceSettings>;
     saveSettings(settings: ResourceSettings): Promise<ResourceSettings>;
     inventory(cwd?: string): Promise<ResourceInventory>;
+    contextBudget(input?: ContextBudgetRequest): Promise<ContextBudgetReport>;
     setSkillEnabled(name: string, enabled: boolean, cwd?: string): Promise<ResourceInventory>;
     executeExtensionCommand(input: SendPromptInput): Promise<{ handled: boolean }>;
   };
@@ -767,6 +921,8 @@ export type PiDesktopApi = {
     revealChange(changeId: string): Promise<void>;
     reset(): Promise<void>;
     answerQuestion(callId: string, answer: string): Promise<void>;
+    listPlanReviews(conversationId?: string): Promise<PlanReviewArtifact[]>;
+    resolvePlanReview(input: ResolvePlanReviewInput): Promise<PlanReviewArtifact>;
     listRecoveries(): Promise<RuntimeRecoveryInfo[]>;
     retryRecovery(id: string): Promise<{ runId: string }>;
     discardRecovery(id: string): Promise<void>;
