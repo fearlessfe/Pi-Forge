@@ -167,7 +167,9 @@ export class PluginSecurityStore {
 
   isEnabled(source: string, cwd?: string): boolean {
     const record = this.get(source);
-    if (!record) return true;
+    // Packages installed before the security store existed have no trustworthy
+    // provenance. Keep them disabled until PluginService revalidates them.
+    if (!record) return false;
     if (cwd) {
       const override = record.projectOverrides[canonicalPath(cwd)];
       if (typeof override === "boolean") return record.enabled && override;
@@ -186,7 +188,7 @@ export class PluginSecurityStore {
       riskTier: "high",
       resources: [],
       manifest: {},
-      enabled: true,
+      enabled: false,
       projectOverrides: {},
     };
   }
@@ -225,7 +227,7 @@ export class PluginSecurityStore {
           manifest: cleanManifest(input.manifest),
           installedAt: typeof input.installedAt === "string" ? input.installedAt : undefined,
           securityScan: cleanSecurityScan(input.securityScan),
-          enabled: typeof input.enabled === "boolean" ? input.enabled : true,
+          enabled: input.provenance === "npm-registry" && typeof input.enabled === "boolean" ? input.enabled : false,
           projectOverrides,
         }];
       });

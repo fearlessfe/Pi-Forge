@@ -79,6 +79,7 @@ const api: PiDesktopApi = {
   browser: {
     state: () => ipcRenderer.invoke("browser:state"),
     navigate: (url) => ipcRenderer.invoke("browser:navigate", url),
+    openExternal: (url) => ipcRenderer.invoke("browser:open-external", url),
     back: () => ipcRenderer.invoke("browser:back"),
     forward: () => ipcRenderer.invoke("browser:forward"),
     reload: () => ipcRenderer.invoke("browser:reload"),
@@ -113,6 +114,7 @@ const api: PiDesktopApi = {
   agent: {
     send: (input: SendPromptInput) => ipcRenderer.invoke("agent:send", input),
     listConversations: () => ipcRenderer.invoke("agent:list-conversations"),
+    listConversationPage: (query) => ipcRenderer.invoke("agent:list-conversation-page", query ?? {}),
     loadConversation: (conversationId) => ipcRenderer.invoke("agent:load-conversation", conversationId),
     renameConversation: (conversationId, title) => ipcRenderer.invoke("agent:rename-conversation", conversationId, title),
     forkConversation: (conversationId, entryId) => ipcRenderer.invoke("agent:fork-conversation", conversationId, entryId),

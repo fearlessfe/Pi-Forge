@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { AgentEvent, AppearancePreference, AppearanceTheme, ModelMetadataOverride, PackageCapabilityProvider, PermissionSettings, ProjectResourceSelection, ResourceSettings, SaveObservabilitySettings, SendPromptInput, SubagentProvider, SystemPromptSettings } from "../src/contracts.js";
+import type { AgentEvent, AppearancePreference, AppearanceTheme, SendPromptInput } from "../src/contracts.js";
 import { AgentRuntimeClient } from "./agent-runtime-client.js";
 import { AppearanceStore } from "./appearance-store.js";
 import { AuthService } from "./auth-service.js";
@@ -20,15 +20,27 @@ import { McpStore } from "./mcp-store.js";
 import { McpService } from "./mcp-service.js";
 import { TerminalService } from "./terminal-service.js";
 import { BrowserService } from "./browser-service.js";
+import { normalizeExternalBrowserUrl } from "./browser-utils.js";
 import { ObservabilityStore } from "./observability-store.js";
 import { ObservabilityService } from "./observability-service.js";
+import { shutdownApplication } from "./application-shutdown.js";
 import {
+  requireBrowserBounds,
   requireContextBudgetRequest,
+  requireConversationListQuery,
   requireMcpServerInput,
+  requireModelMetadataOverride,
   requireModelSettings,
+  requireObservabilitySettings,
+  requirePackageCapabilityProvider,
+  requirePermissionSettings,
+  requireProjectResourceSelection,
   requireQueuePromptInput,
+  requireResourceSettings,
   requireResolvePlanReviewInput,
   requireSendPromptInput,
+  requireSubagentProvider,
+  requireSystemPromptSettings,
 } from "./ipc-input-validation.js";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -41,7 +53,8 @@ let mcpService: McpService | undefined;
 let terminalService: TerminalService | undefined;
 let browserService: BrowserService | undefined;
 let observabilityService: ObservabilityService | undefined;
-let applicationShutdownStarted = false;
+let applicationShutdownPromise: Promise<void> | undefined;
+let applicationShutdownCompleted = false;
 
 /* 窗口/原生视图背景随主题切换，对齐 token v2 --bg-window（docs-internal/design-refresh-apple.md 3.2/3.6）。
    初始外观取 AppearanceStore 里最近一次偏好（无记录跟随系统）；macOS 使用透明原生材质，
@@ -151,54 +164,6 @@ function requireString(value: unknown, message: string): string {
   return value;
 }
 
-function requirePermissionSettings(value: unknown): PermissionSettings {
-  if (!value || typeof value !== "object" || typeof (value as Record<string, unknown>).mode !== "string") {
-    throw new Error("权限设置格式无效。");
-  }
-  return value as PermissionSettings;
-}
-
-function requireSystemPromptSettings(value: unknown): SystemPromptSettings {
-  if (!value || typeof value !== "object" || typeof (value as Record<string, unknown>).content !== "string") {
-    throw new Error("系统提示词格式无效。");
-  }
-  return value as SystemPromptSettings;
-}
-
-function requireResourceSettings(value: unknown): ResourceSettings {
-  if (!value || typeof value !== "object" || typeof (value as Record<string, unknown>).workspaceContextEnabled !== "boolean") {
-    throw new Error("资源设置格式无效。");
-  }
-  return value as ResourceSettings;
-}
-
-function requireProjectResourceSelection(value: unknown): ProjectResourceSelection | undefined {
-  if (value === undefined) return undefined;
-  if (!value || typeof value !== "object") throw new Error("项目资源选择格式无效。");
-  const input = value as Record<string, unknown>;
-  if (!Array.isArray(input.skills) || !input.skills.every((entry) => typeof entry === "string")
-    || !Array.isArray(input.mcpServers) || !input.mcpServers.every((entry) => typeof entry === "string")) {
-    throw new Error("项目资源选择格式无效。");
-  }
-  return {
-    skills: [...new Set(input.skills)],
-    mcpServers: [...new Set(input.mcpServers)],
-  };
-}
-
-function requireObservabilitySettings(value: unknown): SaveObservabilitySettings {
-  if (!value || typeof value !== "object") throw new Error("Trace 设置格式无效。");
-  const input = value as Record<string, unknown>;
-  if (
-    typeof input.enabled !== "boolean"
-    || typeof input.serviceName !== "string"
-    || typeof input.captureContent !== "string"
-    || typeof input.localFileEnabled !== "boolean"
-    || !Array.isArray(input.exporters)
-  ) throw new Error("Trace 设置字段无效。");
-  return value as SaveObservabilitySettings;
-}
-
 function registerIpc(
   settings: SettingsStore,
   credentials: EncryptedCredentialStore,
@@ -246,7 +211,7 @@ function registerIpc(
     modelMetadata.save(
       requireString(providerId, "模型提供商无效。"),
       requireString(modelId, "模型 ID 无效。"),
-      value as ModelMetadataOverride,
+      requireModelMetadataOverride(value),
     );
     await agent.reset();
     return agent.getModelCatalog(false);
@@ -440,6 +405,9 @@ function registerIpc(
   ipcMain.handle("terminal:kill", (_event, id: unknown) => terminal.kill(requireString(id, "终端会话无效。")));
   ipcMain.handle("browser:state", () => browser.state());
   ipcMain.handle("browser:navigate", (_event, url: unknown) => browser.navigate(requireString(url, "浏览器地址无效。")));
+  ipcMain.handle("browser:open-external", (_event, url: unknown) => shell.openExternal(
+    normalizeExternalBrowserUrl(requireString(url, "浏览器地址无效。")),
+  ));
   ipcMain.handle("browser:back", () => browser.back());
   ipcMain.handle("browser:forward", () => browser.forward());
   ipcMain.handle("browser:reload", () => browser.reload());
@@ -449,12 +417,7 @@ function registerIpc(
     return browser.setVisible(visible);
   });
   ipcMain.handle("browser:set-bounds", (_event, value: unknown) => {
-    if (!value || typeof value !== "object") throw new Error("浏览器视图尺寸无效。");
-    const bounds = value as Record<string, unknown>;
-    if ([bounds.x, bounds.y, bounds.width, bounds.height].some((entry) => typeof entry !== "number" || !Number.isFinite(entry))) {
-      throw new Error("浏览器视图尺寸无效。");
-    }
-    browser.setBounds(bounds as { x: number; y: number; width: number; height: number });
+    browser.setBounds(requireBrowserBounds(value));
   });
   ipcMain.handle("browser:start-annotation", (_event, prompt: unknown) => browser.startAnnotation(
     undefined,
@@ -507,7 +470,7 @@ function registerIpc(
     if (scope !== undefined && scope !== "user" && scope !== "project") throw new Error("插件启停范围无效。");
     const packageSource = requireString(source, "插件安装来源无效。");
     const projectPath = optionalKnownWorkspace(cwd);
-    const installed = plugins.setEnabled(packageSource, enabled, projectPath, scope === "project" ? "project" : "user");
+    const installed = await plugins.setEnabled(packageSource, enabled, projectPath, scope === "project" ? "project" : "user");
     if (!enabled) {
       const currentCapabilities = capabilities.get();
       if (currentCapabilities.subagent.kind === "plugin" && currentCapabilities.subagent.source === packageSource) capabilities.saveSubagent({ kind: "builtin" });
@@ -519,13 +482,7 @@ function registerIpc(
   });
   ipcMain.handle("plugins:runtime", () => agent.getPluginRuntime());
   ipcMain.handle("plugins:set-subagent-provider", async (_event, value: unknown) => {
-    if (!value || typeof value !== "object") throw new Error("Subagent 能力配置无效。");
-    const input = value as Record<string, unknown>;
-    let provider: SubagentProvider;
-    if (input.kind === "builtin") provider = { kind: "builtin" };
-    else if (input.kind === "plugin" && typeof input.source === "string" && typeof input.toolName === "string") {
-      provider = { kind: "plugin", source: input.source, toolName: input.toolName };
-    } else throw new Error("Subagent 能力配置无效。");
+    const provider = requireSubagentProvider(value);
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再切换能力提供者。");
     if (provider.kind === "plugin" && !(await agent.getPluginRuntime()).hasSession) {
       throw new Error("请先创建一次 Agent 会话，再 Reload 并选择实际加载的第三方工具。");
@@ -546,12 +503,7 @@ function registerIpc(
   });
   ipcMain.handle("plugins:set-package-capability", async (_event, slotValue: unknown, value: unknown) => {
     if (slotValue !== "memory" && slotValue !== "learning") throw new Error("能力槽无效。");
-    if (!value || typeof value !== "object") throw new Error("能力提供者配置无效。");
-    const input = value as Record<string, unknown>;
-    let provider: PackageCapabilityProvider;
-    if (input.kind === "none") provider = { kind: "none" };
-    else if (input.kind === "plugin" && typeof input.source === "string") provider = { kind: "plugin", source: input.source };
-    else throw new Error("能力提供者配置无效。");
+    const provider = requirePackageCapabilityProvider(value);
     if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再切换能力提供者。");
     if (provider.kind === "plugin" && !(await agent.getPluginRuntime()).hasSession) {
       throw new Error("请先创建一次 Agent 会话，再 Reload 并验证该插件后切换能力提供者。");
@@ -581,6 +533,7 @@ function registerIpc(
     return { runId };
   });
   ipcMain.handle("agent:list-conversations", () => agent.listConversations());
+  ipcMain.handle("agent:list-conversation-page", (_event, query: unknown) => agent.listConversationPage(requireConversationListQuery(query)));
   ipcMain.handle("agent:load-conversation", (_event, conversationId: unknown) => agent.loadConversation(requireString(conversationId, "会话 ID 无效。")));
   ipcMain.handle("agent:rename-conversation", (_event, conversationId: unknown, title: unknown) => (
     agent.renameConversation(requireString(conversationId, "会话 ID 无效。"), requireString(title, "会话名称无效。"))
@@ -728,23 +681,21 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  if (!applicationShutdownStarted && observabilityService) {
-    event.preventDefault();
-    applicationShutdownStarted = true;
-    authService?.dispose();
-    pluginService?.dispose();
-    agentService?.dispose();
-    void mcpService?.dispose();
-    terminalService?.dispose();
-    browserService?.dispose();
-    void observabilityService.shutdown().finally(() => app.quit());
-    return;
-  }
-  if (applicationShutdownStarted) return;
-  authService?.dispose();
-  pluginService?.dispose();
-  agentService?.dispose();
-  void mcpService?.dispose();
-  terminalService?.dispose();
-  browserService?.dispose();
+  if (applicationShutdownCompleted) return;
+  event.preventDefault();
+  applicationShutdownPromise ??= shutdownApplication([
+    { name: "auth", run: () => authService?.dispose() },
+    { name: "plugins", run: () => pluginService?.dispose() },
+    { name: "runtime", run: () => agentService?.dispose() },
+    { name: "mcp", run: async () => mcpService?.dispose() },
+    { name: "terminal", run: () => terminalService?.dispose() },
+    { name: "browser", run: () => browserService?.dispose() },
+    { name: "observability", run: async () => observabilityService?.shutdown() },
+  ], 5_000).then((result) => {
+    for (const failure of result.failures) console.error(`Application shutdown failed (${failure.name}): ${failure.message}`);
+    if (result.timedOut.length > 0) console.error(`Application shutdown timed out: ${result.timedOut.join(", ")}`);
+  }).finally(() => {
+    applicationShutdownCompleted = true;
+    app.quit();
+  });
 });

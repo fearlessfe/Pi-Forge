@@ -5,8 +5,8 @@ import { NewChatView } from "./components/NewChatView";
 import { PluginCenterView } from "./components/PluginCenterView";
 import { SettingsView } from "./components/SettingsView";
 import { BrowserWorkbench } from "./components/BrowserWorkbench";
-import type { AppearanceTheme, AuthEvent, ContextBudgetReport, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, PlanReviewArtifact, ProviderCatalogEntry, QueuedMessages, ResolvePlanReviewInput, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
-import { applyAgentEvent } from "./agent-event-state";
+import type { AgentEvent, AgentRuntimeStatus, AppearanceTheme, AuthEvent, ContextBudgetReport, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, PlanReviewArtifact, ProviderCatalogEntry, QueuedMessages, ResolvePlanReviewInput, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
+import { applyAgentEvent, applyAgentEvents, isStreamingAgentEvent } from "./agent-event-state";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { emptyComposerAttachments, promptFileAttachmentsOf, promptImagesOf, turnAttachmentsOf, type ComposerAttachments } from "./composer-attachments";
 import { isPrimaryShortcut, shortcutLabel } from "./keyboard";
@@ -119,6 +119,10 @@ export function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [conversationHistoryCursor, setConversationHistoryCursor] = useState<string>();
+  const [conversationHistoryLoadingMore, setConversationHistoryLoadingMore] = useState(false);
+  const conversationHistoryQueryRef = useRef("");
+  const conversationHistoryRequestRef = useRef(0);
   const [conversationTurns, setConversationTurns] = useState<Record<string, ChatTurn[]>>({});
   const [conversationContexts, setConversationContexts] = useState<Record<string, ContextUsageInfo | undefined>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -145,7 +149,8 @@ export function App() {
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
   const [runtimeRecoveries, setRuntimeRecoveries] = useState<RuntimeRecoveryInfo[]>([]);
-  const [runtimeCrashLooping, setRuntimeCrashLooping] = useState(false);
+  const [runtimeStatus, setRuntimeStatus] = useState<AgentRuntimeStatus>("running");
+  const runtimeUnavailable = runtimeStatus !== "running";
   const resolvedTheme: AppearanceTheme = theme === "system" ? systemTheme : theme;
   const nativeMaterial = window.piDesktop?.appearance.nativeMaterial === true;
 
@@ -211,8 +216,23 @@ export function App() {
     void refreshProviderCatalog(t("无法读取模型目录"));
     void refreshConversationHistory();
     void refreshRuntimeRecoveries();
+    let streamingTimer: number | undefined;
+    const streamingEvents: AgentEvent[] = [];
+    const flushStreamingEvents = () => {
+      if (streamingTimer !== undefined) window.clearTimeout(streamingTimer);
+      streamingTimer = undefined;
+      if (streamingEvents.length === 0) return;
+      const batch = streamingEvents.splice(0);
+      setTurns((current) => applyAgentEvents(current, batch));
+    };
     const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => {
-      if (event.type === "runtime.status") setRuntimeCrashLooping(event.status === "crash-looping");
+      if (isStreamingAgentEvent(event)) {
+        streamingEvents.push(event);
+        streamingTimer ??= window.setTimeout(flushStreamingEvents, 40);
+        return;
+      }
+      flushStreamingEvents();
+      if (event.type === "runtime.status") setRuntimeStatus(event.status);
       if (event.type === "context.updated") setContextUsage(event.usage);
       if (event.type === "queue.updated") setQueuedMessages(event.queue);
       if (event.type === "plan.review.requested" || event.type === "plan.review.resolved") {
@@ -242,6 +262,7 @@ export function App() {
       }
     });
     return () => {
+      if (streamingTimer !== undefined) window.clearTimeout(streamingTimer);
       unsubscribeAgent?.();
       unsubscribeAuth?.();
       unsubscribeBrowser?.();
@@ -305,22 +326,85 @@ export function App() {
     }
   }
 
+  function applyConversationHistory(history: ConversationHistoryItem[], append: boolean) {
+    const nextConversations = history.filter((item) => !item.project).map((item) => historyConversation(item, t, locale));
+    setConversations((current) => append
+      ? [...current, ...nextConversations.filter((item) => !current.some((existing) => existing.id === item.id))]
+      : nextConversations);
+    const grouped = new Map<string, Project>();
+    for (const item of history) {
+      if (!item.project) continue;
+      const existing = grouped.get(item.project.id);
+      const conversation = historyConversation(item, t, locale);
+      if (existing) existing.conversations.push(conversation);
+      else grouped.set(item.project.id, { ...item.project, conversations: [conversation] });
+    }
+    const nextProjects = [...grouped.values()];
+    setProjects((current) => {
+      if (!append) return nextProjects;
+      const merged = current.map((project) => {
+        const additional = grouped.get(project.id);
+        if (!additional) return project;
+        return {
+          ...project,
+          conversations: [...project.conversations, ...additional.conversations.filter((item) => !project.conversations.some((existing) => existing.id === item.id))],
+        };
+      });
+      return [...merged, ...nextProjects.filter((project) => !current.some((existing) => existing.id === project.id))];
+    });
+  }
+
   async function refreshConversationHistory() {
     if (!window.piDesktop || typeof window.piDesktop.agent.listConversations !== "function") return;
+    const query = conversationHistoryQueryRef.current;
+    const request = ++conversationHistoryRequestRef.current;
     try {
-      const history = await window.piDesktop.agent.listConversations();
-      setConversations(history.filter((item) => !item.project).map((item) => historyConversation(item, t, locale)));
-      const grouped = new Map<string, Project>();
-      for (const item of history) {
-        if (!item.project) continue;
-        const existing = grouped.get(item.project.id);
-        const conversation = historyConversation(item, t, locale);
-        if (existing) existing.conversations.push(conversation);
-        else grouped.set(item.project.id, { ...item.project, conversations: [conversation] });
+      if (typeof window.piDesktop.agent.listConversationPage === "function") {
+        const page = await window.piDesktop.agent.listConversationPage({ limit: 100, query: query || undefined });
+        if (request !== conversationHistoryRequestRef.current) return;
+        applyConversationHistory(page.items, false);
+        setConversationHistoryCursor(page.nextCursor);
+      } else {
+        const history = await window.piDesktop.agent.listConversations();
+        if (request !== conversationHistoryRequestRef.current) return;
+        applyConversationHistory(history, false);
+        setConversationHistoryCursor(undefined);
       }
-      setProjects([...grouped.values()]);
     } catch (error) {
       setNotice({ title: t("无法读取会话历史"), message: eventError(error), type: "info" });
+    }
+  }
+
+  async function loadMoreConversationHistory() {
+    if (!conversationHistoryCursor || conversationHistoryLoadingMore || !window.piDesktop?.agent.listConversationPage) return;
+    const query = conversationHistoryQueryRef.current;
+    setConversationHistoryLoadingMore(true);
+    try {
+      const page = await window.piDesktop.agent.listConversationPage({ cursor: conversationHistoryCursor, limit: 100, query: query || undefined });
+      if (query !== conversationHistoryQueryRef.current) return;
+      applyConversationHistory(page.items, true);
+      setConversationHistoryCursor(page.nextCursor);
+    } catch (error) {
+      setNotice({ title: t("无法读取更多会话"), message: eventError(error), type: "info" });
+    } finally {
+      setConversationHistoryLoadingMore(false);
+    }
+  }
+
+  async function searchConversationHistory(query: string) {
+    const normalized = query.trim();
+    conversationHistoryQueryRef.current = normalized;
+    if (!window.piDesktop?.agent.listConversationPage) return;
+    const request = ++conversationHistoryRequestRef.current;
+    try {
+      const page = await window.piDesktop.agent.listConversationPage({ limit: 100, query: normalized || undefined });
+      if (request !== conversationHistoryRequestRef.current) return;
+      applyConversationHistory(page.items, false);
+      setConversationHistoryCursor(page.nextCursor);
+    } catch (error) {
+      if (request === conversationHistoryRequestRef.current) {
+        setNotice({ title: t("无法搜索会话"), message: eventError(error), type: "info" });
+      }
     }
   }
 
@@ -757,7 +841,7 @@ export function App() {
     if (!window.piDesktop?.agent.retryRuntime) return;
     try {
       await window.piDesktop.agent.retryRuntime();
-      setRuntimeCrashLooping(false);
+      setRuntimeStatus("running");
     } catch (error) {
       setNotice({ title: t("无法重启 Agent Runtime"), message: eventError(error), type: "info" });
     }
@@ -1011,6 +1095,12 @@ export function App() {
     }
   }
 
+  function openExternalBrowser(url: string) {
+    void window.piDesktop?.browser.openExternal(url).catch((error: unknown) => {
+      setNotice({ title: t("无法使用系统浏览器打开链接"), message: eventError(error), type: "info" });
+    });
+  }
+
   async function logoutProvider(providerId: string) {
     if (!window.piDesktop?.auth) throw new Error("OAuth 模块尚未加载，请重新启动 Pi Desktop。");
     await window.piDesktop.auth.logout(providerId);
@@ -1065,6 +1155,10 @@ export function App() {
               onSetConversationTags={setConversationTags}
               onDeleteConversation={deleteConversation}
               conversationActionsDisabled={isRunning}
+              hasMoreConversations={Boolean(conversationHistoryCursor)}
+              loadingMoreConversations={conversationHistoryLoadingMore}
+              onLoadMoreConversations={() => void loadMoreConversationHistory()}
+              onSearchConversations={(query) => void searchConversationHistory(query)}
               onAddProject={() => void chooseWorkspace()}
               onOpenSettings={() => { closeBuiltInBrowser(); setSettingsSection("models"); setView("settings"); }}
               onOpenPlugins={() => { closeBuiltInBrowser(); setView("plugins"); }}
@@ -1072,15 +1166,15 @@ export function App() {
             />
             <div className="workspace-main">
               {view === "chat" ? <main className="chat-main relative h-full w-full min-h-0 min-w-0 overflow-hidden bg-bg">
-                {runtimeCrashLooping && <section className={`${runtimeBannerClass} top-loose border-red/32 text-red`} aria-live="assertive">
+                {runtimeUnavailable && <section className={`${runtimeBannerClass} top-loose border-red/32 text-red`} aria-live="assertive">
                   <AlertTriangle size={16} className="shrink-0" />
                   <span className="block min-w-0">
-                    <strong className="block text-caption font-medium text-label">{t("Agent Runtime 连续崩溃")}</strong>
-                    <small className="mt-tight block truncate text-caption text-label-2">{t("Runtime 在一分钟内多次异常退出，已停止自动重启。请检查模型配置或查看日志后重试。")}</small>
+                    <strong className="block text-caption font-medium text-label">{t(runtimeStatus === "unresponsive" ? "Agent Runtime 无响应" : "Agent Runtime 连续崩溃")}</strong>
+                    <small className="mt-tight block truncate text-caption text-label-2">{t(runtimeStatus === "unresponsive" ? "Runtime 心跳或任务启动确认已超时。为避免迟到任务产生副作用，已停止该 Runtime。" : "Runtime 在一分钟内多次异常退出，已停止自动重启。请检查模型配置或查看日志后重试。")}</small>
                   </span>
                   <button type="button" className={runtimeBannerButtonClass} onClick={() => void retryRuntime()}><RotateCcw size={14} />{t("重试")}</button>
                 </section>}
-                {runtimeRecoveries.length > 0 && <section className={`${runtimeBannerClass} ${runtimeCrashLooping ? "top-[74px]" : "top-loose"} border-orange/32 text-orange`} aria-live="polite">
+                {runtimeRecoveries.length > 0 && <section className={`${runtimeBannerClass} ${runtimeUnavailable ? "top-[74px]" : "top-loose"} border-orange/32 text-orange`} aria-live="polite">
                   <AlertTriangle size={16} className="shrink-0" />
                   <span className="block min-w-0">
                     <strong className="block text-caption font-medium text-label">{t("检测到中断的 Runtime 任务")}</strong>
@@ -1111,6 +1205,8 @@ export function App() {
                   onChooseWorkspace={() => void chooseWorkspace()}
                   onOpenTerminal={() => setTerminalOpen(true)}
                   onOpenContextBudget={() => { setSettingsSection("context-budget"); setView("settings"); }}
+                  onOpenLink={openBuiltInBrowser}
+                  onOpenExternalLink={openExternalBrowser}
                   onResourcesChanged={() => setResourceProfileRevision((current) => current + 1)}
                   onResolvePlanReview={resolvePlanReview}
                   onModelChange={(providerId, modelId) => void selectChatModel(providerId, modelId)}

@@ -175,6 +175,7 @@ async function invoke(request: RuntimeRequest): Promise<unknown> {
     case "send": return agent.send(args[0] as string, args[1] as string | undefined, args[2] as string | undefined, args[3] as PromptExtras | undefined);
     case "executeExtensionCommand": return agent.executeExtensionCommand(args[0] as string, args[1] as string | undefined, args[2] as string | undefined);
     case "listConversations": return agent.listConversations();
+    case "listConversationPage": return agent.listConversationPage(args[0] as import("../src/contracts.js").ConversationListQuery | undefined);
     case "loadConversation": return agent.loadConversation(args[0] as string);
     case "forkConversation": return agent.forkConversation(args[0] as string, args[1] as string | undefined);
     case "exportConversation": return agent.exportConversation(args[0] as string, args[1] as "markdown" | "json");
@@ -227,6 +228,8 @@ process.on("message", (message: ParentToRuntimeMessage) => {
       process.stderr.write(`${failure(error).stack ?? failure(error).message}\n`);
       process.exitCode = 1;
     }
+  } else if (message.kind === "runtime.ping") {
+    send({ kind: "runtime.pong", id: message.id });
   } else if (message.kind === "runtime.request") {
     void handleRequest(message);
   } else if (message.kind === "host.response") {

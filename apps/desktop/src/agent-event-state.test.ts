@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "./contracts";
-import { applyAgentEvent } from "./agent-event-state";
+import { applyAgentEvent, applyAgentEvents, coalesceStreamingAgentEvents, isStreamingAgentEvent } from "./agent-event-state";
 import type { ChatTurn } from "./types";
 
 function turn(id: string, question: string, status: ChatTurn["status"], runId = "run-1"): ChatTurn {
@@ -62,5 +62,28 @@ describe("applyAgentEvent queue lifecycle", () => {
     const turns = [turn("initial", "Initial task", "running")];
     const next = apply(turns, { type: "user.message.started", runId: "run-1", message: "Initial task" });
     expect(next).toBe(turns);
+  });
+});
+
+describe("streaming event batches", () => {
+  it("coalesces adjacent deltas without changing event order", () => {
+    const events: AgentEvent[] = [
+      { type: "message.delta", runId: "run-1", text: "hel" },
+      { type: "message.delta", runId: "run-1", text: "lo" },
+      { type: "thinking.delta", runId: "run-1", text: "a" },
+      { type: "thinking.delta", runId: "run-1", text: "b" },
+    ];
+    expect(events.every(isStreamingAgentEvent)).toBe(true);
+    expect(coalesceStreamingAgentEvents(events)).toEqual([
+      { type: "message.delta", runId: "run-1", text: "hello" },
+      { type: "thinking.delta", runId: "run-1", text: "ab" },
+    ]);
+    expect(applyAgentEvents([turn("initial", "Initial", "running")], events)[0]).toMatchObject({
+      answer: "hello",
+      activities: [
+        { type: "message", text: "hello" },
+        { type: "thinking", text: "ab" },
+      ],
+    });
   });
 });

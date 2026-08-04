@@ -190,17 +190,20 @@ export async function downloadAndVerifyPluginTarball(
   tarballUrl: string | undefined,
   integrity: string | undefined,
   expected: ExpectedPluginPackage,
+  onPhase?: (phase: "downloading" | "verifying") => void,
 ): Promise<Buffer> {
   if (!integrity) throw new Error("插件注册表未提供 sha512 完整性校验值，已拒绝安装。");
   if (!tarballUrl) throw new Error("插件注册表未提供安装包下载地址，已拒绝安装。");
   let response: Response;
   try {
+    onPhase?.("downloading");
     response = await fetcher(tarballUrl);
   } catch (error) {
     throw new Error(`插件安装包下载失败：${error instanceof Error ? error.message : String(error)}`);
   }
   if (!response.ok) throw new Error(`插件安装包下载失败（HTTP ${response.status}），已拒绝安装。`);
   const bytes = await readBoundedResponse(response);
+  onPhase?.("verifying");
   verifySha512Integrity(integrity, bytes);
   await inspectPluginTarball(bytes, expected);
   return bytes;

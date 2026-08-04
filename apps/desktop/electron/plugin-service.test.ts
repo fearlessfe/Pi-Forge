@@ -278,6 +278,28 @@ describe("PluginService", () => {
     expect(fs.existsSync(stagedSource.slice(4))).toBe(false);
   });
 
+  it("rolls back the published package when the security record cannot be saved", async () => {
+    const manager = fakePackageManager({ themes: ["./themes"] });
+    const securityStore = new PluginSecurityStore(tempDirectory("plugin-publish-failure-security"));
+    vi.spyOn(securityStore, "save").mockImplementation(() => { throw new Error("security store failed"); });
+    const fixture = tarballFixture({ name: "pi-publish-failure", version: "1.0.0", pi: { themes: ["./themes"] } });
+    const source = "npm:pi-publish-failure@1.0.0";
+    const service = new PluginService("/agent", "/cwd", () => {}, {
+      fetch: registryFetch({
+        name: "pi-publish-failure",
+        version: "1.0.0",
+        keywords: ["pi-package"],
+        pi: { themes: ["./themes"] },
+      }, fixture),
+      packageManager: manager,
+      securityStore,
+    });
+
+    await expect(service.install("pi-publish-failure", "1.0.0")).rejects.toThrow("security store failed");
+    expect(manager.removeAndPersist).toHaveBeenCalledWith(source);
+    expect(manager.getInstalledPath(source, "user")).toBeUndefined();
+  });
+
   it("extracts publisher usage guidance from the package README", async () => {
     const service = new PluginService("/agent", "/cwd", () => {}, {
       fetch: (async () => response({
@@ -351,11 +373,11 @@ describe("PluginService", () => {
       integrity: fixture.integrity,
       riskTier: "low",
     })]);
-    service.setEnabled("npm:pi-theme@1.4.0", true);
-    service.setEnabled("npm:pi-theme@1.4.0", false, cwd, "project");
+    await service.setEnabled("npm:pi-theme@1.4.0", true);
+    await service.setEnabled("npm:pi-theme@1.4.0", false, cwd, "project");
     expect(securityStore.isEnabled("npm:pi-theme@1.4.0", cwd)).toBe(false);
     expect(securityStore.isEnabled("npm:pi-theme@1.4.0")).toBe(true);
-    service.setEnabled("npm:pi-theme@1.4.0", false);
+    await service.setEnabled("npm:pi-theme@1.4.0", false);
     expect(securityStore.isEnabled("npm:pi-theme@1.4.0")).toBe(false);
   });
 
@@ -578,9 +600,9 @@ describe("PluginService", () => {
 
     await expect(service.remove("file:plugin")).rejects.toThrow("只能移除");
     await expect(service.remove("npm:missing@1.0.0")).rejects.toThrow("未安装");
-    expect(() => service.setEnabled("npm:missing@1.0.0", false)).toThrow("未安装");
+    await expect(service.setEnabled("npm:missing@1.0.0", false)).rejects.toThrow("未安装");
     await service.install("pi-removable", "1.0.0");
-    expect(() => service.setEnabled("npm:pi-removable@1.0.0", false, undefined, "project")).toThrow("需要工作区路径");
+    await expect(service.setEnabled("npm:pi-removable@1.0.0", false, undefined, "project")).rejects.toThrow("需要工作区路径");
     await expect(service.remove("npm:pi-removable@1.0.0")).resolves.toEqual([]);
     expect(securityStore.get("npm:pi-removable@1.0.0")).toBeUndefined();
     service.dispose();
@@ -612,12 +634,45 @@ describe("PluginService", () => {
       name: "legacy-plugin",
       version: undefined,
       installed: false,
-      enabled: true,
-      projectEnabled: true,
+      enabled: false,
+      projectEnabled: false,
       provenance: "legacy",
       riskTier: "high",
       resources: [],
       verification: "missing",
     })]);
+  });
+
+  it("revalidates legacy plugins before first enablement and reports install phases", async () => {
+    const manager = fakePackageManager({ themes: ["./themes"] });
+    const securityStore = new PluginSecurityStore(tempDirectory("plugin-legacy-revalidation"));
+    const fixture = tarballFixture({ name: "pi-legacy", version: "1.0.0", pi: { themes: ["./themes"] } });
+    const tarballPath = path.join(tempDirectory("plugin-legacy-source"), "package.tgz");
+    fs.writeFileSync(tarballPath, fixture.bytes);
+    await manager.install(`npm:${tarballPath}`);
+    manager.addSourceToSettings("npm:pi-legacy@1.0.0");
+    const events: import("../src/contracts.js").PluginProgressEvent[] = [];
+    const service = new PluginService("/agent", "/cwd", (event) => events.push(event), {
+      fetch: registryFetch({
+        name: "pi-legacy",
+        version: "1.0.0",
+        keywords: ["pi-package"],
+        pi: { themes: ["./themes"] },
+      }, fixture),
+      packageManager: manager,
+      securityStore,
+    });
+
+    expect(service.listInstalled()).toEqual([expect.objectContaining({ verification: "legacy", enabled: false })]);
+    await expect(service.setEnabled("npm:pi-legacy@1.0.0", true)).resolves.toEqual([
+      expect.objectContaining({ verification: "verified", enabled: true }),
+    ]);
+    expect(events.filter((event) => event.phase).map((event) => event.phase)).toEqual([
+      "resolving",
+      "downloading",
+      "verifying",
+      "scanning",
+      "ready",
+    ]);
   });
 });

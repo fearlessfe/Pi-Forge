@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
+  IpcInputError,
+  requireBrowserBounds,
   requireContextBudgetRequest,
+  requireConversationListQuery,
   requireMcpServerInput,
+  requireModelMetadataOverride,
   requireModelSettings,
+  requireObservabilitySettings,
+  requirePackageCapabilityProvider,
+  requirePermissionSettings,
+  requireProjectResourceSelection,
   requireQueuePromptInput,
+  requireResourceSettings,
   requireResolvePlanReviewInput,
   requireSendPromptInput,
+  requireSubagentProvider,
+  requireSystemPromptSettings,
   validatePromptExtras,
 } from "./ipc-input-validation.js";
 
@@ -19,6 +30,12 @@ describe("IPC input validation", () => {
     expect(requireContextBudgetRequest({ cwd: "/workspace" })).toEqual({ cwd: "/workspace" });
     expect(() => requireContextBudgetRequest({ cwd: 42 })).toThrow("Context Budget 请求无效");
     expect(() => requireContextBudgetRequest({ cwd: "/workspace", readFile: true })).toThrow("Context Budget 请求无效");
+  });
+
+  it("strictly validates bounded conversation pages", () => {
+    expect(requireConversationListQuery({ cursor: "100", limit: 50, archived: false })).toEqual({ cursor: "100", limit: 50, archived: false });
+    expect(() => requireConversationListQuery({ cursor: "next", limit: 50 })).toThrow("会话列表请求无效");
+    expect(() => requireConversationListQuery({ limit: 201 })).toThrow("会话列表请求无效");
   });
 
   it("strictly validates bounded plan review decisions", () => {
@@ -120,5 +137,57 @@ describe("IPC input validation", () => {
       timeoutMs: 30_000,
       transport: { type: "streamable-http", url: "https://example.com", headers: {}, command: "unexpected" },
     })).toThrow("MCP Server 配置字段无效");
+  });
+
+  it("strictly validates remaining privileged settings and workbench inputs", () => {
+    expect(requirePermissionSettings({ mode: "strict" })).toEqual({ mode: "strict" });
+    expect(() => requirePermissionSettings({ mode: "admin" })).toThrow("权限设置格式无效");
+    expect(requireSystemPromptSettings({ content: "Be concise." })).toEqual({ content: "Be concise." });
+    expect(() => requireSystemPromptSettings({ content: "ok", executable: true })).toThrow("系统提示词格式无效");
+    expect(requireResourceSettings({ workspaceContextEnabled: true, disabledSkills: ["one"] })).toEqual({ workspaceContextEnabled: true, disabledSkills: ["one"] });
+    expect(() => requireResourceSettings({ workspaceContextEnabled: true, disabledSkills: "one" })).toThrow("资源设置格式无效");
+    expect(requireProjectResourceSelection({ skills: ["one", "one"], mcpServers: ["mcp"] })).toEqual({ skills: ["one"], mcpServers: ["mcp"] });
+    expect(() => requireProjectResourceSelection({ skills: [], mcpServers: [], unknown: true })).toThrow("项目资源选择格式无效");
+    expect(requireBrowserBounds({ x: 0, y: 0, width: 800, height: 600 })).toEqual({ x: 0, y: 0, width: 800, height: 600 });
+    expect(() => requireBrowserBounds({ x: 0, y: 0, width: -1, height: 600 })).toThrow("浏览器边界无效");
+  });
+
+  it("validates metadata, trace exporters, and capability providers without unknown fields", () => {
+    expect(requireModelMetadataOverride({
+      name: "Model",
+      contextWindow: 128_000,
+      maxOutputTokens: 16_000,
+      pricing: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
+    })).toMatchObject({ name: "Model" });
+    expect(() => requireModelMetadataOverride({
+      name: "Model",
+      contextWindow: 0,
+      maxOutputTokens: 1,
+      pricing: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    })).toThrow("模型元数据字段无效");
+    expect(requireObservabilitySettings({
+      enabled: true,
+      serviceName: "pi-forge",
+      captureContent: "metadata",
+      localFileEnabled: true,
+      exporters: [{ name: "Tempo", endpoint: "https://tempo.example", enabled: true, headers: { authorization: "secret" } }],
+    })).toMatchObject({ captureContent: "metadata" });
+    expect(() => requireObservabilitySettings({ enabled: true, serviceName: "pi", captureContent: "everything", localFileEnabled: true, exporters: [] })).toThrow("Trace 设置字段无效");
+    expect(requireSubagentProvider({ kind: "plugin", source: "npm:subagent@1.0.0", toolName: "delegate" })).toMatchObject({ kind: "plugin" });
+    expect(() => requireSubagentProvider({ kind: "builtin", source: "unexpected" })).toThrow("Subagent 提供者配置无效");
+    expect(requirePackageCapabilityProvider({ kind: "none" })).toEqual({ kind: "none" });
+    expect(() => requirePackageCapabilityProvider({ kind: "plugin", source: "", privileged: true })).toThrow("能力提供者配置无效");
+  });
+
+  it("attaches a stable machine-readable code to schema failures", () => {
+    let actual: unknown;
+    try {
+      requirePermissionSettings({ mode: "admin" });
+    } catch (error) {
+      actual = error;
+    }
+    expect(actual).toBeInstanceOf(IpcInputError);
+    expect((actual as IpcInputError).code).toBe("INVALID_INPUT");
+    expect((actual as Error).message).toContain("[INVALID_INPUT]");
   });
 });

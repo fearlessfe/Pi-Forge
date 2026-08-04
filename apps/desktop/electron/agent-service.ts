@@ -19,6 +19,8 @@ import type {
   ContextBudgetReport,
   ConversationHistoryDetail,
   ConversationHistoryItem,
+  ConversationHistoryPage,
+  ConversationListQuery,
   PluginRuntimeStatus,
   PlanReviewArtifact,
   PermissionRuntime,
@@ -373,6 +375,10 @@ export class AgentService {
 
   async listConversations(): Promise<ConversationHistoryItem[]> {
     return this.conversationHistory.listConversations();
+  }
+
+  async listConversationPage(query?: ConversationListQuery): Promise<ConversationHistoryPage> {
+    return this.conversationHistory.listConversationPage(query);
   }
 
   async loadConversation(conversationId: string): Promise<ConversationHistoryDetail> {

@@ -141,6 +141,52 @@ describe("ConversationHistory", () => {
     expect(items.find((item) => item.id === "conv-new")!.project).toBeUndefined();
   });
 
+  it("pages and filters the rebuildable JSON conversation index", async () => {
+    const sessionDir = createDirectory("history-index");
+    const fallbackCwd = createDirectory("history-index-fallback");
+    for (let index = 0; index < 5; index += 1) {
+      const manager = SessionManager.create(fallbackCwd, sessionDir, { id: `indexed-${index}` });
+      manager.appendMessage({ role: "user", content: `searchable conversation ${index}`, timestamp: index } satisfies UserMessage);
+      manager.appendMessage(assistant([{ type: "text", text: `answer ${index}` }], index));
+      if (index === 4) manager.appendCustomEntry("pi-desktop:conversation-metadata", { tags: ["important"], archived: true });
+    }
+    const history = new ConversationHistory(sessionDir, fallbackCwd, createDeps());
+    const first = await history.listConversationPage({ limit: 2 });
+    expect(first.items).toHaveLength(2);
+    expect(first.nextCursor).toBe("2");
+    expect(first.total).toBe(5);
+    const second = await history.listConversationPage({ cursor: first.nextCursor, limit: 2 });
+    expect(second.items).toHaveLength(2);
+    expect(new Set([...first.items, ...second.items].map((item) => item.id)).size).toBe(4);
+    await expect(history.listConversationPage({ query: "important", archived: true })).resolves.toMatchObject({
+      total: 1,
+      items: [{ id: "indexed-4", tags: ["important"], archived: true }],
+    });
+
+    fs.writeFileSync(path.join(sessionDir, "pi-desktop-conversation-index.v1.json"), "{broken");
+    const rebuilt = new ConversationHistory(sessionDir, fallbackCwd, createDeps());
+    await expect(rebuilt.listConversationPage({ limit: 10 })).resolves.toMatchObject({ total: 5 });
+  });
+
+  it("serves a bounded first page from a 1,000-session fixture", async () => {
+    const sessionDir = createDirectory("history-index-scale");
+    const fallbackCwd = createDirectory("history-index-scale-fallback");
+    for (let index = 0; index < 1_000; index += 1) {
+      const id = `scale-${String(index).padStart(4, "0")}`;
+      const timestamp = new Date(1_700_000_000_000 + index).toISOString();
+      const entries = [
+        { type: "session", version: 3, id, timestamp, cwd: fallbackCwd },
+        { type: "message", id: `${id}-user`, parentId: null, timestamp, message: { role: "user", content: `scale fixture ${index}`, timestamp: index } },
+      ];
+      fs.writeFileSync(path.join(sessionDir, `${id}.jsonl`), `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    }
+    const history = new ConversationHistory(sessionDir, fallbackCwd, createDeps());
+    const first = await history.listConversationPage({ limit: 100 });
+    expect(first).toMatchObject({ total: 1_000, nextCursor: "100" });
+    expect(first.items).toHaveLength(100);
+    await expect(history.listConversationPage({ query: "fixture 777" })).resolves.toMatchObject({ total: 1 });
+  }, 20_000);
+
   it("rebuilds turns with activities, usage, file changes and context usage", async () => {
     const sessionDir = createDirectory("detail-sessions");
     const fallbackCwd = createDirectory("detail-fallback");

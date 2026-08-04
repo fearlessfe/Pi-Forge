@@ -5,6 +5,8 @@ import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai"
 import type {
   ConversationHistoryDetail,
   ConversationHistoryItem,
+  ConversationHistoryPage,
+  ConversationListQuery,
   ContextUsageInfo,
   QuestionOption,
   ResponseUsage,
@@ -17,6 +19,7 @@ import { fixedProtocolModelMetadata } from "./model-metadata-catalog.js";
 import { fileChangesEntryType, parseStoredFileChange, type FileChangeTracker } from "./file-changes.js";
 import type { ModelCatalog } from "./model-catalog.js";
 import type { SubagentRunStore } from "./subagent-run-store.js";
+import { ConversationIndexStore } from "./conversation-index.js";
 
 type ConversationMetadata = {
   tags: string[];
@@ -148,29 +151,28 @@ export function responseUsage(message: AssistantMessage): ResponseUsage {
 }
 
 export class ConversationHistory {
+  private readonly index: ConversationIndexStore;
+
   constructor(
     private readonly sessionDir: string,
     private readonly fallbackCwd: string,
     private readonly deps: ConversationHistoryDeps,
-  ) {}
+  ) {
+    this.index = new ConversationIndexStore(sessionDir, fallbackCwd);
+  }
 
   async listConversations(): Promise<ConversationHistoryItem[]> {
-    const sessions = await SessionManager.listAll(this.sessionDir);
-    const idsByPath = new Map(sessions.map((session) => [path.resolve(session.path), session.id]));
-    return sessions
-      .sort((left, right) => right.modified.getTime() - left.modified.getTime())
-      .map((session) => this.historyItem(
-        session,
-        this.conversationMetadata(SessionManager.open(session.path, this.sessionDir, session.cwd || this.fallbackCwd)),
-        session.parentSessionPath ? idsByPath.get(path.resolve(session.parentSessionPath)) : undefined,
-      ));
+    return this.index.listAll();
+  }
+
+  async listConversationPage(query?: ConversationListQuery): Promise<ConversationHistoryPage> {
+    return this.index.page(query);
   }
 
   async loadConversation(conversationId: string): Promise<ConversationHistoryDetail> {
-    const sessions = await SessionManager.listAll(this.sessionDir);
-    const info = sessions.find((session) => session.id === conversationId);
-    if (!info) throw new Error("找不到该会话，文件可能已被移动或删除。");
-    const manager = SessionManager.open(info.path, this.sessionDir, info.cwd || this.fallbackCwd);
+    const indexed = await this.index.find(conversationId);
+    if (!indexed) throw new Error("找不到该会话，文件可能已被移动或删除。");
+    const manager = SessionManager.open(indexed.sessionPath, this.sessionDir, indexed.item.cwd || this.fallbackCwd);
     const branch = manager.getBranch();
     const turns: ConversationHistoryDetail["turns"] = [];
     let latestAssistant: { message: AssistantMessage; entryIndex: number } | undefined;
@@ -268,13 +270,8 @@ export class ConversationHistory {
         contextUsage = { tokens, contextWindow, percent: tokens === null ? null : (tokens / contextWindow) * 100 };
       }
     }
-    const sessionsByPath = new Map(sessions.map((session) => [path.resolve(session.path), session.id]));
     return {
-      ...this.historyItem(
-        info,
-        this.conversationMetadata(manager),
-        info.parentSessionPath ? sessionsByPath.get(path.resolve(info.parentSessionPath)) : undefined,
-      ),
+      ...indexed.item,
       turns,
       contextUsage,
     };
@@ -307,6 +304,7 @@ export class ConversationHistory {
     const forkInfo = (await SessionManager.listAll(this.sessionDir)).find((session) => session.id === fork.getSessionId());
     if (!forkInfo) throw new Error("Fork 已创建，但无法重新读取会话索引。");
     const idsByPath = new Map([...sessions, forkInfo].map((session) => [path.resolve(session.path), session.id]));
+    this.index.invalidate();
     return this.historyItem(forkInfo, this.conversationMetadata(fork), forkInfo.parentSessionPath ? idsByPath.get(path.resolve(forkInfo.parentSessionPath)) : conversationId);
   }
 
@@ -356,9 +354,11 @@ export class ConversationHistory {
     const activeSession = this.deps.activeSession();
     if (activeSession?.sessionManager.getSessionId() === conversationId) {
       activeSession.setSessionName(normalizedTitle);
+      this.index.invalidate();
       return;
     }
     SessionManager.open(info.path, this.sessionDir, info.cwd || this.fallbackCwd).appendSessionInfo(normalizedTitle);
+    this.index.invalidate();
   }
 
   async deleteConversation(conversationId: string): Promise<void> {
@@ -368,6 +368,7 @@ export class ConversationHistory {
     if (!info) throw new Error("找不到该会话，文件可能已被移动或删除。");
     if (this.deps.activeSession()?.sessionManager.getSessionId() === conversationId) this.deps.disposeSession();
     fs.unlinkSync(info.path);
+    this.index.invalidate();
   }
 
   private historyItem(session: SessionInfo, metadata: ConversationMetadata = { tags: [], archived: false }, parentConversationId?: string): ConversationHistoryItem {
@@ -412,6 +413,7 @@ export class ConversationHistory {
       ? activeSession.sessionManager
       : SessionManager.open(info.path, this.sessionDir, info.cwd || this.fallbackCwd);
     manager.appendCustomEntry("pi-desktop:conversation-metadata", { ...this.conversationMetadata(manager), ...patch });
+    this.index.invalidate();
   }
 
   private userMessageContent(content: unknown): { text: string; attachments: TurnAttachment[] } {

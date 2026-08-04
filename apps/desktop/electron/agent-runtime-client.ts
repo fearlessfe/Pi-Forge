@@ -7,6 +7,8 @@ import type {
   ConversationExport,
   ConversationHistoryDetail,
   ConversationHistoryItem,
+  ConversationHistoryPage,
+  ConversationListQuery,
   PermissionRuntime,
   PlanReviewArtifact,
   PluginRuntimeStatus,
@@ -36,12 +38,23 @@ import {
 import { RuntimeRecoveryStore } from "./runtime-recovery-store.js";
 
 type PendingRequest = {
+  method: AgentRuntimeMethod;
   resolve(value: unknown): void;
   reject(error: Error): void;
+  timeout?: NodeJS.Timeout;
 };
 
 const crashLoopWindowMs = 60_000;
 const crashLoopThreshold = 3;
+const defaultHeartbeatIntervalMs = 5_000;
+const defaultHeartbeatMissLimit = 3;
+const defaultStartupTimeoutMs = 10_000;
+
+function defaultRequestTimeout(method: AgentRuntimeMethod): number {
+  if (method === "discoverModels" || method === "testConfiguration") return 30_000;
+  if (method === "listConversations" || method === "listConversationPage" || method === "loadConversation") return 15_000;
+  return 10_000;
+}
 
 type RuntimeClientOptions = {
   workerPath: string;
@@ -56,6 +69,10 @@ type RuntimeClientOptions = {
   emit(event: AgentEvent): void;
   observe?(event: AgentEvent, prompt?: string): void;
   forkProcess?: typeof fork;
+  heartbeatIntervalMs?: number;
+  heartbeatMissLimit?: number;
+  startupTimeoutMs?: number;
+  requestTimeoutMs?: Partial<Record<AgentRuntimeMethod, number>>;
 };
 
 function runtimeError(error: { message: string; stack?: string }): Error {
@@ -79,6 +96,11 @@ export class AgentRuntimeClient {
   private pendingPrompt?: string;
   private crashTimestamps: number[] = [];
   private crashLooping = false;
+  private unresponsive = false;
+  private heartbeatTimer?: NodeJS.Timeout;
+  private heartbeatId?: string;
+  private heartbeatMisses = 0;
+  private readyTimer?: NodeJS.Timeout;
 
   constructor(private readonly options: RuntimeClientOptions) {
     this.recovery = new RuntimeRecoveryStore(options.userDataPath);
@@ -122,6 +144,7 @@ export class AgentRuntimeClient {
   }
 
   listConversations(): Promise<ConversationHistoryItem[]> { return this.request("listConversations"); }
+  listConversationPage(query?: ConversationListQuery): Promise<ConversationHistoryPage> { return this.request("listConversationPage", query); }
   loadConversation(id: string): Promise<ConversationHistoryDetail> { return this.request("loadConversation", id); }
   forkConversation(id: string, entryId?: string): Promise<ConversationHistoryItem> { return this.request("forkConversation", id, entryId); }
   exportConversation(id: string, format: "markdown" | "json"): Promise<ConversationExport> { return this.request("exportConversation", id, format); }
@@ -186,6 +209,7 @@ export class AgentRuntimeClient {
   async retryAfterCrashLoop(): Promise<void> {
     this.crashTimestamps = [];
     this.crashLooping = false;
+    this.unresponsive = false;
     this.restartAttempt = 0;
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
@@ -200,6 +224,8 @@ export class AgentRuntimeClient {
   dispose(): void {
     this.disposing = true;
     if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.clearHeartbeat();
+    if (this.readyTimer) clearTimeout(this.readyTimer);
     if (this.activeRunId) this.recovery.interruptRun(this.activeRunId, "应用已退出；任务可以在下次启动后继续。");
     this.stopChild(true);
   }
@@ -236,21 +262,41 @@ export class AgentRuntimeClient {
       sessionDir: this.options.sessionDir,
       modelSettings: this.options.settings.resolve(),
     };
+    const startupTimeoutMs = this.options.startupTimeoutMs ?? defaultStartupTimeoutMs;
+    if (startupTimeoutMs > 0) {
+      this.readyTimer = setTimeout(() => {
+        this.readyTimer = undefined;
+        this.markUnresponsive(child, "Agent Runtime 启动超时，未完成协议握手。");
+      }, startupTimeoutMs);
+    }
     child.send({ kind: "runtime.init", value: init });
   }
 
   private async request<T>(method: AgentRuntimeMethod, ...args: unknown[]): Promise<T> {
     if (this.crashLooping) throw new Error("Agent Runtime 连续崩溃，已停止自动重启。请点击界面中的“重试”按钮重新启动。");
+    if (this.unresponsive) throw new Error("Agent Runtime 无响应。请点击界面中的“重试”按钮重新启动。");
     await this.ready;
     const child = this.child;
     if (!child?.connected) throw new Error("Agent Runtime 当前不可用，正在重新启动。");
     const id = randomUUID();
     const request: RuntimeRequest = { kind: "runtime.request", id, method, args };
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: (value) => resolve(value as T), reject });
+      const timeoutMs = this.options.requestTimeoutMs?.[method] ?? defaultRequestTimeout(method);
+      const pending: PendingRequest = { method, resolve: (value) => resolve(value as T), reject };
+      if (timeoutMs > 0) {
+        pending.timeout = setTimeout(() => {
+          if (this.pending.get(id) !== pending) return;
+          this.pending.delete(id);
+          const error = new Error(`Agent Runtime 请求超时（${method}，${timeoutMs}ms）。`);
+          reject(error);
+          if (method === "send") this.markUnresponsive(child, "Agent Runtime 未及时确认任务启动；为避免迟到任务产生副作用，已停止该 Runtime。");
+        }, timeoutMs);
+      }
+      this.pending.set(id, pending);
       child.send(request, (error) => {
         if (!error) return;
         this.pending.delete(id);
+        if (pending.timeout) clearTimeout(pending.timeout);
         reject(error);
       });
     });
@@ -263,8 +309,19 @@ export class AgentRuntimeClient {
         this.rejectReady?.(new Error("Agent Runtime 协议版本不兼容。"));
         return;
       }
+      if (this.readyTimer) clearTimeout(this.readyTimer);
+      this.readyTimer = undefined;
       this.restartAttempt = 0;
+      this.unresponsive = false;
       this.resolveReady?.();
+      this.startHeartbeat();
+      return;
+    }
+    if (message.kind === "runtime.pong") {
+      if (message.id === this.heartbeatId) {
+        this.heartbeatId = undefined;
+        this.heartbeatMisses = 0;
+      }
       return;
     }
     if (message.kind === "runtime.response") {
@@ -286,6 +343,7 @@ export class AgentRuntimeClient {
     const pending = this.pending.get(message.id);
     if (!pending) return;
     this.pending.delete(message.id);
+    if (pending.timeout) clearTimeout(pending.timeout);
     if (message.error) pending.reject(runtimeError(message.error));
     else pending.resolve(message.result);
   }
@@ -336,8 +394,14 @@ export class AgentRuntimeClient {
   private handleExit(child: ChildProcess, error: Error): void {
     if (this.child !== child) return;
     this.child = undefined;
+    this.clearHeartbeat();
+    if (this.readyTimer) clearTimeout(this.readyTimer);
+    this.readyTimer = undefined;
     this.rejectReady?.(error);
-    for (const pending of this.pending.values()) pending.reject(error);
+    for (const pending of this.pending.values()) {
+      if (pending.timeout) clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
     this.pending.clear();
     for (const controller of this.hostRequests.values()) controller.abort();
     this.hostRequests.clear();
@@ -373,14 +437,76 @@ export class AgentRuntimeClient {
   private stopChild(disconnect: boolean): void {
     const child = this.child;
     this.child = undefined;
+    this.clearHeartbeat();
+    if (this.readyTimer) clearTimeout(this.readyTimer);
+    this.readyTimer = undefined;
     if (!child) return;
     child.removeAllListeners("exit");
     child.removeAllListeners("error");
     if (disconnect && child.connected) child.disconnect();
     else child.kill();
-    for (const pending of this.pending.values()) pending.reject(new Error("Agent Runtime 已重新启动。"));
+    for (const pending of this.pending.values()) {
+      if (pending.timeout) clearTimeout(pending.timeout);
+      pending.reject(new Error("Agent Runtime 已重新启动。"));
+    }
     this.pending.clear();
     for (const controller of this.hostRequests.values()) controller.abort();
     this.hostRequests.clear();
+  }
+
+  private startHeartbeat(): void {
+    this.clearHeartbeat();
+    const intervalMs = this.options.heartbeatIntervalMs ?? defaultHeartbeatIntervalMs;
+    if (intervalMs <= 0) return;
+    this.heartbeatTimer = setInterval(() => this.heartbeatTick(), intervalMs);
+  }
+
+  private heartbeatTick(): void {
+    const child = this.child;
+    if (!child?.connected || this.unresponsive) return;
+    if (this.heartbeatId) {
+      this.heartbeatMisses += 1;
+      const missLimit = Math.max(1, this.options.heartbeatMissLimit ?? defaultHeartbeatMissLimit);
+      if (this.heartbeatMisses >= missLimit) {
+        this.markUnresponsive(child, "Agent Runtime 心跳连续超时，进程可能无响应。");
+      }
+      return;
+    }
+    const id = randomUUID();
+    this.heartbeatId = id;
+    this.heartbeatMisses = 1;
+    child.send({ kind: "runtime.ping", id }, (error) => {
+      if (error) this.markUnresponsive(child, `Agent Runtime 心跳发送失败：${error.message}`);
+    });
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
+    this.heartbeatId = undefined;
+    this.heartbeatMisses = 0;
+  }
+
+  private markUnresponsive(child: ChildProcess, message: string): void {
+    if (this.child !== child || this.unresponsive || this.disposing) return;
+    this.unresponsive = true;
+    this.clearHeartbeat();
+    const error = new Error(message);
+    this.rejectReady?.(error);
+    for (const pending of this.pending.values()) {
+      if (pending.timeout) clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
+    this.pending.clear();
+    for (const controller of this.hostRequests.values()) controller.abort();
+    this.hostRequests.clear();
+    const interruptedRunId = this.activeRunId;
+    this.recovery.interruptRun(interruptedRunId, message);
+    if (interruptedRunId) {
+      this.activeRunId = undefined;
+      this.options.emit({ type: "run.error", runId: interruptedRunId, message });
+    }
+    this.options.emit({ type: "runtime.status", status: "unresponsive" });
+    this.stopChild(true);
   }
 }

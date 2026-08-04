@@ -228,6 +228,10 @@ export class PluginService {
   private readonly securityStore: PluginSecurityStore;
   private operation: string | undefined;
 
+  private emitPhase(source: string, phase: NonNullable<PluginProgressEvent["phase"]>, message: string): void {
+    this.emit({ type: "progress", action: "install", source, phase, message });
+  }
+
   constructor(
     agentDir: string,
     cwd: string,
@@ -319,6 +323,7 @@ export class PluginService {
 
   async install(name: string, version: string): Promise<InstalledPlugin[]> {
     return this.withOperation("安装", async () => {
+      this.emitPhase(`npm:${name}@${version}`, "resolving", "正在读取 Registry 元数据…");
       const { metadata, tarballUrl } = await this.registryMetadata(name, version);
       if (metadata.riskTier === "blocked") throw new Error("该版本被标记为存在安全风险，已阻止安装。");
       const source = `npm:${metadata.name}@${metadata.version}`;
@@ -326,7 +331,8 @@ export class PluginService {
         name: metadata.name,
         version: metadata.version,
         manifest: metadata.manifest,
-      });
+      }, (phase) => this.emitPhase(source, phase, phase === "downloading" ? "正在下载插件安装包…" : "正在校验完整性与安装包结构…"));
+      this.emitPhase(source, "scanning", "正在扫描插件内容风险…");
       const securityScan = await scanPluginTarball(tarball);
       if (securityScan.status === "blocked") {
         const rules = [...new Set(securityScan.findings
@@ -335,15 +341,22 @@ export class PluginService {
         throw new Error(`插件内容安全扫描发现高置信度严重风险（${rules.join(", ") || "unknown"}），已拒绝安装。`);
       }
       const installedRiskTier = riskTierWithScan(metadata.riskTier, securityScan);
+      this.emitPhase(source, "staging", "正在准备隔离安装目录…");
       const stagingDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-desktop-plugin-install-"));
       fs.chmodSync(stagingDirectory, 0o700);
       const stagedTarball = path.join(stagingDirectory, "package.tgz");
-      const replacingExistingInstall = Boolean(this.packageManager.getInstalledPath(source, "user"));
+      const existingInstall = this.packageManager.getInstalledPath(source, "user");
+      const backupPath = existingInstall ? `${existingInstall}.pi-forge-backup-${Date.now()}` : undefined;
       try {
         fs.writeFileSync(stagedTarball, tarball, { mode: 0o600 });
+        if (existingInstall && backupPath) fs.renameSync(existingInstall, backupPath);
+        this.emitPhase(source, "installing-dependencies", "正在安装依赖（lifecycle scripts 已禁用）…");
         await this.packageManager.install(`npm:${stagedTarball}`);
       } catch (error) {
-        if (!replacingExistingInstall) await this.packageManager.removeAndPersist(source);
+        const partialInstall = this.packageManager.getInstalledPath(source, "user");
+        if (partialInstall && partialInstall !== backupPath) fs.rmSync(partialInstall, { recursive: true, force: true });
+        if (existingInstall && backupPath && fs.existsSync(backupPath)) fs.renameSync(backupPath, existingInstall);
+        else await this.packageManager.removeAndPersist(source);
         throw error;
       } finally {
         fs.rmSync(stagingDirectory, { recursive: true, force: true });
@@ -356,25 +369,37 @@ export class PluginService {
           ? undefined
           : "插件安装后的包名、版本或资源清单校验失败，已移除该插件。";
       if (failure) {
-        await this.packageManager.removeAndPersist(source);
+        if (installedPath) fs.rmSync(installedPath, { recursive: true, force: true });
+        if (existingInstall && backupPath && fs.existsSync(backupPath)) fs.renameSync(backupPath, existingInstall);
+        else await this.packageManager.removeAndPersist(source);
         throw new Error(failure);
       }
-      this.packageManager.addSourceToSettings(source);
-      this.securityStore.save({
-        source,
-        name: metadata.name,
-        version: metadata.version,
-        publisher: metadata.publisher,
-        integrity: metadata.integrity,
-        shasum: metadata.shasum,
-        provenance: metadata.provenance,
-        riskTier: installedRiskTier,
-        resources: metadata.resources,
-        manifest: metadata.manifest,
-        installedAt: new Date().toISOString(),
-        securityScan,
-        enabled: false,
-      });
+      this.emitPhase(source, "publishing", "正在发布已验证插件…");
+      try {
+        this.packageManager.addSourceToSettings(source);
+        this.securityStore.save({
+          source,
+          name: metadata.name,
+          version: metadata.version,
+          publisher: metadata.publisher,
+          integrity: metadata.integrity,
+          shasum: metadata.shasum,
+          provenance: metadata.provenance,
+          riskTier: installedRiskTier,
+          resources: metadata.resources,
+          manifest: metadata.manifest,
+          installedAt: new Date().toISOString(),
+          securityScan,
+          enabled: false,
+        });
+      } catch (error) {
+        if (installedPath && fs.existsSync(installedPath)) fs.rmSync(installedPath, { recursive: true, force: true });
+        if (existingInstall && backupPath && fs.existsSync(backupPath)) fs.renameSync(backupPath, existingInstall);
+        else await this.packageManager.removeAndPersist(source);
+        throw error;
+      }
+      if (backupPath) fs.rmSync(backupPath, { recursive: true, force: true });
+      this.emitPhase(source, "ready", "插件已验证并准备就绪，默认保持停用。");
       return this.listInstalled();
     });
   }
@@ -390,15 +415,56 @@ export class PluginService {
     });
   }
 
-  setEnabled(source: string, enabled: boolean, cwd?: string, scope: "user" | "project" = "user"): InstalledPlugin[] {
-    const installed = this.listInstalled().find((item) => item.source === source);
+  async setEnabled(source: string, enabled: boolean, cwd?: string, scope: "user" | "project" = "user"): Promise<InstalledPlugin[]> {
+    let installed = this.listInstalled().find((item) => item.source === source);
     if (!installed) throw new Error("该插件未安装或安装记录已变化。");
+    if (enabled && installed.verification === "legacy") {
+      await this.revalidateLegacyPlugin(installed);
+      installed = this.listInstalled().find((item) => item.source === source);
+      if (!installed || installed.verification !== "verified") throw new Error("旧插件无法建立可信来源，已保持停用。");
+    }
     if (enabled && (installed.riskTier === "blocked" || installed.securityScan?.status === "blocked")) {
       throw new Error("插件内容安全扫描已阻止启用。请移除该版本并联系发布者修复。");
     }
     if (scope === "project" && !cwd) throw new Error("项目级插件开关需要工作区路径。");
     this.securityStore.setEnabled(source, enabled, cwd, scope);
     return this.listInstalled(cwd);
+  }
+
+  private async revalidateLegacyPlugin(installed: InstalledPlugin): Promise<void> {
+    await this.withOperation("验证", async () => {
+      const parsed = parseNpmSource(installed.source);
+      this.emitPhase(installed.source, "resolving", "正在重新验证旧插件来源…");
+      const { metadata, tarballUrl } = await this.registryMetadata(parsed.name, parsed.version ?? "latest");
+      const tarball = await downloadAndVerifyPluginTarball(this.fetchImpl, tarballUrl, metadata.integrity, {
+        name: metadata.name,
+        version: metadata.version,
+        manifest: metadata.manifest,
+      }, (phase) => this.emitPhase(installed.source, phase, phase === "downloading" ? "正在下载可信安装包用于比对…" : "正在校验旧插件来源…"));
+      this.emitPhase(installed.source, "scanning", "正在扫描可信安装包内容…");
+      const securityScan = await scanPluginTarball(tarball);
+      if (securityScan.status === "blocked") throw new Error("旧插件对应版本未通过内容安全扫描，已保持停用。");
+      const installedPath = this.packageManager.getInstalledPath(installed.source, "user");
+      if (!installedPath || !this.verifyInstalled(installedPath, metadata.name, metadata.version, metadata.manifest)) {
+        throw new Error("旧插件内容与 Registry 元数据不一致，请移除后重新安装。");
+      }
+      this.securityStore.save({
+        source: installed.source,
+        name: metadata.name,
+        version: metadata.version,
+        publisher: metadata.publisher,
+        integrity: metadata.integrity,
+        shasum: metadata.shasum,
+        provenance: "npm-registry",
+        riskTier: riskTierWithScan(metadata.riskTier, securityScan),
+        resources: metadata.resources,
+        manifest: metadata.manifest,
+        installedAt: new Date().toISOString(),
+        securityScan,
+        enabled: false,
+      });
+      this.emitPhase(installed.source, "ready", "旧插件来源已重新验证，可以启用。");
+    });
   }
 
   dispose(): void {

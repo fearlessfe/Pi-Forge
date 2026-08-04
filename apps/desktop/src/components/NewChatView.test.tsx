@@ -72,6 +72,8 @@ describe("NewChatView analysis presentation", () => {
         onChooseWorkspace={noop}
         onOpenTerminal={noop}
         onOpenContextBudget={noop}
+        onOpenLink={noop}
+        onOpenExternalLink={noop}
         onResourcesChanged={noop}
         onResolvePlanReview={async () => undefined}
         onModelChange={noop}

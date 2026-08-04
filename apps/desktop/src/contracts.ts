@@ -517,7 +517,7 @@ export type AgentTraceEvent = {
   payload: unknown;
 };
 
-export type AgentRuntimeStatus = "running" | "crash-looping";
+export type AgentRuntimeStatus = "running" | "crash-looping" | "unresponsive";
 
 export type AgentEvent =
   | { type: "runtime.status"; status: AgentRuntimeStatus }
@@ -616,6 +616,20 @@ export type ConversationHistoryItem = {
   searchText: string;
   parentConversationId?: string;
   project?: { id: string; name: string; path: string };
+};
+
+export type ConversationListQuery = {
+  cursor?: string;
+  limit?: number;
+  query?: string;
+  archived?: boolean;
+  projectId?: string;
+};
+
+export type ConversationHistoryPage = {
+  items: ConversationHistoryItem[];
+  nextCursor?: string;
+  total: number;
 };
 
 export type ConversationHistoryTurn = {
@@ -787,6 +801,7 @@ export type PluginProgressEvent = {
   type: "start" | "progress" | "complete" | "error";
   action: "install" | "remove" | "update" | "clone" | "pull";
   source: string;
+  phase?: "resolving" | "downloading" | "verifying" | "scanning" | "staging" | "installing-dependencies" | "publishing" | "ready";
   message?: string;
 };
 
@@ -906,6 +921,7 @@ export type PiDesktopApi = {
   browser: {
     state(): Promise<BrowserState>;
     navigate(url: string): Promise<BrowserState>;
+    openExternal(url: string): Promise<void>;
     back(): Promise<BrowserState>;
     forward(): Promise<BrowserState>;
     reload(): Promise<BrowserState>;
@@ -932,6 +948,7 @@ export type PiDesktopApi = {
   agent: {
     send(input: SendPromptInput): Promise<{ runId: string }>;
     listConversations(): Promise<ConversationHistoryItem[]>;
+    listConversationPage(query?: ConversationListQuery): Promise<ConversationHistoryPage>;
     loadConversation(conversationId: string): Promise<ConversationHistoryDetail>;
     renameConversation(conversationId: string, title: string): Promise<void>;
     forkConversation(conversationId: string, entryId?: string): Promise<ConversationHistoryItem>;

@@ -26,7 +26,7 @@ describe("PluginSecurityStore", () => {
     const source = "npm:@demo/pi-tools@1.2.3";
 
     expect(store.get(source)).toBeUndefined();
-    expect(store.isEnabled(source, project)).toBe(true);
+    expect(store.isEnabled(source, project)).toBe(false);
     expect(() => store.save({
       source: "file:unsafe",
       name: "unsafe",
@@ -217,7 +217,7 @@ describe("PluginSecurityStore", () => {
         riskTier: "high",
         resources: [],
         manifest: {},
-        enabled: true,
+        enabled: false,
       }),
     ]);
 

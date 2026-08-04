@@ -120,3 +120,24 @@ export function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[
     }
   });
 }
+
+export function isStreamingAgentEvent(event: AgentEvent): event is Extract<AgentEvent, { type: "message.delta" | "thinking.delta" }> {
+  return event.type === "message.delta" || event.type === "thinking.delta";
+}
+
+export function coalesceStreamingAgentEvents(events: AgentEvent[]): AgentEvent[] {
+  const result: AgentEvent[] = [];
+  for (const event of events) {
+    const previous = result.at(-1);
+    if (isStreamingAgentEvent(event) && previous?.type === event.type && previous.runId === event.runId) {
+      result[result.length - 1] = { ...previous, text: previous.text + event.text };
+    } else {
+      result.push(event);
+    }
+  }
+  return result;
+}
+
+export function applyAgentEvents(turns: ChatTurn[], events: AgentEvent[]): ChatTurn[] {
+  return coalesceStreamingAgentEvents(events).reduce(applyAgentEvent, turns);
+}

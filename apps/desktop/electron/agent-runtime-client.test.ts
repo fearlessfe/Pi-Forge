@@ -85,6 +85,8 @@ function baseOptions(events: AgentEvent[]): ClientOptions {
     mcp: { tools: vi.fn(async () => []), contextInventory: vi.fn(async () => []), callTool: vi.fn(async () => ({ text: "", details: undefined })) },
     browser: { startAnnotation: vi.fn() } as unknown as BrowserDebugPort,
     emit: (event) => events.push(event),
+    heartbeatIntervalMs: 0,
+    startupTimeoutMs: 0,
   };
 }
 
@@ -228,6 +230,76 @@ describe("AgentRuntimeClient", () => {
     });
     child.emit("message", { kind: "runtime.response", id: lastRequest(child).id, error: { message: "boom", stack: "trace" } });
     await expect(failing).rejects.toThrow("boom");
+  });
+
+  it("times out bounded control requests and ignores late responses", async () => {
+    vi.useFakeTimers();
+    const client = createClient([], { requestTimeoutMs: { getModelCatalog: 100 } });
+    const child = lastChild();
+    emitReady(child);
+
+    const catalog = client.getModelCatalog();
+    const rejected = catalog.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(rejected).resolves.toEqual(expect.objectContaining({ message: expect.stringContaining("请求超时（getModelCatalog，100ms）") }));
+    const request = lastRequest(child);
+    child.emit("message", { kind: "runtime.response", id: request.id, result: [{ id: "late" }] });
+
+    const next = client.listConversations();
+    await vi.advanceTimersByTimeAsync(0);
+    child.emit("message", { kind: "runtime.response", id: lastRequest(child).id, result: [] });
+    await expect(next).resolves.toEqual([]);
+  });
+
+  it("marks a live worker unresponsive after consecutive missed heartbeats", async () => {
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const client = createClient(events, { heartbeatIntervalMs: 100, heartbeatMissLimit: 3 });
+    const child = lastChild();
+    emitReady(child);
+    const pending = client.getModelCatalog();
+    const rejected = pending.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(300);
+
+    await expect(rejected).resolves.toEqual(expect.objectContaining({ message: expect.stringContaining("心跳连续超时") }));
+    expect(child.sent.some((message) => message.kind === "runtime.ping")).toBe(true);
+    expect(child.connected).toBe(false);
+    expect(events).toContainEqual({ type: "runtime.status", status: "unresponsive" });
+    await expect(client.listConversations()).rejects.toThrow("无响应");
+  });
+
+  it("stops the worker when send acknowledgement times out to prevent a late task", async () => {
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const client = createClient(events, { requestTimeoutMs: { send: 100 } });
+    const child = lastChild();
+    emitReady(child);
+
+    const sending = client.send("make a change", "/tmp", "c-1");
+    const rejected = sending.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(100);
+
+    await expect(rejected).resolves.toEqual(expect.objectContaining({ message: expect.stringContaining("请求超时（send，100ms）") }));
+    expect(child.connected).toBe(false);
+    expect(events).toContainEqual({ type: "runtime.status", status: "unresponsive" });
+    expect(client.listRecoveries()).toEqual([expect.objectContaining({ status: "interrupted", input: expect.objectContaining({ prompt: "make a change" }) })]);
+  });
+
+  it("accepts matching heartbeat pongs and resets the miss counter", async () => {
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    createClient(events, { heartbeatIntervalMs: 100, heartbeatMissLimit: 3 });
+    const child = lastChild();
+    emitReady(child);
+
+    await vi.advanceTimersByTimeAsync(100);
+    const firstPing = child.sent.find((message) => message.kind === "runtime.ping");
+    expect(firstPing?.kind).toBe("runtime.ping");
+    if (firstPing?.kind === "runtime.ping") child.emit("message", { kind: "runtime.pong", id: firstPing.id });
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(events).not.toContainEqual({ type: "runtime.status", status: "unresponsive" });
+    expect(child.connected).toBe(true);
   });
 
   it("sends prompts, tracks the active run, and records an interrupted recovery on exit", async () => {

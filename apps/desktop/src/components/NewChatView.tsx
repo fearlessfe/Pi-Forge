@@ -29,12 +29,13 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type ComponentPropsWithoutRef, type DragEvent, type KeyboardEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { CommandInfo, ContextBudgetReport, ContextUsageInfo, McpOverview, PlanReviewArtifact, ProjectResourceSelection, ProviderCatalogEntry, ProviderId, QueuedMessages, ResolvePlanReviewInput, ResourceInventory, ResponseUsage, TaskFileChange } from "../contracts";
 import { classifyAttachmentFile, hasComposerAttachments, inlineTextFileBytes, maxImageBytes, maxTextFileBytes, type ComposerAttachments, type ComposerFile, type ComposerImage } from "../composer-attachments";
 import { normalizeVisibleActivities } from "../conversation-activity";
+import { conversationAnnouncementSnapshot, isNearConversationBottom, nextConversationAnnouncement, safeMarkdownHref } from "../conversation-presentation";
 import { fileExtension, isArtifactChange } from "../file-changes";
 import { shouldSubmitOnEnter } from "../keyboard";
 import { inputTokensIncludingCache } from "../response-usage";
@@ -66,6 +67,8 @@ type NewChatViewProps = {
   onChooseWorkspace: () => void;
   onOpenTerminal: () => void;
   onOpenContextBudget: () => void;
+  onOpenLink: (url: string) => void;
+  onOpenExternalLink: (url: string) => void;
   onResourcesChanged: () => void;
   onResolvePlanReview: (input: ResolvePlanReviewInput) => Promise<void>;
   onModelChange: (provider: ProviderId, modelId: string) => void;
@@ -98,6 +101,25 @@ const messageActionButtonClass = "inline-flex h-control-sm cursor-pointer items-
 const panelHeaderButtonClass = "inline-flex cursor-pointer items-center gap-tight rounded-sm border border-separator bg-transparent px-[7px] py-tight text-caption text-label-2 transition-colors duration-150 ease-apple hover:bg-fill hover:text-label active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40";
 const changeStatusClass: Record<TaskFileChange["status"], string> = { pending: "text-label-3", accepted: "text-green", reverted: "text-orange", conflict: "text-red" };
 const toolOpenBorderClass: Record<Extract<ChatActivity, { type: "tool" }>["status"], string> = { running: "", success: "", error: "data-[state=open]:border-red/32" };
+const MarkdownNavigationContext = createContext<Pick<NewChatViewProps, "onOpenLink" | "onOpenExternalLink">>({
+  onOpenLink: () => undefined,
+  onOpenExternalLink: () => undefined,
+});
+
+function SafeMarkdownLink({ href, children }: ComponentPropsWithoutRef<"a">) {
+  const { onOpenLink, onOpenExternalLink } = useContext(MarkdownNavigationContext);
+  const safeHref = safeMarkdownHref(href);
+  if (!safeHref) return <span>{children}</span>;
+  return <a href={safeHref} onClick={(event) => {
+    event.preventDefault();
+    if (event.metaKey || event.ctrlKey || event.shiftKey) onOpenExternalLink(safeHref);
+    else onOpenLink(safeHref);
+  }}>{children}</a>;
+}
+
+const markdownComponents = { a: SafeMarkdownLink };
+const initialVisibleTurnCount = 80;
+const earlierTurnBatchSize = 50;
 
 function useCommandPalette(props: NewChatViewProps) {
   const [commands, setCommands] = useState<CommandInfo[]>(desktopCommands);
@@ -848,10 +870,16 @@ function QuestionActivity({
   );
 }
 
-function MessageActivity({ text }: { text: string }) {
+const MessageActivity = memo(function MessageActivity({ text, onOpenLink, onOpenExternalLink }: {
+  text: string;
+  onOpenLink: NewChatViewProps["onOpenLink"];
+  onOpenExternalLink: NewChatViewProps["onOpenExternalLink"];
+}) {
   if (!text) return null;
-  return <div className="markdown-content mt-[3px] w-full max-w-full overflow-hidden rounded-md rounded-tl-sm border border-accent/16 bg-accent/8 px-[13px] py-[11px] text-left text-body leading-[1.75] text-label-2"><Markdown remarkPlugins={[remarkGfm]} skipHtml>{text}</Markdown></div>;
-}
+  return <MarkdownNavigationContext.Provider value={{ onOpenLink, onOpenExternalLink }}>
+    <div className="markdown-content mt-[3px] w-full max-w-full overflow-hidden rounded-md rounded-tl-sm border border-accent/16 bg-accent/8 px-[13px] py-[11px] text-left text-body leading-[1.75] text-label-2"><Markdown remarkPlugins={[remarkGfm]} skipHtml components={markdownComponents}>{text}</Markdown></div>
+  </MarkdownNavigationContext.Provider>;
+}, (previous, next) => previous.text === next.text);
 
 function formatElapsedTime(seconds: number, t: ReturnType<typeof useI18n>["t"]): string {
   if (seconds < 60) return t("已运行 {seconds} 秒", { seconds });
@@ -903,9 +931,13 @@ function RunningTaskStatus({ turn, onStop }: { turn: ChatTurn; onStop: () => voi
 function ActivityTimeline({
   turn,
   onAnswerQuestion,
+  onOpenLink,
+  onOpenExternalLink,
 }: {
   turn: ChatTurn;
   onAnswerQuestion: NewChatViewProps["onAnswerQuestion"];
+  onOpenLink: NewChatViewProps["onOpenLink"];
+  onOpenExternalLink: NewChatViewProps["onOpenExternalLink"];
 }) {
   const { t } = useI18n();
   const activities = Array.isArray(turn.activities) ? turn.activities : [];
@@ -934,7 +966,7 @@ function ActivityTimeline({
   flushTools();
 
   if (visible.length === 0) {
-    if (turn.answer) return <MessageActivity text={turn.answer} />;
+    if (turn.answer) return <MessageActivity text={turn.answer} onOpenLink={onOpenLink} onOpenExternalLink={onOpenExternalLink} />;
     return turn.status === "running" ? <div className="flex items-center gap-base rounded-md bg-bg-grouped px-loose py-[10px] text-caption text-label-3"><i className="activity-spinner" />{t("Pi 正在分析任务…")}</div> : null;
   }
 
@@ -942,21 +974,23 @@ function ActivityTimeline({
     <>
       {timeline.map((item) => {
         if (item.type === "tools") return <ToolGroup key={item.key} tools={item.tools} />;
-        if (item.activity.type === "message") return <MessageActivity key={item.activity.id} text={item.activity.text} />;
-        if (item.activity.type === "thinking") return <MessageActivity key={item.activity.id} text={item.activity.text} />;
+        if (item.activity.type === "message") return <MessageActivity key={item.activity.id} text={item.activity.text} onOpenLink={onOpenLink} onOpenExternalLink={onOpenExternalLink} />;
+        if (item.activity.type === "thinking") return <MessageActivity key={item.activity.id} text={item.activity.text} onOpenLink={onOpenLink} onOpenExternalLink={onOpenExternalLink} />;
         return <QuestionActivity key={item.activity.id} turnId={turn.id} activity={item.activity} onAnswer={onAnswerQuestion} />;
       })}
-      {!hasMessages && turn.answer && <MessageActivity text={turn.answer} />}
+      {!hasMessages && turn.answer && <MessageActivity text={turn.answer} onOpenLink={onOpenLink} onOpenExternalLink={onOpenExternalLink} />}
     </>
   );
 }
 
-function ConversationTurn({ turn, running, onRetry, onForkTurn, onAnswerQuestion, onOpenChange, onAcceptChanges, onRevertChanges }: {
+const ConversationTurn = memo(function ConversationTurn({ turn, running, onRetry, onForkTurn, onAnswerQuestion, onOpenLink, onOpenExternalLink, onOpenChange, onAcceptChanges, onRevertChanges }: {
   turn: ChatTurn;
   running: boolean;
   onRetry: (turnId: string) => void;
   onForkTurn: NewChatViewProps["onForkTurn"];
   onAnswerQuestion: NewChatViewProps["onAnswerQuestion"];
+  onOpenLink: NewChatViewProps["onOpenLink"];
+  onOpenExternalLink: NewChatViewProps["onOpenExternalLink"];
   onOpenChange: (change: TaskFileChange) => void;
   onAcceptChanges: NewChatViewProps["onAcceptChanges"];
   onRevertChanges: NewChatViewProps["onRevertChanges"];
@@ -1000,7 +1034,7 @@ function ConversationTurn({ turn, running, onRetry, onForkTurn, onAnswerQuestion
       </section>
       {turn.status !== "queued" && turn.status !== "cancelled" && <section className="relative mt-[19px] flex w-[86%] items-start justify-start" aria-label={t("Agent 回答")}>
         <div className="grid w-full gap-[9px]">
-          <ActivityTimeline turn={turn} onAnswerQuestion={onAnswerQuestion} />
+          <ActivityTimeline turn={turn} onAnswerQuestion={onAnswerQuestion} onOpenLink={onOpenLink} onOpenExternalLink={onOpenExternalLink} />
           {turn.usage && <ResponseUsageLine usage={turn.usage} />}
           {turn.status === "error" && <div className="flex items-center gap-base rounded-md bg-red/8 px-loose py-[10px] text-caption text-red"><XCircle size={14} />{turn.error}</div>}
           {turn.status === "stopped" && <div className="flex items-center gap-base rounded-md bg-bg-grouped px-loose py-[10px] text-caption text-orange">{t("任务已停止")}</div>}
@@ -1009,7 +1043,7 @@ function ConversationTurn({ turn, running, onRetry, onForkTurn, onAnswerQuestion
       <FileChangesPanel changes={turn.fileChanges ?? []} running={running} onOpen={onOpenChange} onAccept={onAcceptChanges} onRevert={onRevertChanges} />
     </article>
   );
-}
+}, (previous, next) => previous.turn === next.turn && previous.running === next.running);
 
 function FileChangesPanel({ changes, running, onOpen, onAccept, onRevert }: {
   changes: TaskFileChange[];
@@ -1097,19 +1131,113 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
   const { t } = useI18n();
   const palette = useCommandPalette(props);
   const composer = useComposerAttachments(props);
+  const historyRef = useRef<HTMLDivElement | null>(null);
+  const historyContentRef = useRef<HTMLDivElement | null>(null);
+  const followsLatestRef = useRef(true);
+  const announcementSnapshotRef = useRef(conversationAnnouncementSnapshot(props.turns));
+  const restoreScrollHeightRef = useRef<number | null>(null);
+  const [followsLatest, setFollowsLatest] = useState(true);
+  const [hasUnreadContent, setHasUnreadContent] = useState(false);
+  const [announcement, setAnnouncement] = useState({ id: 0, text: "" });
+  const [visibleTurnStart, setVisibleTurnStart] = useState(() => Math.max(0, props.turns.length - initialVisibleTurnCount));
   const canSend = Boolean(props.prompt.trim()) || hasComposerAttachments(props.attachments);
   const runningTurn = [...props.turns].reverse().find((turn) => turn.status === "running");
   const steeringCount = props.queuedMessages.steering.length;
   const followUpCount = props.queuedMessages.followUp.length;
   const queuedCount = steeringCount + followUpCount;
+
+  useLayoutEffect(() => {
+    const history = historyRef.current;
+    const previousHeight = restoreScrollHeightRef.current;
+    if (!history || previousHeight === null) return;
+    history.scrollTop += history.scrollHeight - previousHeight;
+    restoreScrollHeightRef.current = null;
+  }, [visibleTurnStart]);
+
+  useEffect(() => {
+    const kind = nextConversationAnnouncement(announcementSnapshotRef.current, props.turns);
+    announcementSnapshotRef.current = conversationAnnouncementSnapshot(props.turns);
+    const text = kind === "question"
+      ? t("Pi 需要你的回答")
+      : kind === "completed"
+        ? t("任务已完成")
+        : kind === "stopped"
+          ? t("任务已停止")
+          : kind === "error"
+            ? t("任务执行失败")
+            : "";
+    if (text) setAnnouncement((current) => ({ id: current.id + 1, text }));
+  }, [props.turns, t]);
+
+  useEffect(() => {
+    const history = historyRef.current;
+    const content = historyContentRef.current;
+    if (!history || !content) return;
+    let frame = 0;
+    const scheduleLatest = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        history.scrollTop = history.scrollHeight;
+        followsLatestRef.current = true;
+        setFollowsLatest(true);
+        setHasUnreadContent(false);
+      });
+    };
+    const contentChanged = () => {
+      if (followsLatestRef.current) scheduleLatest();
+      else setHasUnreadContent(true);
+    };
+    const mutationObserver = new MutationObserver(contentChanged);
+    mutationObserver.observe(content, { childList: true, characterData: true, subtree: true });
+    const resizeObserver = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(contentChanged);
+    resizeObserver?.observe(content);
+    scheduleLatest();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      mutationObserver.disconnect();
+      resizeObserver?.disconnect();
+    };
+  }, []);
+
+  function onHistoryScroll() {
+    const history = historyRef.current;
+    if (!history) return;
+    const nearLatest = isNearConversationBottom(history.scrollHeight, history.scrollTop, history.clientHeight);
+    followsLatestRef.current = nearLatest;
+    setFollowsLatest(nearLatest);
+    if (nearLatest) setHasUnreadContent(false);
+  }
+
+  function scrollToLatest() {
+    const history = historyRef.current;
+    if (!history) return;
+    followsLatestRef.current = true;
+    history.scrollTop = history.scrollHeight;
+    setFollowsLatest(true);
+    setHasUnreadContent(false);
+  }
+
+  function loadEarlierTurns() {
+    const history = historyRef.current;
+    if (history) restoreScrollHeightRef.current = history.scrollHeight;
+    setVisibleTurnStart((current) => Math.max(0, current - earlierTurnBatchSize));
+  }
+
   return (
     <section className="relative z-[1] grid h-full w-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto]" aria-label={t("当前对话")}>
-      <div className="min-h-0 overflow-auto px-[54px] pt-[42px] pb-[22px] [scrollbar-width:thin] [scrollbar-color:var(--fill-3)_transparent]" aria-live="polite">
-        <div className="mx-auto w-[min(760px,100%)]">
-          {props.turns.map((turn) => <ConversationTurn key={turn.id} turn={turn} running={props.isRunning} onRetry={props.onRetry} onForkTurn={props.onForkTurn} onAnswerQuestion={props.onAnswerQuestion} onOpenChange={props.onOpenChange} onAcceptChanges={props.onAcceptChanges} onRevertChanges={props.onRevertChanges} />)}
+      <div className="relative min-h-0">
+        <div ref={historyRef} className="h-full min-h-0 overflow-auto px-[54px] pt-[42px] pb-[22px] [scrollbar-width:thin] [scrollbar-color:var(--fill-3)_transparent]" onScroll={onHistoryScroll}>
+          <div ref={historyContentRef} className="mx-auto w-[min(760px,100%)]">
+            {visibleTurnStart > 0 && <button className="mx-auto mb-card flex h-control-md cursor-pointer items-center rounded-full border border-separator bg-bg-grouped px-loose text-caption text-label-3 transition-colors duration-150 ease-apple hover:bg-fill hover:text-label-2" type="button" onClick={loadEarlierTurns}>{t("加载更早的 {count} 条消息", { count: Math.min(earlierTurnBatchSize, visibleTurnStart) })}</button>}
+            {props.turns.slice(visibleTurnStart).map((turn) => <ConversationTurn key={turn.id} turn={turn} running={props.isRunning} onRetry={props.onRetry} onForkTurn={props.onForkTurn} onAnswerQuestion={props.onAnswerQuestion} onOpenLink={props.onOpenLink} onOpenExternalLink={props.onOpenExternalLink} onOpenChange={props.onOpenChange} onAcceptChanges={props.onAcceptChanges} onRevertChanges={props.onRevertChanges} />)}
+            <PlanReviewPanel reviews={props.planReviews} onResolve={props.onResolvePlanReview} />
+          </div>
         </div>
-        <PlanReviewPanel reviews={props.planReviews} onResolve={props.onResolvePlanReview} />
+        {!followsLatest && <button className="absolute right-[22px] bottom-[12px] inline-flex h-control-md cursor-pointer items-center gap-base rounded-full border border-separator bg-bg-grouped px-loose text-caption text-label-2 shadow-2 transition-colors duration-150 ease-apple hover:bg-fill" type="button" onClick={scrollToLatest}>
+          {hasUnreadContent && <span className="size-[7px] rounded-full bg-accent" aria-hidden="true" />}{t(hasUnreadContent ? "有新内容 · 回到最新" : "回到最新")}
+        </button>}
       </div>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement.text && <span key={announcement.id}>{announcement.text}</span>}</div>
       <footer className="relative bg-linear-to-b from-transparent via-20% via-bg to-bg px-[52px] pt-[14px] pb-[17px]">
         {props.isRunning && runningTurn && <RunningTaskStatus turn={runningTurn} onStop={props.onStop} />}
         {queuedCount > 0 && <div className="mx-auto mb-[7px] flex min-h-[28px] w-[min(760px,100%)] items-center gap-base rounded-sm border border-accent/16 bg-accent/8 px-base text-caption text-label-3" aria-live="polite"><Clock3 size={13} className="shrink-0 text-accent" /><strong className="font-semibold text-accent">{t("已排队 {count} 条消息", { count: queuedCount })}</strong>{steeringCount > 0 && <small>{t("立即调整")} {steeringCount}</small>}{followUpCount > 0 && <small>{t("稍后继续")} {followUpCount}</small>}<button className="ml-auto cursor-pointer border-0 bg-transparent text-caption text-label-3 transition-colors duration-150 ease-apple hover:text-label-2" type="button" onClick={props.onClearQueue}>{t("清空队列")}</button></div>}
@@ -1172,7 +1300,7 @@ export function NewChatView(props: NewChatViewProps) {
 
   if (!props.turns.length) return <InitialComposer {...props} />;
   return <div className={`relative grid h-full w-full min-h-0 min-w-0 overflow-hidden ${selectedChange ? "grid-cols-[minmax(420px,1fr)_minmax(360px,44%)] max-[1100px]:grid-cols-[minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)]"}`}>
-    <ActiveConversation {...props} onOpenChange={(change) => setSelectedChangeId(change.id)} />
+    <ActiveConversation key={props.turns[0]?.id} {...props} onOpenChange={(change) => setSelectedChangeId(change.id)} />
     {selectedChange && <FileChangeInspector change={selectedChange} onClose={() => setSelectedChangeId(null)} />}
   </div>;
 }

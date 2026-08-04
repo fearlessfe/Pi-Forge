@@ -10,14 +10,24 @@ import {
   maxPromptTextAttachmentsPerMessage,
   maxPromptTextAttachmentTotalBytes,
   supportedPromptImageMimeTypes,
+  type BrowserBounds,
   type ContextBudgetRequest,
+  type ConversationListQuery,
+  type ModelMetadataOverride,
+  type PackageCapabilityProvider,
+  type PermissionSettings,
   type PromptFileAttachment,
   type PromptImage,
+  type ProjectResourceSelection,
   type QueuePromptInput,
+  type ResourceSettings,
   type ResolvePlanReviewInput,
   type SaveMcpServerInput,
   type SaveModelSettings,
+  type SaveObservabilitySettings,
   type SendPromptInput,
+  type SubagentProvider,
+  type SystemPromptSettings,
 } from "../src/contracts.js";
 
 const maxPromptCharacters = 1024 * 1024;
@@ -60,6 +70,14 @@ export const queuePromptInputSchema = Type.Object({
 
 export const contextBudgetRequestSchema = Type.Object({
   cwd: Type.Optional(Type.String({ maxLength: 4096 })),
+}, { additionalProperties: false });
+
+export const conversationListQuerySchema = Type.Object({
+  cursor: Type.Optional(Type.String({ pattern: "^[0-9]+$", maxLength: 16 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+  query: Type.Optional(Type.String({ maxLength: 500 })),
+  archived: Type.Optional(Type.Boolean()),
+  projectId: Type.Optional(Type.String({ maxLength: 4096 })),
 }, { additionalProperties: false });
 
 export const resolvePlanReviewInputSchema = Type.Object({
@@ -118,6 +136,75 @@ export const mcpServerInputSchema = Type.Object({
   clearCredentials: Type.Optional(Type.Boolean()),
 }, { additionalProperties: false });
 
+export const permissionSettingsSchema = Type.Object({
+  mode: Type.Union([Type.Literal("balanced"), Type.Literal("strict")]),
+}, { additionalProperties: false });
+
+export const systemPromptSettingsSchema = Type.Object({
+  content: Type.String({ maxLength: 1024 * 1024 }),
+}, { additionalProperties: false });
+
+export const resourceSettingsSchema = Type.Object({
+  workspaceContextEnabled: Type.Boolean(),
+  disabledSkills: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 1_000 }),
+}, { additionalProperties: false });
+
+export const projectResourceSelectionSchema = Type.Object({
+  skills: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 1_000 }),
+  mcpServers: Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 1_000 }),
+}, { additionalProperties: false });
+
+const pricingSchema = Type.Object({
+  input: Type.Number({ minimum: 0, maximum: 1_000_000 }),
+  output: Type.Number({ minimum: 0, maximum: 1_000_000 }),
+  cacheRead: Type.Number({ minimum: 0, maximum: 1_000_000 }),
+  cacheWrite: Type.Number({ minimum: 0, maximum: 1_000_000 }),
+}, { additionalProperties: false });
+
+export const modelMetadataOverrideSchema = Type.Object({
+  name: Type.String({ minLength: 1, maxLength: 256 }),
+  contextWindow: Type.Integer({ minimum: 1, maximum: 100_000_000 }),
+  maxOutputTokens: Type.Integer({ minimum: 1, maximum: 100_000_000 }),
+  pricing: pricingSchema,
+}, { additionalProperties: false });
+
+const otlpExporterSchema = Type.Object({
+  id: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  name: Type.String({ minLength: 1, maxLength: 256 }),
+  endpoint: Type.String({ minLength: 1, maxLength: 4096 }),
+  enabled: Type.Boolean(),
+  headers: Type.Optional(stringMapSchema),
+}, { additionalProperties: false });
+
+export const observabilitySettingsSchema = Type.Object({
+  enabled: Type.Boolean(),
+  serviceName: Type.String({ minLength: 1, maxLength: 256 }),
+  captureContent: Type.Union([Type.Literal("none"), Type.Literal("metadata"), Type.Literal("full")]),
+  localFileEnabled: Type.Boolean(),
+  exporters: Type.Array(otlpExporterSchema, { maxItems: 32 }),
+}, { additionalProperties: false });
+
+export const browserBoundsSchema = Type.Object({
+  x: Type.Integer({ minimum: -100_000, maximum: 100_000 }),
+  y: Type.Integer({ minimum: -100_000, maximum: 100_000 }),
+  width: Type.Integer({ minimum: 1, maximum: 100_000 }),
+  height: Type.Integer({ minimum: 1, maximum: 100_000 }),
+}, { additionalProperties: false });
+
+export const subagentProviderSchema = Type.Union([
+  Type.Object({ kind: Type.Literal("builtin") }, { additionalProperties: false }),
+  Type.Object({
+    kind: Type.Literal("plugin"),
+    source: Type.String({ minLength: 1, maxLength: 512 }),
+    toolName: Type.String({ minLength: 1, maxLength: 256 }),
+  }, { additionalProperties: false }),
+]);
+
+export const packageCapabilityProviderSchema = Type.Union([
+  Type.Object({ kind: Type.Literal("none") }, { additionalProperties: false }),
+  Type.Object({ kind: Type.Literal("plugin"), source: Type.String({ minLength: 1, maxLength: 512 }) }, { additionalProperties: false }),
+]);
+
 const supportedImageMimeTypes = new Set<string>(supportedPromptImageMimeTypes);
 const supportedApplicationTextMimeTypes = new Set([
   "application/json",
@@ -131,8 +218,17 @@ const supportedApplicationTextMimeTypes = new Set([
   "application/sql",
 ]);
 
+export type IpcErrorCode = "INVALID_INPUT" | "PAYLOAD_TOO_LARGE";
+
+export class IpcInputError extends Error {
+  constructor(readonly code: IpcErrorCode, message: string) {
+    super(`[${code}] ${message}`);
+    this.name = "IpcInputError";
+  }
+}
+
 function requireSchema<T>(schema: TSchema, value: unknown, message: string): T {
-  if (!Check(schema, value)) throw new Error(message);
+  if (!Check(schema, value)) throw new IpcInputError("INVALID_INPUT", message);
   return value as T;
 }
 
@@ -227,6 +323,10 @@ export function requireContextBudgetRequest(value: unknown): ContextBudgetReques
   return requireSchema<ContextBudgetRequest>(contextBudgetRequestSchema, value ?? {}, "Context Budget 请求无效。");
 }
 
+export function requireConversationListQuery(value: unknown): ConversationListQuery {
+  return requireSchema<ConversationListQuery>(conversationListQuerySchema, value ?? {}, "会话列表请求无效。");
+}
+
 export function requireResolvePlanReviewInput(value: unknown): ResolvePlanReviewInput {
   return requireSchema<ResolvePlanReviewInput>(resolvePlanReviewInputSchema, value, "计划审阅结果无效。");
 }
@@ -237,4 +337,42 @@ export function requireModelSettings(value: unknown): SaveModelSettings {
 
 export function requireMcpServerInput(value: unknown): SaveMcpServerInput {
   return requireSchema<SaveMcpServerInput>(mcpServerInputSchema, value, "MCP Server 配置字段无效。");
+}
+
+export function requirePermissionSettings(value: unknown): PermissionSettings {
+  return requireSchema<PermissionSettings>(permissionSettingsSchema, value, "权限设置格式无效。");
+}
+
+export function requireSystemPromptSettings(value: unknown): SystemPromptSettings {
+  return requireSchema<SystemPromptSettings>(systemPromptSettingsSchema, value, "系统提示词格式无效。");
+}
+
+export function requireResourceSettings(value: unknown): ResourceSettings {
+  return requireSchema<ResourceSettings>(resourceSettingsSchema, value, "资源设置格式无效。");
+}
+
+export function requireProjectResourceSelection(value: unknown): ProjectResourceSelection | undefined {
+  if (value === undefined) return undefined;
+  const input = requireSchema<ProjectResourceSelection>(projectResourceSelectionSchema, value, "项目资源选择格式无效。");
+  return { skills: [...new Set(input.skills)], mcpServers: [...new Set(input.mcpServers)] };
+}
+
+export function requireModelMetadataOverride(value: unknown): ModelMetadataOverride {
+  return requireSchema<ModelMetadataOverride>(modelMetadataOverrideSchema, value, "模型元数据字段无效。");
+}
+
+export function requireObservabilitySettings(value: unknown): SaveObservabilitySettings {
+  return requireSchema<SaveObservabilitySettings>(observabilitySettingsSchema, value, "Trace 设置字段无效。");
+}
+
+export function requireBrowserBounds(value: unknown): BrowserBounds {
+  return requireSchema<BrowserBounds>(browserBoundsSchema, value, "浏览器边界无效。");
+}
+
+export function requireSubagentProvider(value: unknown): SubagentProvider {
+  return requireSchema<SubagentProvider>(subagentProviderSchema, value, "Subagent 提供者配置无效。");
+}
+
+export function requirePackageCapabilityProvider(value: unknown): PackageCapabilityProvider {
+  return requireSchema<PackageCapabilityProvider>(packageCapabilityProviderSchema, value, "能力提供者配置无效。");
 }

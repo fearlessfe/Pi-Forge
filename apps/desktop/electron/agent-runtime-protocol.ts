@@ -1,6 +1,6 @@
 import type { AgentEvent, RuntimeRecoveryInfo } from "../src/contracts.js";
 
-export const agentRuntimeProtocolVersion = 3;
+export const agentRuntimeProtocolVersion = 4;
 
 export type AgentRuntimeInit = {
   protocolVersion: typeof agentRuntimeProtocolVersion;
@@ -23,6 +23,7 @@ export type AgentRuntimeMethod =
   | "send"
   | "executeExtensionCommand"
   | "listConversations"
+  | "listConversationPage"
   | "loadConversation"
   | "forkConversation"
   | "exportConversation"
@@ -75,6 +76,9 @@ export type RuntimeReadyMessage = {
   pid: number;
 };
 
+export type RuntimePing = { kind: "runtime.ping"; id: string };
+export type RuntimePong = { kind: "runtime.pong"; id: string };
+
 export type HostMethod =
   | "credential.read"
   | "credential.list"
@@ -106,9 +110,10 @@ export type HostResponse = {
 
 export type ParentToRuntimeMessage =
   | { kind: "runtime.init"; value: AgentRuntimeInit }
+  | RuntimePing
   | RuntimeRequest
   | HostResponse;
 
-export type RuntimeToParentMessage = RuntimeResponse | RuntimeEventMessage | RuntimeReadyMessage | HostRequest | HostCancel;
+export type RuntimeToParentMessage = RuntimeResponse | RuntimeEventMessage | RuntimeReadyMessage | RuntimePong | HostRequest | HostCancel;
 
 export type RuntimeRecoveryRecord = RuntimeRecoveryInfo;

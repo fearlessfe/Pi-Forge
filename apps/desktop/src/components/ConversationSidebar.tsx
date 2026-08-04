@@ -57,6 +57,10 @@ type ConversationSidebarProps = {
   onSetConversationTags: (conversationId: string, tags: string[]) => Promise<void>;
   onDeleteConversation: (conversationId: string, project?: Project) => Promise<void>;
   conversationActionsDisabled: boolean;
+  hasMoreConversations: boolean;
+  loadingMoreConversations: boolean;
+  onLoadMoreConversations: () => void;
+  onSearchConversations: (query: string) => void;
   onAddProject: () => void;
   onOpenSettings: () => void;
   onOpenPlugins: () => void;
@@ -292,6 +296,10 @@ export function ConversationSidebar({
   onSetConversationTags,
   onDeleteConversation,
   conversationActionsDisabled,
+  hasMoreConversations,
+  loadingMoreConversations,
+  onLoadMoreConversations,
+  onSearchConversations,
   onAddProject,
   onOpenSettings,
   onOpenPlugins,
@@ -301,7 +309,13 @@ export function ConversationSidebar({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const onSearchConversationsRef = useRef(onSearchConversations);
+  const searchInitializedRef = useRef(false);
   const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
+
+  useEffect(() => {
+    onSearchConversationsRef.current = onSearchConversations;
+  }, [onSearchConversations]);
 
   useEffect(() => {
     if (searchOpen && !collapsed) searchInputRef.current?.focus();
@@ -313,6 +327,15 @@ export function ConversationSidebar({
     const frame = window.requestAnimationFrame(() => searchInputRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
   }, [collapsed, searchRequest]);
+
+  useEffect(() => {
+    if (!searchInitializedRef.current) {
+      searchInitializedRef.current = true;
+      return;
+    }
+    const timer = window.setTimeout(() => onSearchConversationsRef.current(searchQuery), 200);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
 
   const activeConversations = useMemo(() => conversations.filter((conversation) => !conversation.archived), [conversations]);
   const activeProjects = useMemo(() => projects.map((project) => ({
@@ -454,6 +477,7 @@ export function ConversationSidebar({
           onDelete={() => onDeleteConversation(conversation.id, project)}
         />)}
         {noSearchResults && <p className={`${sidebarEmptyClass} mt-card text-center`}>{t("没有找到“{query}”", { query: searchQuery.trim() })}</p>}
+        {hasMoreConversations && !normalizedQuery && <button className="mx-auto mt-card flex h-control-md cursor-pointer items-center rounded-full border border-separator bg-bg-grouped px-loose text-caption text-label-3 transition-colors duration-150 ease-apple hover:bg-fill hover:text-label-2 disabled:pointer-events-none disabled:opacity-40" type="button" disabled={loadingMoreConversations} onClick={onLoadMoreConversations}>{t(loadingMoreConversations ? "正在加载更多会话…" : "加载更多会话")}</button>}
       </div>
 
       <div className="border-t border-separator p-base">

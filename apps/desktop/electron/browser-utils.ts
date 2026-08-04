@@ -21,6 +21,14 @@ export function normalizeBrowserUrl(input: string): string {
   return parsed.href;
 }
 
+export function normalizeExternalBrowserUrl(input: string): string {
+  const parsed = new URL(input.trim());
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("系统浏览器只允许打开 HTTP 或 HTTPS 页面。");
+  }
+  return parsed.href;
+}
+
 function inlineRecord(record: Record<string, string>): string {
   return Object.entries(record).map(([key, value]) => `${key}="${value}"`).join(", ");
 }

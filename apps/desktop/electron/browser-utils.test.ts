@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BrowserAnnotationResult } from "../src/contracts.js";
-import { formatBrowserAnnotation, normalizeBrowserUrl } from "./browser-utils.js";
+import { formatBrowserAnnotation, normalizeBrowserUrl, normalizeExternalBrowserUrl } from "./browser-utils.js";
 
 describe("normalizeBrowserUrl", () => {
   it("uses http for local development addresses", () => {
@@ -15,6 +15,14 @@ describe("normalizeBrowserUrl", () => {
   it("rejects privileged and local file protocols", () => {
     expect(() => normalizeBrowserUrl("file:///tmp/example.html")).toThrow("HTTP 或 HTTPS");
     expect(() => normalizeBrowserUrl("javascript:alert(1)")).toThrow("HTTP 或 HTTPS");
+  });
+});
+
+describe("normalizeExternalBrowserUrl", () => {
+  it("accepts only absolute HTTP(S) links", () => {
+    expect(normalizeExternalBrowserUrl("https://example.com/docs")).toBe("https://example.com/docs");
+    expect(() => normalizeExternalBrowserUrl("file:///tmp/example.html")).toThrow("HTTP 或 HTTPS");
+    expect(() => normalizeExternalBrowserUrl("example.com")).toThrow("Invalid URL");
   });
 });
 
