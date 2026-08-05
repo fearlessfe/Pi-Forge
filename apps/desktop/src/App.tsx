@@ -165,8 +165,11 @@ export function App() {
   const [browserOpen, setBrowserOpen] = useState(false);
   const [runtimeRecoveries, setRuntimeRecoveries] = useState<RuntimeRecoveryInfo[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<AgentRuntimeStatus>("running");
-  const selectedRuntimeStatus = selectedConversationId ? conversationRuntimeStatuses[selectedConversationId] ?? runtimeStatus : runtimeStatus;
+  const selectedRuntimeStatus = selectedConversationId ? conversationRuntimeStatuses[selectedConversationId] ?? "running" : runtimeStatus;
   const runtimeUnavailable = selectedRuntimeStatus !== "running";
+  const selectedRuntimeRecoveries = useMemo(() => selectedConversationId
+    ? runtimeRecoveries.filter((recovery) => recovery.input.conversationId === selectedConversationId)
+    : [], [runtimeRecoveries, selectedConversationId]);
   const resolvedTheme: AppearanceTheme = theme === "system" ? systemTheme : theme;
   const nativeMaterial = window.piDesktop?.appearance.nativeMaterial === true;
 
@@ -428,6 +431,7 @@ export function App() {
     });
 
     if (event.kind === "upsert" && event.conversation.archived) {
+      setRuntimeRecoveries((current) => current.filter((recovery) => recovery.input.conversationId !== conversationId));
       setConversationQueues((current) => ({ ...current, [conversationId]: { steering: [], followUp: [] } }));
       setConversationRunStatuses((current) => {
         const next = { ...current };
@@ -443,6 +447,7 @@ export function App() {
       return;
     }
     if (event.kind !== "delete") return;
+    setRuntimeRecoveries((current) => current.filter((recovery) => recovery.input.conversationId !== conversationId));
     setConversationTurns((current) => {
       if (!(conversationId in current)) return current;
       const next = { ...current };
@@ -578,7 +583,16 @@ export function App() {
   async function refreshRuntimeRecoveries() {
     if (!window.piDesktop?.agent.listRecoveries) return;
     try {
-      setRuntimeRecoveries(await window.piDesktop.agent.listRecoveries());
+      const recoveries = await window.piDesktop.agent.listRecoveries();
+      setRuntimeRecoveries(recoveries);
+      setConversationRunStatuses((current) => {
+        const next = { ...current };
+        for (const recovery of recoveries) {
+          const conversationId = recovery.input.conversationId;
+          if (conversationId && next[conversationId] === undefined) next[conversationId] = "failed";
+        }
+        return next;
+      });
     } catch (error) {
       const message = eventError(error);
       // During Vite HMR, a reloaded preload/renderer can briefly outlive the
@@ -699,6 +713,7 @@ export function App() {
     if (!window.piDesktop?.agent.setConversationArchived) return;
     try {
       await window.piDesktop.agent.setConversationArchived(conversationId, archived);
+      if (archived) setRuntimeRecoveries((current) => current.filter((recovery) => recovery.input.conversationId !== conversationId));
       setNotice({ title: t(archived ? "会话已归档" : "会话已恢复"), message: t(archived ? "可在侧栏的已归档区域找到。" : "会话已回到原分组。"), type: "success" });
     } catch (error) {
       setNotice({ title: t("无法更新归档状态"), message: eventError(error), type: "info" });
@@ -722,6 +737,7 @@ export function App() {
     }
     try {
       await window.piDesktop.agent.deleteConversation(conversationId);
+      setRuntimeRecoveries((current) => current.filter((recovery) => recovery.input.conversationId !== conversationId));
       setNotice({ title: t("会话已删除"), message: t("本地会话历史已删除。"), type: "success" });
     } catch (error) {
       setNotice({ title: t("无法删除会话"), message: eventError(error), type: "info" });
@@ -982,8 +998,17 @@ export function App() {
 
   async function discardRuntimeRecovery(id: string) {
     if (!window.piDesktop?.agent.discardRecovery) return;
+    const discarded = runtimeRecoveries.find((recovery) => recovery.id === id);
     try {
       await window.piDesktop.agent.discardRecovery(id);
+      if (discarded?.input.conversationId) {
+        const conversationId = discarded.input.conversationId;
+        setConversationRunStatuses((current) => {
+          const next = { ...current };
+          if (next[conversationId] === "failed") delete next[conversationId];
+          return next;
+        });
+      }
       await refreshRuntimeRecoveries();
     } catch (error) {
       setNotice({ title: t("无法丢弃恢复记录"), message: eventError(error), type: "info" });
@@ -1336,19 +1361,19 @@ export function App() {
                 {runtimeUnavailable && <section className={`${runtimeBannerClass} top-loose border-red/32 text-red`} aria-live="assertive">
                   <AlertTriangle size={16} className="shrink-0" />
                   <span className="block min-w-0">
-                    <strong className="block text-caption font-medium text-label">{t(runtimeStatus === "unresponsive" ? "Agent Runtime 无响应" : "Agent Runtime 连续崩溃")}</strong>
-                    <small className="mt-tight block truncate text-caption text-label-2">{t(runtimeStatus === "unresponsive" ? "Runtime 心跳或任务启动确认已超时。为避免迟到任务产生副作用，已停止该 Runtime。" : "Runtime 在一分钟内多次异常退出，已停止自动重启。请检查模型配置或查看日志后重试。")}</small>
+                    <strong className="block text-caption font-medium text-label">{t(selectedRuntimeStatus === "unresponsive" ? "Agent Runtime 无响应" : "Agent Runtime 连续崩溃")}</strong>
+                    <small className="mt-tight block truncate text-caption text-label-2">{t(selectedRuntimeStatus === "unresponsive" ? "Runtime 心跳或任务启动确认已超时。为避免迟到任务产生副作用，已停止该 Runtime。" : "Runtime 在一分钟内多次异常退出，已停止自动重启。请检查模型配置或查看日志后重试。")}</small>
                   </span>
                   <button type="button" className={runtimeBannerButtonClass} onClick={() => void retryRuntime()}><RotateCcw size={14} />{t("重试")}</button>
                 </section>}
-                {runtimeRecoveries.length > 0 && <section className={`${runtimeBannerClass} ${runtimeUnavailable ? "top-[74px]" : "top-loose"} border-orange/32 text-orange`} aria-live="polite">
+                {selectedRuntimeRecoveries.length > 0 && <section className={`${runtimeBannerClass} ${runtimeUnavailable ? "top-[74px]" : "top-loose"} border-orange/32 text-orange`} aria-live="polite">
                   <AlertTriangle size={16} className="shrink-0" />
                   <span className="block min-w-0">
                     <strong className="block text-caption font-medium text-label">{t("检测到中断的 Runtime 任务")}</strong>
-                    <small className="mt-tight block truncate text-caption text-label-2">{runtimeRecoveries[0].input.prompt}{runtimeRecoveries.length > 1 ? t(" · 另有 {count} 项", { count: runtimeRecoveries.length - 1 }) : ""}</small>
+                    <small className="mt-tight block truncate text-caption text-label-2">{selectedRuntimeRecoveries[0].input.prompt}{selectedRuntimeRecoveries.length > 1 ? t(" · 另有 {count} 项", { count: selectedRuntimeRecoveries.length - 1 }) : ""}</small>
                   </span>
-                  <button type="button" className={runtimeBannerButtonClass} disabled={isRunning} onClick={() => void retryRuntimeRecovery(runtimeRecoveries[0])}><RotateCcw size={14} />{t("安全继续")}</button>
-                  <button className={`${runtimeBannerButtonClass} w-control-sm justify-center px-0 text-label-3`} type="button" disabled={isRunning} onClick={() => void discardRuntimeRecovery(runtimeRecoveries[0].id)} aria-label={t("丢弃恢复记录")}><Trash2 size={14} /></button>
+                  <button type="button" className={runtimeBannerButtonClass} disabled={isRunning} onClick={() => void retryRuntimeRecovery(selectedRuntimeRecoveries[0])}><RotateCcw size={14} />{t("安全继续")}</button>
+                  <button className={`${runtimeBannerButtonClass} w-control-sm justify-center px-0 text-label-3`} type="button" disabled={isRunning} onClick={() => void discardRuntimeRecovery(selectedRuntimeRecoveries[0].id)} aria-label={t("丢弃恢复记录")}><Trash2 size={14} /></button>
                 </section>}
                 <NewChatView
                   conversationId={selectedConversationId}

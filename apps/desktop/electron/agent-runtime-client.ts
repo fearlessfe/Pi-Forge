@@ -76,6 +76,8 @@ export type RuntimeClientOptions = {
   requestTimeoutMs?: Partial<Record<AgentRuntimeMethod, number>>;
   recoveryStore?: RuntimeRecoveryStore;
   initialProfile?: RuntimeExecutionProfile;
+  /** Binds a dedicated worker to one conversation and rejects misrouted runs. */
+  expectedConversationId?: string;
   /** Main-owned frozen run scope used to revalidate every privileged MCP call. */
   getActiveProfile?(): RuntimeExecutionProfile | undefined;
 };
@@ -107,6 +109,8 @@ export class AgentRuntimeClient {
   private heartbeatId?: string;
   private heartbeatMisses = 0;
   private readyTimer?: NodeJS.Timeout;
+  private conversationStateLoaded = false;
+  private readonly finishedBeforeSendResponse = new Set<string>();
 
   constructor(private readonly options: RuntimeClientOptions) {
     this.recovery = options.recoveryStore ?? new RuntimeRecoveryStore(options.userDataPath);
@@ -115,6 +119,10 @@ export class AgentRuntimeClient {
 
   isRunning(): boolean {
     return Boolean(this.activeRunId);
+  }
+
+  needsHistoryReload(): boolean {
+    return !this.conversationStateLoaded;
   }
 
   async getModelCatalog(allowNetwork = true): Promise<ProviderCatalogEntry[]> {
@@ -135,8 +143,13 @@ export class AgentRuntimeClient {
       const args: unknown[] = [prompt, cwd, conversationId];
       if (extras?.images?.length || extras?.attachments?.length) args.push(extras);
       const runId = await this.request<string>("send", ...args);
-      this.activeRunId = runId;
-      this.recovery.attachRun(recovery.id, runId);
+      this.conversationStateLoaded = true;
+      if (this.finishedBeforeSendResponse.delete(runId)) {
+        this.recovery.discard(recovery.id);
+      } else {
+        this.activeRunId = runId;
+        this.recovery.attachRun(recovery.id, runId);
+      }
       this.startingRecoveryId = undefined;
       return runId;
     } catch (error) {
@@ -154,7 +167,11 @@ export class AgentRuntimeClient {
 
   listConversations(): Promise<ConversationHistoryItem[]> { return this.request("listConversations"); }
   listConversationPage(query?: ConversationListQuery): Promise<ConversationHistoryPage> { return this.request("listConversationPage", query); }
-  loadConversation(id: string): Promise<ConversationHistoryDetail> { return this.request("loadConversation", id); }
+  async loadConversation(id: string): Promise<ConversationHistoryDetail> {
+    const conversation = await this.request<ConversationHistoryDetail>("loadConversation", id);
+    this.conversationStateLoaded = true;
+    return conversation;
+  }
   forkConversation(id: string, entryId?: string): Promise<ConversationHistoryItem> { return this.request("forkConversation", id, entryId); }
   exportConversation(id: string, format: "markdown" | "json"): Promise<ConversationExport> { return this.request("exportConversation", id, format); }
   setConversationArchived(id: string, archived: boolean): Promise<void> { return this.request("setConversationArchived", id, archived); }
@@ -181,7 +198,10 @@ export class AgentRuntimeClient {
   answerQuestion(callId: string, answer: string): Promise<void> { return this.request("answerQuestion", callId, answer); }
   listPlanReviews(conversationId?: string): Promise<PlanReviewArtifact[]> { return this.request("listPlanReviews", conversationId); }
   resolvePlanReview(input: ResolvePlanReviewInput): Promise<PlanReviewArtifact> { return this.request("resolvePlanReview", input); }
-  reset(): Promise<void> { return this.request("reset"); }
+  async reset(): Promise<void> {
+    await this.request("reset");
+    this.conversationStateLoaded = false;
+  }
   testConfiguration(input: SaveModelSettings): Promise<string> { return this.request("testConfiguration", input); }
 
   async updateConfiguration(profile?: RuntimeExecutionProfile): Promise<void> {
@@ -192,6 +212,9 @@ export class AgentRuntimeClient {
       selectedSkills: [],
       selectedMcpServers: [],
     });
+    // The worker applies configuration by resetting AgentService, including
+    // its session and FileChangeTracker snapshots.
+    this.conversationStateLoaded = false;
   }
 
   listRecoveries(): RuntimeRecoveryRecord[] {
@@ -371,10 +394,26 @@ export class AgentRuntimeClient {
 
   private handleEvent(event: AgentEvent): void {
     this.options.observe?.(event, event.type === "run.started" ? this.pendingPrompt : undefined);
-    if (event.type === "run.started") this.activeRunId = event.runId;
+    if (event.type === "run.started") {
+      const expectedConversationId = this.options.expectedConversationId;
+      if (expectedConversationId && event.conversationId !== expectedConversationId) {
+        const message = "Runtime 返回了不匹配的会话 ID；该 Runtime 已停止，事件已隔离。";
+        this.options.emit({ type: "run.error", conversationId: expectedConversationId, runId: event.runId, message });
+        if (this.child) this.markUnresponsive(this.child, message);
+        return;
+      }
+      this.activeRunId = event.runId;
+      this.conversationStateLoaded = true;
+    }
     if (event.type === "run.completed" || event.type === "run.stopped" || event.type === "run.error") {
-      this.activeRunId = undefined;
+      const stale = Boolean(this.activeRunId && event.runId !== this.activeRunId);
+      if (this.startingRecoveryId) {
+        this.finishedBeforeSendResponse.add(event.runId);
+        if (this.finishedBeforeSendResponse.size > 32) this.finishedBeforeSendResponse.delete(this.finishedBeforeSendResponse.values().next().value!);
+      }
+      if (!stale && event.runId === this.activeRunId) this.activeRunId = undefined;
       this.recovery.completeRun(event.runId);
+      if (stale) return;
     }
     this.options.emit(event);
   }
@@ -438,6 +477,7 @@ export class AgentRuntimeClient {
   private handleExit(child: ChildProcess, error: Error): void {
     if (this.child !== child) return;
     this.child = undefined;
+    this.conversationStateLoaded = false;
     this.clearHeartbeat();
     if (this.readyTimer) clearTimeout(this.readyTimer);
     this.readyTimer = undefined;
@@ -483,6 +523,7 @@ export class AgentRuntimeClient {
   private stopChild(disconnect: boolean): void {
     const child = this.child;
     this.child = undefined;
+    this.conversationStateLoaded = false;
     this.clearHeartbeat();
     if (this.readyTimer) clearTimeout(this.readyTimer);
     this.readyTimer = undefined;
@@ -547,7 +588,8 @@ export class AgentRuntimeClient {
     for (const controller of this.hostRequests.values()) controller.abort();
     this.hostRequests.clear();
     const interruptedRunId = this.activeRunId;
-    this.recovery.interruptRun(interruptedRunId, message);
+    if (interruptedRunId) this.recovery.interruptRun(interruptedRunId, message);
+    else if (this.startingRecoveryId) this.recovery.interruptRecord(this.startingRecoveryId, message);
     if (interruptedRunId) {
       this.activeRunId = undefined;
       this.options.emit({ type: "run.error", runId: interruptedRunId, message });

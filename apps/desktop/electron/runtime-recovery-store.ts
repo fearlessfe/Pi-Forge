@@ -78,10 +78,10 @@ export class RuntimeRecoveryStore {
     this.persist();
   }
 
-  interruptRun(runId: string | undefined, message: string): void {
+  interruptRun(runId: string, message: string): void {
     let changed = false;
     this.records = this.records.map((record) => {
-      if (record.status === "interrupted" || (runId && record.runId !== runId)) return record;
+      if (record.status === "interrupted" || record.runId !== runId) return record;
       changed = true;
       return { ...record, status: "interrupted", message, updatedAt: new Date().toISOString() };
     });
@@ -95,6 +95,13 @@ export class RuntimeRecoveryStore {
   discard(id: string): void {
     const next = this.records.filter((record) => record.id !== id);
     if (next.length === this.records.length) throw new Error("找不到待恢复任务。");
+    this.records = next;
+    this.persist();
+  }
+
+  discardConversation(conversationId: string): void {
+    const next = this.records.filter((record) => record.input.conversationId !== conversationId);
+    if (next.length === this.records.length) return;
     this.records = next;
     this.persist();
   }

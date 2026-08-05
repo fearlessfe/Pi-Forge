@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   AgentEvent,
   ContextBudgetReport,
@@ -27,7 +28,7 @@ import { RuntimeRecoveryStore } from "./runtime-recovery-store.js";
 type PoolOptions = Omit<RuntimeClientOptions, "emit" | "recoveryStore" | "initialProfile" | "getActiveProfile"> & {
   emit(event: AgentEvent): void;
   profiles: ConversationProfileStore;
-  resources: Pick<ResourceStore, "getProjectSettings">;
+  resources: Pick<ResourceStore, "getProjectSettings" | "isKnownWorkspace">;
   maxParallel?: number;
 };
 
@@ -55,11 +56,17 @@ export class AgentRuntimePool {
   }
 
   isRunning(conversationId?: string): boolean {
-    if (conversationId) return this.clients.get(conversationId)?.client.isRunning() ?? false;
-    return [...this.clients.values()].some((entry) => entry.client.isRunning());
+    if (conversationId) return this.starting.has(conversationId) || (this.clients.get(conversationId)?.client.isRunning() ?? false);
+    return this.starting.size > 0 || [...this.clients.values()].some((entry) => entry.client.isRunning());
   }
 
   getProfile(conversationId: string, cwd = this.options.fallbackCwd): ConversationExecutionProfile {
+    const existing = this.options.profiles.get(conversationId);
+    if (existing) {
+      this.assertKnownWorkspace(existing.cwd);
+      return existing;
+    }
+    this.assertKnownWorkspace(cwd);
     return this.options.profiles.ensure(conversationId, cwd, this.defaultModel(), this.options.resources.getProjectSettings(cwd));
   }
 
@@ -67,6 +74,11 @@ export class AgentRuntimePool {
     // SettingsStore is the authoritative validator and credential resolver. The
     // returned apiKey is intentionally discarded before persistence.
     this.options.settings.resolve(input);
+    this.assertKnownWorkspace(input.cwd);
+    const existing = this.options.profiles.get(input.conversationId);
+    if (existing && path.resolve(existing.cwd) !== path.resolve(input.cwd)) {
+      throw new Error("会话工作区在创建后不可更改；请为其他工作区新建会话。");
+    }
     return this.options.profiles.save(input);
   }
 
@@ -93,10 +105,18 @@ export class AgentRuntimePool {
 
   async executeExtensionCommand(prompt: string, cwd?: string, conversationId?: string): Promise<boolean> {
     if (conversationId) {
-      const profile = this.getProfile(conversationId, cwd);
-      const entry = this.conversationClient(conversationId, profile);
-      if (!entry.client.isRunning()) await entry.client.updateConfiguration(this.runtimeProfile(profile));
-      return entry.client.executeExtensionCommand(prompt, profile.cwd, conversationId);
+      if (this.isRunning(conversationId)) throw new Error("该会话已有任务在运行，扩展命令请在任务结束后执行。");
+      this.starting.add(conversationId);
+      try {
+        const profile = this.getProfile(conversationId, cwd);
+        const entry = this.conversationClient(conversationId, profile);
+        const snapshot = this.runtimeProfile(profile);
+        entry.activeProfile = snapshot;
+        await entry.client.updateConfiguration(snapshot);
+        return await entry.client.executeExtensionCommand(prompt, profile.cwd, conversationId);
+      } finally {
+        this.starting.delete(conversationId);
+      }
     }
     return this.controlClient().executeExtensionCommand(prompt, cwd);
   }
@@ -120,13 +140,15 @@ export class AgentRuntimePool {
 
   async setConversationArchived(id: string, archived: boolean): Promise<void> {
     await this.stopAndRelease(id);
-    return this.controlClient().setConversationArchived(id, archived);
+    await this.controlClient().setConversationArchived(id, archived);
+    if (archived) this.recovery.discardConversation(id);
   }
 
   async deleteConversation(id: string): Promise<void> {
     await this.stopAndRelease(id);
     await this.controlClient().deleteConversation(id);
     this.options.profiles.delete(id);
+    this.recovery.discardConversation(id);
   }
 
   abort(conversationId: string): Promise<void> { return this.requireConversation(conversationId).abort(); }
@@ -188,6 +210,7 @@ export class AgentRuntimePool {
     this.disposing = true;
     for (const entry of this.clients.values()) entry.client.dispose();
     this.clients.clear();
+    this.starting.clear();
     this.control?.client.dispose();
     this.control = undefined;
   }
@@ -232,6 +255,7 @@ export class AgentRuntimePool {
       ...this.options,
       recoveryStore: this.recovery,
       initialProfile,
+      expectedConversationId: conversationId === controlConversationId ? undefined : conversationId,
       getActiveProfile: () => entry.activeProfile,
       emit: (event) => this.options.emit(this.routeEvent(conversationId, event)),
     });
@@ -258,7 +282,10 @@ export class AgentRuntimePool {
 
   private async clientWithHistory(conversationId: string): Promise<AgentRuntimeClient> {
     const active = this.clients.get(conversationId)?.client;
-    if (active) return active;
+    if (active) {
+      if (!active.isRunning() && active.needsHistoryReload()) await active.loadConversation(conversationId);
+      return active;
+    }
     const client = this.controlClient();
     await client.loadConversation(conversationId);
     return client;
@@ -275,9 +302,13 @@ export class AgentRuntimePool {
   private pruneIdleClient(): void {
     const limit = this.options.maxParallel ?? 3;
     if (this.clients.size < limit) return;
-    const idle = [...this.clients.entries()].filter(([, entry]) => !entry.client.isRunning()).sort((left, right) => left[1].lastUsed - right[1].lastUsed)[0];
+    const idle = [...this.clients.entries()].filter(([id, entry]) => !this.starting.has(id) && !entry.client.isRunning()).sort((left, right) => left[1].lastUsed - right[1].lastUsed)[0];
     if (!idle) return;
     idle[1].client.dispose();
     this.clients.delete(idle[0]);
+  }
+
+  private assertKnownWorkspace(cwd: string): void {
+    if (!this.options.resources.isKnownWorkspace(cwd)) throw new Error("工作区未注册或已失效，无法使用该会话执行 Profile。");
   }
 }

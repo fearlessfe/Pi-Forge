@@ -467,7 +467,7 @@ function ModelSelector({
         onChange(nextProvider, nextModelId);
       }}
     >
-      <Select.Trigger className="grid h-control-md max-w-[230px] cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-base rounded-sm px-base font-mono text-caption text-label-3 transition-colors duration-150 ease-apple hover:bg-fill hover:text-label-2 active:bg-fill-2 active:scale-[0.98] data-[state=open]:bg-fill data-[state=open]:text-label-2 disabled:pointer-events-none disabled:opacity-40" aria-label={t("选择对话模型")} title={disabled ? t("Agent 运行中不可切换模型") : label}>
+      <Select.Trigger className="grid h-control-md max-w-[230px] cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-base rounded-sm px-base font-mono text-caption text-label-3 transition-colors duration-150 ease-apple hover:bg-fill hover:text-label-2 active:bg-fill-2 active:scale-[0.98] data-[state=open]:bg-fill data-[state=open]:text-label-2 disabled:pointer-events-none disabled:opacity-40" aria-label={t("选择对话模型")} title={label}>
         <Select.Value><span className="block truncate">{label}</span></Select.Value>
         <Select.Icon><ChevronDown size={14} /></Select.Icon>
       </Select.Trigger>
@@ -496,16 +496,17 @@ function ModelSelector({
 function DirectoryMenu({
   project,
   compact = false,
+  locked = false,
   onProjectChange,
   onChooseWorkspace,
-}: Pick<NewChatViewProps, "project" | "onProjectChange" | "onChooseWorkspace"> & { compact?: boolean }) {
+}: Pick<NewChatViewProps, "project" | "onProjectChange" | "onChooseWorkspace"> & { compact?: boolean; locked?: boolean }) {
   const { t } = useI18n();
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button className={compact ? `${composerToolButtonClass} max-w-[155px]` : `${secondaryButtonClass} font-semibold`} type="button">
+        <button className={compact ? `${composerToolButtonClass} max-w-[155px]` : `${secondaryButtonClass} font-semibold`} type="button" disabled={locked}>
           <Folder size={16} />
-          <span className="truncate">{compact ? project?.name ?? t("普通对话") : t(project ? "更换目录" : "选择目录")}</span>
+          <span className="truncate">{locked || compact ? project?.name ?? t("普通对话") : t(project ? "更换目录" : "选择目录")}</span>
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -589,7 +590,7 @@ function ProjectResourceMenu({
     setExecutionProfile(undefined);
     setDraftSkills([]);
     setDraftServers([]);
-    if (project) void load();
+    if (project || conversationId) void load();
   }, [project?.path, conversationId]);
 
   async function saveSelection(selection?: { skills: string[]; mcpServers: string[] }) {
@@ -658,8 +659,10 @@ function ProjectResourceMenu({
 
   if (!project && !conversationId) return null;
   const custom = executionProfile ? executionProfile.resourceSelectionMode === "custom" : inventory?.projectSettings.selectionMode === "custom";
-  const selectedCount = (inventory?.skills.filter((skill) => skill.enabled).length ?? 0)
-    + (overview?.servers.filter((server) => server.enabled && server.projectEnabled !== false).length ?? 0);
+  const selectedCount = custom
+    ? draftSkills.length + draftServers.length
+    : (inventory?.skills.filter((skill) => skill.enabled).length ?? 0)
+      + (overview?.servers.filter((server) => server.enabled && server.projectEnabled !== false).length ?? 0);
   const disabled = (!conversationId && isRunning) || saving;
 
   return (
@@ -773,14 +776,14 @@ function InitialComposer(props: NewChatViewProps) {
           <input ref={composer.fileInputRef} type="file" multiple hidden accept={attachmentAcceptTypes} tabIndex={-1} aria-hidden="true" onChange={composer.onFilePicked} />
           <CommandPalette matches={palette.matches} selected={palette.selected} placement="inside" onSelect={palette.select} />
           <div className="flex h-control-md flex-none items-end gap-base">
-            <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={props.isRunning} onChange={props.onModelChange} />
+            <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={false} onChange={props.onModelChange} />
             <AttachButton supportsImages={props.modelSupportsImages} onClick={composer.openPicker} />
             <SendControl isRunning={props.isRunning} canSend={canSend} onStop={props.onStop} />
           </div>
         </form>
 
         <div className="mt-loose grid min-h-[50px] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-loose rounded-md border border-separator bg-bg-grouped px-loose py-base">
-          <span className="flex items-center gap-base"><DirectoryMenu project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} /><ProjectResourceMenu project={props.project} conversationId={props.conversationId} isRunning={props.isRunning} onResourcesChanged={props.onResourcesChanged} /></span>
+          <span className="flex items-center gap-base"><DirectoryMenu locked={Boolean(props.conversationId)} project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} /><ProjectResourceMenu project={props.project} conversationId={props.conversationId} isRunning={props.isRunning} onResourcesChanged={props.onResourcesChanged} /></span>
           <span className="min-w-0">
             <strong className="block truncate text-callout font-semibold text-label">{props.project ? props.project.path : t("普通对话")}</strong>
             <small className="mt-tight block truncate text-caption text-label-3">{props.project ? t("Pi 工具将相对 {name} 运行", { name: props.project.name }) : t("未关联工作目录，Pi 使用隔离的空目录")}</small>
@@ -1508,9 +1511,9 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
           <input ref={composer.fileInputRef} type="file" multiple hidden accept={attachmentAcceptTypes} tabIndex={-1} aria-hidden="true" onChange={composer.onFilePicked} />
           <CommandPalette matches={palette.matches} selected={palette.selected} placement="above" onSelect={palette.select} />
           <div className="flex h-control-md flex-none items-end gap-base">
-            <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={props.isRunning} onChange={props.onModelChange} />
+            <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={false} onChange={props.onModelChange} />
             <AttachButton supportsImages={props.modelSupportsImages} onClick={composer.openPicker} />
-            <DirectoryMenu compact project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} />
+            <DirectoryMenu compact locked={Boolean(props.conversationId)} project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} />
             <ProjectResourceMenu compact project={props.project} conversationId={props.conversationId} isRunning={props.isRunning} onResourcesChanged={props.onResourcesChanged} />
             <button className={composerToolButtonClass} type="button" onClick={props.onOpenTerminal} aria-label={t("打开终端")} title={t("打开终端")}><TerminalSquare size={14} /></button>
             {props.isRunning && <><button className={queueButtonClass} type="button" disabled={!canSend} onClick={() => props.onQueue("steer")}>{t("立即调整")}</button><button className={queueButtonClass} type="submit" disabled={!canSend}>{t("稍后继续")}</button></>}

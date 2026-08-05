@@ -84,6 +84,7 @@ function setup(maxParallel = 3, heartbeat = false) {
   const children: FakeRuntime[] = [];
   const events: AgentEvent[] = [];
   const defaults: SaveModelSettings = { provider: "openai", baseUrl: "https://api.example.test", modelId: "default", thinkingLevel: "medium" };
+  const knownWorkspaces = new Set([cwd]);
   const pool = new AgentRuntimePool({
     workerPath: path.join(root, "worker.js"), userDataPath: root, agentDir: root, fallbackCwd: cwd, sessionDir: path.join(root, "sessions"),
     settings: { resolve: (input?: SaveModelSettings) => ({ ...(input ?? defaults), apiKey: "secret-not-persisted" }) },
@@ -93,7 +94,7 @@ function setup(maxParallel = 3, heartbeat = false) {
     emit: (event) => events.push(event),
     observe: vi.fn(),
     profiles: new ConversationProfileStore(root),
-    resources: { getProjectSettings: projectSettings },
+    resources: { getProjectSettings: projectSettings, isKnownWorkspace: (candidate) => knownWorkspaces.has(candidate) },
     maxParallel,
     heartbeatIntervalMs: heartbeat ? 5 : 0,
     heartbeatMissLimit: 1,
@@ -101,7 +102,7 @@ function setup(maxParallel = 3, heartbeat = false) {
     forkProcess: (() => { const child = new FakeRuntime(); children.push(child); return child as unknown as ChildProcess; }) as never,
   });
   pools.push(pool);
-  return { pool, children, events, cwd };
+  return { pool, children, events, cwd, root, knownWorkspaces };
 }
 
 afterEach(() => {
@@ -132,6 +133,21 @@ describe("AgentRuntimePool", () => {
     await Promise.all([pool.send("A", cwd, "a"), pool.send("B", cwd, "b")]);
     await expect(pool.send("C", cwd, "c")).rejects.toThrow("最多可并行 2 个");
     await expect(pool.send("again", cwd, "a")).rejects.toThrow("该会话已有任务在运行");
+  });
+
+  it("counts startup reservations as running and never prunes a starting worker", async () => {
+    const { pool, children, cwd, root, knownWorkspaces } = setup(1);
+    const starting = pool.send("A", cwd, "a");
+    expect(pool.isRunning()).toBe(true);
+    expect(pool.isRunning("a")).toBe(true);
+
+    const other = path.join(root, "other-workspace");
+    fs.mkdirSync(other);
+    knownWorkspaces.add(other);
+    await pool.executeExtensionCommand("/review", other, "b");
+
+    expect(children[0].disconnected).toBe(false);
+    await starting;
   });
 
   it("routes abort and queue to one conversation and leaves the other worker running", async () => {
@@ -199,6 +215,72 @@ describe("AgentRuntimePool", () => {
     const stored = JSON.parse(fs.readFileSync(path.join(path.dirname(cwd), "conversation-profiles.json"), "utf8")) as { profiles: Record<string, unknown> };
     expect(stored.profiles.a).toBeUndefined();
     expect(stored.profiles.b).toBeDefined();
+  });
+
+  it("clears only the target recovery on archive while preserving its profile and other workers", async () => {
+    const { pool, children, cwd, root } = setup();
+    await Promise.all([pool.send("A", cwd, "a"), pool.send("B", cwd, "b")]);
+    children[0].emit("exit", 1, null);
+    await vi.waitFor(() => expect(pool.listRecoveries()).toEqual([expect.objectContaining({ input: expect.objectContaining({ conversationId: "a" }) })]));
+
+    await pool.setConversationArchived("a", true);
+
+    expect(pool.listRecoveries()).toEqual([]);
+    expect(pool.isRunning("b")).toBe(true);
+    const stored = JSON.parse(fs.readFileSync(path.join(root, "conversation-profiles.json"), "utf8")) as { profiles: Record<string, unknown> };
+    expect(stored.profiles.a).toBeDefined();
+  });
+
+  it("reloads conversation history before file operations after a worker restart", async () => {
+    const { pool, children, cwd } = setup();
+    await pool.send("A", cwd, "a");
+    children[0].emit("exit", 1, null);
+    await vi.waitFor(() => expect(children).toHaveLength(2), { timeout: 1_000 });
+
+    await pool.listChanges("a");
+
+    const methods = children[1].requests.map((request) => request.method);
+    expect(methods.indexOf("loadConversation")).toBeGreaterThanOrEqual(0);
+    expect(methods.indexOf("listChanges")).toBeGreaterThan(methods.indexOf("loadConversation"));
+  });
+
+  it("freezes the active profile and applies edits only to the next run", async () => {
+    const { pool, children, cwd } = setup();
+    const initial = pool.getProfile("a", cwd);
+    pool.saveProfile({ ...initial, modelId: "model-a", selectedSkills: ["safe-skill"] });
+    await pool.send("first", cwd, "a");
+    pool.saveProfile({ ...initial, modelId: "model-b", selectedSkills: [] });
+
+    expect(children[0].profiles.at(-1)).toMatchObject({ modelSettings: { modelId: "model-a" }, selectedSkills: ["safe-skill"] });
+    children[0].complete();
+    await pool.send("second", cwd, "a");
+    expect(children[0].profiles.at(-1)).toMatchObject({ modelSettings: { modelId: "model-b" }, selectedSkills: [] });
+  });
+
+  it("rejects tampered profile and recovery workspaces outside the known-workspace guard", async () => {
+    const { pool, children, cwd, root } = setup();
+    await pool.send("A", cwd, "a");
+    children[0].emit("exit", 1, null);
+    await vi.waitFor(() => expect(pool.listRecoveries()).toHaveLength(1));
+    const [recovery] = pool.listRecoveries();
+    const file = path.join(root, "conversation-profiles.json");
+    const stored = JSON.parse(fs.readFileSync(file, "utf8")) as { profiles: Record<string, { cwd: string }> };
+    stored.profiles.a.cwd = path.join(root, "unregistered");
+    fs.writeFileSync(file, JSON.stringify(stored), "utf8");
+
+    expect(() => pool.getProfile("a", cwd)).toThrow("工作区未注册");
+    await expect(pool.retryRecovery(recovery.id)).rejects.toThrow("工作区未注册");
+  });
+
+  it("keeps a conversation bound to its original known workspace", () => {
+    const { pool, cwd, root, knownWorkspaces } = setup();
+    const profile = pool.getProfile("a", cwd);
+    const other = path.join(root, "other-known-workspace");
+    fs.mkdirSync(other);
+    knownWorkspaces.add(other);
+
+    expect(() => pool.saveProfile({ ...profile, cwd: other })).toThrow("会话工作区在创建后不可更改");
+    expect(pool.getProfile("a", other).cwd).toBe(cwd);
   });
 
   it("reuses a released slot after an out-of-order terminal event", async () => {

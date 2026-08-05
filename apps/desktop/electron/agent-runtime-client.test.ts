@@ -9,6 +9,7 @@ import type { AgentEvent } from "../src/contracts.js";
 import { AgentRuntimeClient } from "./agent-runtime-client.js";
 import { agentRuntimeProtocolVersion, type ParentToRuntimeMessage, type RuntimeToParentMessage } from "./agent-runtime-protocol.js";
 import type { BrowserDebugPort } from "./browser-service.js";
+import { RuntimeRecoveryStore } from "./runtime-recovery-store.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
@@ -385,6 +386,85 @@ describe("AgentRuntimeClient", () => {
     child.emit("message", { kind: "runtime.event", event: { type: "run.completed", runId: "run-1" } });
     expect(client.isRunning()).toBe(false);
     expect(events.map((event) => event.type)).toEqual(["run.started", "run.completed"]);
+  });
+
+  it("does not let a stale terminal event clear a newer active run", () => {
+    const events: AgentEvent[] = [];
+    const client = createClient(events);
+    const child = lastChild();
+    emitReady(child);
+    child.emit("message", { kind: "runtime.event", event: { type: "run.started", runId: "run-old", conversationId: "c-1", provider: "openai", model: "gpt-test", cwd: "/tmp" } });
+    child.emit("message", { kind: "runtime.event", event: { type: "run.started", runId: "run-new", conversationId: "c-1", provider: "openai", model: "gpt-test", cwd: "/tmp" } });
+
+    child.emit("message", { kind: "runtime.event", event: { type: "run.completed", runId: "run-old" } });
+
+    expect(client.isRunning()).toBe(true);
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "run.completed", runId: "run-old" }));
+    child.emit("message", { kind: "runtime.event", event: { type: "run.completed", runId: "run-new" } });
+    expect(client.isRunning()).toBe(false);
+  });
+
+  it("does not resurrect a run that finishes before the send response is handled", async () => {
+    const client = createClient();
+    const child = lastChild();
+    emitReady(child);
+    const sending = client.send("fast", "/tmp", "c-1");
+    await vi.waitFor(() => expect(lastRequest(child).method).toBe("send"));
+    const request = lastRequest(child);
+    child.emit("message", { kind: "runtime.event", event: { type: "run.started", runId: "run-fast", conversationId: "c-1", provider: "openai", model: "gpt-test", cwd: "/tmp" } });
+    child.emit("message", { kind: "runtime.event", event: { type: "run.completed", runId: "run-fast" } });
+    child.emit("message", { kind: "runtime.response", id: request.id, result: "run-fast" });
+
+    await expect(sending).resolves.toBe("run-fast");
+    expect(client.isRunning()).toBe(false);
+    expect(client.listRecoveries()).toEqual([]);
+  });
+
+  it("stops a dedicated worker when it starts a mismatched conversation", () => {
+    const events: AgentEvent[] = [];
+    const client = createClient(events, { expectedConversationId: "expected" });
+    const child = lastChild();
+    emitReady(child);
+
+    child.emit("message", { kind: "runtime.event", event: { type: "run.started", runId: "run-wrong", conversationId: "wrong", provider: "openai", model: "gpt-test", cwd: "/tmp" } });
+
+    expect(client.isRunning()).toBe(false);
+    expect(child.connected).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({ type: "run.error", conversationId: "expected", runId: "run-wrong" }));
+  });
+
+  it("does not corrupt another worker's recovery when an idle worker times out", async () => {
+    vi.useFakeTimers();
+    const directory = temporaryDirectory();
+    const recovery = new RuntimeRecoveryStore(directory);
+    const active = recovery.begin({ prompt: "active elsewhere", conversationId: "other" });
+    recovery.attachRun(active.id, "run-other");
+    createClient([], { recoveryStore: recovery, heartbeatIntervalMs: 100, heartbeatMissLimit: 1 });
+    const child = lastChild();
+    emitReady(child);
+
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(recovery.get(active.id)).toMatchObject({ status: "running", runId: "run-other" });
+    expect(recovery.list()).toEqual([]);
+  });
+
+  it("tracks when in-memory conversation history must be reloaded", async () => {
+    const client = createClient();
+    const first = lastChild();
+    emitReady(first);
+    expect(client.needsHistoryReload()).toBe(true);
+    const loading = client.loadConversation("c-1");
+    await vi.waitFor(() => expect(lastRequest(first).method).toBe("loadConversation"));
+    const request = lastRequest(first);
+    first.emit("message", { kind: "runtime.response", id: request.id, result: { id: "c-1", title: "", cwd: "/tmp", createdAt: "", updatedAt: "", tags: [], archived: false, searchText: "", turns: [] } });
+    await loading;
+    expect(client.needsHistoryReload()).toBe(false);
+
+    const restarting = client.restart();
+    expect(client.needsHistoryReload()).toBe(true);
+    emitReady(lastChild());
+    await restarting;
   });
 
   it("rejects new requests while the worker is down", async () => {

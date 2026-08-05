@@ -72,6 +72,25 @@ describe("AgentService resource inventory", () => {
     ]));
   });
 
+  it("does not let a conversation/project selection re-enable a globally disabled Skill", async () => {
+    const cwd = directory("pi-global-disabled-project");
+    const agentDir = directory("pi-global-disabled-agent");
+    fs.mkdirSync(path.join(agentDir, "skills", "review"), { recursive: true });
+    fs.writeFileSync(path.join(agentDir, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Review code.\n---\n# Review\n");
+    const resources = {
+      getSettings: () => ({ workspaceContextEnabled: true, disabledSkills: ["review"] }),
+      getProjectSettings: (projectPath: string) => ({ cwd: projectPath, selectionMode: "custom" as const, selectedSkills: ["review"], selectedMcpServers: [], skillOverrides: {}, mcpServerOverrides: {} }),
+      isProjectTrusted: () => false,
+      getTrustStatus: (projectPath: string) => ({ path: projectPath, trusted: false, hasProjectResources: false, resourcePaths: [] }),
+    };
+    const service = new AgentService({ resolve: () => ({}) as never }, agentDir, cwd, () => {}, undefined, undefined, undefined, undefined, undefined, undefined, resources);
+
+    const inventory = await service.getResourceInventory(cwd);
+
+    expect(inventory.skills).toContainEqual(expect.objectContaining({ name: "review", globalEnabled: false, projectEnabled: true, enabled: false }));
+    expect(inventory.commands.some((command) => command.name === "/skill:review")).toBe(false);
+  });
+
   it("enables only explicitly selected Skills in a custom project profile", async () => {
     const cwd = directory("pi-selection-project");
     const agentDir = directory("pi-selection-agent");

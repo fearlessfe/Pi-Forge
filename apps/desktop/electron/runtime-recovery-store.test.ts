@@ -43,7 +43,7 @@ describe("RuntimeRecoveryStore", () => {
     store.completeRun("run-completed");
 
     const interrupted = store.begin({ prompt: "interrupted" });
-    store.interruptRun(undefined, "runtime exited");
+    store.interruptRecord(interrupted.id, "runtime exited");
     expect(store.list()).toEqual([expect.objectContaining({ id: interrupted.id, status: "interrupted" })]);
 
     store.discard(interrupted.id);
@@ -99,5 +99,17 @@ describe("RuntimeRecoveryStore", () => {
       expect.objectContaining({ id: first.id, message: "first failed" }),
       expect.objectContaining({ id: second.id, status: "interrupted" }),
     ]));
+  });
+
+  it("discards only recovery records owned by one conversation", () => {
+    const store = new RuntimeRecoveryStore(temporaryDirectory());
+    const first = store.begin({ prompt: "first", conversationId: "a" });
+    const second = store.begin({ prompt: "second", conversationId: "b" });
+    store.interruptRecord(first.id, "failed");
+    store.interruptRecord(second.id, "failed");
+
+    store.discardConversation("a");
+
+    expect(store.list()).toEqual([expect.objectContaining({ id: second.id, input: expect.objectContaining({ conversationId: "b" }) })]);
   });
 });

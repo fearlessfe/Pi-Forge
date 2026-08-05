@@ -3,6 +3,7 @@ import type { Credential, CredentialInfo, CredentialStore } from "@earendil-work
 import type { BrowserAnnotationCapture, ResolvePlanReviewInput, SaveModelSettings } from "../src/contracts.js";
 import { AgentService, type AgentRuntimeConfig, type PromptExtras } from "./agent-service.js";
 import { CapabilityStore } from "./capability-store.js";
+import { scopeProjectResources } from "./conversation-resource-scope.js";
 import { ModelMetadataStore } from "./model-metadata-store.js";
 import { PermissionStore } from "./permission-store.js";
 import { PluginSecurityStore } from "./plugin-security-store.js";
@@ -142,19 +143,7 @@ class ConversationResourceStore extends ResourceStore {
 
   override getProjectSettings(cwd: string) {
     const base = super.getProjectSettings(cwd);
-    if (this.selection.resourceSelectionMode !== "custom") return base;
-    const projectAllowsSkill = (name: string) => base.selectionMode === "custom"
-      ? base.selectedSkills.includes(name)
-      : base.skillOverrides[name] !== false;
-    const projectAllowsMcp = (key: string) => base.selectionMode === "custom"
-      ? base.selectedMcpServers.includes(key)
-      : base.mcpServerOverrides[key] !== false;
-    return {
-      ...base,
-      selectionMode: "custom" as const,
-      selectedSkills: this.selection.selectedSkills.filter(projectAllowsSkill),
-      selectedMcpServers: this.selection.selectedMcpServers.filter(projectAllowsMcp),
-    };
+    return scopeProjectResources(base, this.selection);
   }
 }
 
