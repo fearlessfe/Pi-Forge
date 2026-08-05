@@ -19,7 +19,10 @@ export const { chromium } = require("playwright");
 
 export const repoRoot = path.resolve(import.meta.dirname, "../..");
 const rendererDir = path.join(repoRoot, "apps/desktop");
-export const PORT = 4173;
+export const PORT = Number.parseInt(process.env.PI_DESKTOP_VERIFY_PORT ?? "4173", 10);
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65_535) {
+  throw new Error(`PI_DESKTOP_VERIFY_PORT 必须是有效 TCP 端口，实际 ${JSON.stringify(process.env.PI_DESKTOP_VERIFY_PORT)}。`);
+}
 export const BASE_URL = `http://127.0.0.1:${PORT}`;
 // 本项目 dev server 的特征：index.html 通过 <script src="/src/main.tsx"> 挂载入口。
 const SERVER_SIGNATURE = "src/main.tsx";
@@ -106,7 +109,7 @@ export function installSignalHandlers(getServerProcess) {
 }
 
 /** 注入 window.piDesktop mock，形状对齐 apps/desktop/src/contracts.ts 的 PiDesktopApi（见文件头维护要求）。 */
-export function installMockBridge() {
+export function installMockBridge(options = {}) {
   const now = new Date().toISOString();
   const modelSettings = {
     provider: "anthropic",
@@ -214,6 +217,46 @@ export function installMockBridge() {
       },
     ],
   };
+  const performanceMarkdownPrefix = [
+    "## PERF-01 long response fixture",
+    "",
+    "| Column | Status | Notes |",
+    "| --- | --- | --- |",
+    "| viewport | stable | anchor retained |",
+    "| streaming | batched | within 60ms budget |",
+    "",
+    "```ts",
+    "export const fixture = { turns: 100, virtualized: true };",
+    "```",
+    "",
+  ].join("\n");
+  const performanceMessage = (performanceMarkdownPrefix + "fixture content ".repeat(4_000)).slice(0, 50_000);
+  const performanceTurns = Array.from({ length: 100 }, (_, index) => {
+    const isLast = index === 99;
+    return {
+      id: `perf-turn-${index}`,
+      sessionEntryId: `perf-entry-${index}`,
+      question: `PERF-01 question ${index}`,
+      answer: "",
+      activities: isLast
+        ? [
+            ...Array.from({ length: 20 }, (__, toolIndex) => ({
+              id: `perf-tool-${toolIndex}`,
+              type: "tool",
+              name: toolIndex % 2 === 0 ? "read" : "bash",
+              args: { command: `fixture-${toolIndex}` },
+              output: `fixture output ${toolIndex}`,
+              status: "success",
+            })),
+            { id: "perf-message", type: "message", text: performanceMessage },
+          ]
+        : [{ id: `perf-message-${index}`, type: "message", text: `PERF-01 response ${index}` }],
+      status: "completed",
+    };
+  });
+  const conversationDetail = options.performanceConversation
+    ? { ...demoConversationDetail, turns: performanceTurns }
+    : demoConversationDetail;
   const browserState = {
     url: "",
     title: "",
@@ -279,6 +322,18 @@ export function installMockBridge() {
   };
   const resolve = (value) => () => Promise.resolve(value);
   const noop = () => () => {};
+  const agentEventListeners = new Set();
+
+  // Playwright-only hook. The production renderer never defines or reads it; the
+  // lane uses it to exercise the same subscribed event path as Electron IPC.
+  window.piVerify = {
+    emitAgentEvent(event) {
+      for (const listener of agentEventListeners) listener(event);
+    },
+    fixture: options.performanceConversation
+      ? { turns: performanceTurns.length, lastMessageCharacters: performanceMessage.length, toolActivities: 20 }
+      : undefined,
+  };
 
   window.piDesktop = {
     appearance: {
@@ -388,7 +443,8 @@ export function installMockBridge() {
     agent: {
       send: resolve({ runId: "mock-run" }),
       listConversations: resolve([demoConversation]),
-      loadConversation: resolve(demoConversationDetail),
+      listConversationPage: resolve({ items: [demoConversation], nextCursor: undefined }),
+      loadConversation: resolve(conversationDetail),
       renameConversation: resolve(undefined),
       forkConversation: resolve(demoConversation),
       exportConversation: resolve({ filename: "demo.md", mimeType: "text/markdown", content: "" }),
@@ -411,7 +467,10 @@ export function installMockBridge() {
       retryRecovery: resolve({ runId: "mock-run" }),
       discardRecovery: resolve(undefined),
       retryRuntime: resolve(undefined),
-      onEvent: noop,
+      onEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => agentEventListeners.delete(listener);
+      },
     },
   };
 }

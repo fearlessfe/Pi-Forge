@@ -359,6 +359,11 @@ describe("AgentService with a real Pi session", () => {
     try {
       const firstRun = await firstService.send("remember this", cwd, conversationId);
       await vi.waitFor(() => expect(firstEvents.some((event) => event.type === "run.completed" && event.runId === firstRun)).toBe(true), { timeout: 8_000 });
+      const conversationUpdateIndex = firstEvents.findIndex((event) => event.type === "conversation.updated" && event.kind === "upsert" && event.reason === "run-completed");
+      const completionIndex = firstEvents.findIndex((event) => event.type === "run.completed" && event.runId === firstRun);
+      expect(conversationUpdateIndex).toBeGreaterThanOrEqual(0);
+      expect(conversationUpdateIndex).toBeLessThan(completionIndex);
+      expect(firstEvents[conversationUpdateIndex]).toMatchObject({ conversation: { id: conversationId, searchText: expect.stringContaining("persisted-answer") } });
       firstService.dispose();
 
       const secondEvents: AgentEvent[] = [];
@@ -533,11 +538,12 @@ describe("AgentService with a real Pi session", () => {
       modelId: "mock-model",
       thinkingLevel: "off",
     };
+    const events: AgentEvent[] = [];
     const service = new AgentService(
       { resolve: () => ({ ...configuration }) },
       agentDir,
       cwd,
-      () => {},
+      (event) => events.push(event),
       undefined,
       undefined,
       sessionDir,
@@ -548,10 +554,21 @@ describe("AgentService with a real Pi session", () => {
         expect.objectContaining({ id: "conversation-to-mutate", title: "original title" }),
       ]);
       await service.renameConversation("conversation-to-mutate", "Renamed conversation");
+      expect(eventsOfType(events, "conversation.updated").at(-1)).toMatchObject({
+        kind: "upsert",
+        reason: "renamed",
+        conversation: { id: "conversation-to-mutate", title: "Renamed conversation" },
+      });
       await expect(service.listConversations()).resolves.toEqual([
         expect.objectContaining({ id: "conversation-to-mutate", title: "Renamed conversation" }),
       ]);
       await service.deleteConversation("conversation-to-mutate");
+      expect(eventsOfType(events, "conversation.updated").at(-1)).toEqual({
+        type: "conversation.updated",
+        kind: "delete",
+        reason: "deleted",
+        conversationId: "conversation-to-mutate",
+      });
       await expect(service.listConversations()).resolves.toEqual([]);
     } finally {
       service.dispose();
@@ -585,11 +602,12 @@ describe("AgentService with a real Pi session", () => {
       stopReason: "stop",
       timestamp: 4,
     } satisfies AssistantMessage);
+    const events: AgentEvent[] = [];
     const service = new AgentService(
       { resolve: () => ({ provider: "openai-compatible", baseUrl: "http://127.0.0.1:11434/v1", modelId: "mock-model", thinkingLevel: "off" }) },
       agentDir,
       cwd,
-      () => {},
+      (event) => events.push(event),
       undefined,
       undefined,
       sessionDir,
@@ -598,6 +616,10 @@ describe("AgentService with a real Pi session", () => {
     try {
       await service.setConversationTags("conversation-features", ["research", "important"]);
       await service.setConversationArchived("conversation-features", true);
+      expect(eventsOfType(events, "conversation.updated").map((event) => event.kind === "upsert" ? event.reason : event.reason)).toEqual([
+        "tags-changed",
+        "archive-changed",
+      ]);
       const items = await service.listConversations();
       expect(items[0]).toEqual(expect.objectContaining({
         tags: ["research", "important"],
@@ -612,6 +634,7 @@ describe("AgentService with a real Pi session", () => {
       expect(JSON.parse(json.content)).toEqual(expect.objectContaining({ id: "conversation-features", archived: true }));
 
       const fork = await service.forkConversation("conversation-features", firstTurnId);
+      expect(eventsOfType(events, "conversation.updated").at(-1)).toMatchObject({ kind: "upsert", reason: "forked", conversation: { id: fork.id } });
       expect(fork).toEqual(expect.objectContaining({ parentConversationId: "conversation-features", archived: false, tags: ["research", "important"] }));
       const forkDetail = await service.loadConversation(fork.id);
       expect(forkDetail.turns).toHaveLength(1);

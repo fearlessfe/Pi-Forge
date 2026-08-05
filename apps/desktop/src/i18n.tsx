@@ -384,6 +384,7 @@ export const enUS: Record<string, string> = {
   "无法读取更多会话": "Could not load more conversations",
   "无法搜索会话": "Could not search conversations",
   "无法使用系统浏览器打开链接": "Could not open link in system browser",
+  "无法打开工作区文件": "Could not open workspace file",
   "当前对话": "Current chat",
   "Agent 执行中，可先停止当前任务…": "The agent is running; stop the current task to continue…",
   "输入调整指令，选择立即介入或稍后继续…": "Enter guidance to steer now or follow up later…",

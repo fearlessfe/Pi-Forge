@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { ContextBudgetReport } from "../contracts";
+import { createConversationPerformanceFixture } from "../conversation-performance-fixture";
+import { conversationMountedTurnBudget, pinnedConversationTurnIndices } from "../conversation-window";
 import { ContextIndicator, NewChatView, nextProjectResourceSelection } from "./NewChatView";
 import { parseModelValue } from "./model-selector-value";
 
@@ -37,14 +39,14 @@ describe("NewChatView analysis presentation", () => {
     const noop = vi.fn();
     const markup = renderToStaticMarkup(<I18nProvider>
       <NewChatView
-        project={null}
+        project={{ id: "/workspace", name: "workspace", path: "/workspace", conversations: [] }}
         turns={[{
           id: "turn-1",
           question: "Inspect the project",
           answer: "Done",
           activities: [
             { id: "thinking-1", type: "thinking", text: "## Plan\n\nI will inspect the **relevant files** first." },
-            { id: "message-1", type: "message", text: "| Result | Status |\n| --- | --- |\n| Build | Done |\n\n`pnpm build`\n\n<script>alert('unsafe')</script>" },
+            { id: "message-1", type: "message", text: "| Result | Status |\n| --- | --- |\n| Build | Done |\n\n`pnpm build`\n\n[Guide](file:///workspace/docs/guide.md) [Unsafe](javascript:alert(1))\n\n<script>alert('unsafe')</script>" },
           ],
           status: "running",
         }, {
@@ -74,6 +76,7 @@ describe("NewChatView analysis presentation", () => {
         onOpenContextBudget={noop}
         onOpenLink={noop}
         onOpenExternalLink={noop}
+        onOpenWorkspaceFile={noop}
         onResourcesChanged={noop}
         onResolvePlanReview={async () => undefined}
         onModelChange={noop}
@@ -94,6 +97,7 @@ describe("NewChatView analysis presentation", () => {
     expect(markup).toContain("<table>");
     expect(markup).toContain("<code>pnpm build</code>");
     expect(markup).not.toContain("unsafe");
+    expect(markup).toContain('<a href="#">Guide</a>');
     expect(markup).not.toContain("thinking-activity");
     expect(markup).not.toContain("分析过程");
     expect(markup).toContain("任务进行中");
@@ -138,6 +142,7 @@ describe("NewChatView analysis presentation", () => {
         onOpenContextBudget={noop}
         onOpenLink={noop}
         onOpenExternalLink={noop}
+        onOpenWorkspaceFile={noop}
         onResourcesChanged={noop}
         onResolvePlanReview={async () => undefined}
         onModelChange={noop}
@@ -159,6 +164,57 @@ describe("NewChatView analysis presentation", () => {
     expect(markup).toContain("border-green/16");
     expect(markup).toContain("border-red/24");
     expect(markup).not.toContain("完成 · 运行命令");
+  });
+});
+
+describe("NewChatView long conversation performance fixture", () => {
+  it("mounts only the viewport window plus safety-critical turns", () => {
+    const noop = vi.fn();
+    const turns = createConversationPerformanceFixture();
+    const markup = renderToStaticMarkup(<I18nProvider>
+      <NewChatView
+        project={{ id: "/workspace", name: "workspace", path: "/workspace", conversations: [] }}
+        turns={turns}
+        modelId="test-model"
+        modelProvider="anthropic"
+        modelProviders={[]}
+        modelSupportsImages
+        resourceRevision={0}
+        planReviews={[]}
+        prompt=""
+        attachments={{ images: [], files: [] }}
+        isRunning
+        queuedMessages={{ steering: [], followUp: [] }}
+        onPromptChange={noop}
+        onAttachmentsChange={noop}
+        onAttachmentError={noop}
+        onProjectChange={noop}
+        onChooseWorkspace={noop}
+        onOpenTerminal={noop}
+        onOpenContextBudget={noop}
+        onOpenLink={noop}
+        onOpenExternalLink={noop}
+        onOpenWorkspaceFile={noop}
+        onResourcesChanged={noop}
+        onResolvePlanReview={async () => undefined}
+        onModelChange={noop}
+        onSubmit={noop}
+        onStop={noop}
+        onQueue={noop}
+        onClearQueue={noop}
+        onAcceptChanges={noop}
+        onRevertChanges={noop}
+        onRetry={noop}
+        onForkTurn={noop}
+        onAnswerQuestion={noop}
+      />
+    </I18nProvider>);
+    const mountedTurns = markup.match(/data-conversation-turn-id=/g)?.length ?? 0;
+    const safetyTurns = pinnedConversationTurnIndices(turns).length;
+
+    expect(mountedTurns).toBeGreaterThan(0);
+    expect(mountedTurns).toBeLessThanOrEqual(conversationMountedTurnBudget(safetyTurns));
+    expect(markup).toContain("Long response fixture");
   });
 });
 

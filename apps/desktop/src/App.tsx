@@ -5,9 +5,11 @@ import { NewChatView } from "./components/NewChatView";
 import { PluginCenterView } from "./components/PluginCenterView";
 import { SettingsView } from "./components/SettingsView";
 import { BrowserWorkbench } from "./components/BrowserWorkbench";
-import type { AgentEvent, AgentRuntimeStatus, AppearanceTheme, AuthEvent, ContextBudgetReport, ContextUsageInfo, ConversationHistoryItem, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, PlanReviewArtifact, ProviderCatalogEntry, QueuedMessages, ResolvePlanReviewInput, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
+import type { AgentEvent, AgentRuntimeStatus, AppearanceTheme, AuthEvent, ContextBudgetReport, ContextUsageInfo, ConversationHistoryItem, ConversationUpdatedEvent, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, PlanReviewArtifact, ProviderCatalogEntry, QueuedMessages, ResolvePlanReviewInput, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
 import { applyAgentEvent, applyAgentEvents, isStreamingAgentEvent } from "./agent-event-state";
+import { conversationMatchesQuery, isCurrentConversationRequest, replayConversationUpdates, type SequencedConversationUpdate } from "./conversation-updates";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
+import { conversationStreamingBatchDelayMs } from "./conversation-window";
 import { emptyComposerAttachments, promptFileAttachmentsOf, promptImagesOf, turnAttachmentsOf, type ComposerAttachments } from "./composer-attachments";
 import { isPrimaryShortcut, shortcutLabel } from "./keyboard";
 import { useI18n } from "./i18n";
@@ -123,11 +125,16 @@ export function App() {
   const [conversationHistoryLoadingMore, setConversationHistoryLoadingMore] = useState(false);
   const conversationHistoryQueryRef = useRef("");
   const conversationHistoryRequestRef = useRef(0);
+  const conversationHistoryUpdateSequenceRef = useRef(0);
+  const conversationHistoryUpdatesRef = useRef<SequencedConversationUpdate[]>([]);
   const [conversationTurns, setConversationTurns] = useState<Record<string, ChatTurn[]>>({});
   const [conversationContexts, setConversationContexts] = useState<Record<string, ContextUsageInfo | undefined>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [searchRequest, setSearchRequest] = useState(0);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const selectedConversationIdRef = useRef<string | null>(null);
+  const openConversationRequestRef = useRef(0);
+  selectedConversationIdRef.current = selectedConversationId;
   const [modelSettings, setModelSettings] = useState<ModelSettings>(initialModelSettings);
   const [permissionRuntime, setPermissionRuntime] = useState<PermissionRuntime>(initialPermissionRuntime);
   const [systemPromptSettings, setSystemPromptSettings] = useState<SystemPromptSettings>(initialSystemPromptSettings);
@@ -228,20 +235,20 @@ export function App() {
     const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => {
       if (isStreamingAgentEvent(event)) {
         streamingEvents.push(event);
-        streamingTimer ??= window.setTimeout(flushStreamingEvents, 40);
+        streamingTimer ??= window.setTimeout(flushStreamingEvents, conversationStreamingBatchDelayMs);
         return;
       }
       flushStreamingEvents();
       if (event.type === "runtime.status") setRuntimeStatus(event.status);
       if (event.type === "context.updated") setContextUsage(event.usage);
       if (event.type === "queue.updated") setQueuedMessages(event.queue);
+      if (event.type === "conversation.updated") recordConversationUpdate(event);
       if (event.type === "plan.review.requested" || event.type === "plan.review.resolved") {
         setPlanReviews((current) => [event.review, ...current.filter((review) => review.id !== event.review.id)]);
       }
       setTurns((current) => applyAgentEvent(current, event));
       if (event.type === "run.completed" || event.type === "run.error" || event.type === "run.stopped") {
         setQueuedMessages({ steering: [], followUp: [] });
-        void refreshConversationHistory();
         void refreshRuntimeRecoveries();
       }
     });
@@ -326,6 +333,67 @@ export function App() {
     }
   }
 
+  function recordConversationUpdate(event: ConversationUpdatedEvent) {
+    const sequence = ++conversationHistoryUpdateSequenceRef.current;
+    conversationHistoryUpdatesRef.current.push({ sequence, event });
+    if (conversationHistoryUpdatesRef.current.length > 1_000) conversationHistoryUpdatesRef.current.splice(0, 500);
+    applyConversationIncrement(event);
+  }
+
+  function applyConversationIncrement(event: ConversationUpdatedEvent) {
+    const conversationId = event.kind === "delete" ? event.conversationId : event.conversation.id;
+    const visible = event.kind === "upsert" && conversationMatchesQuery(event.conversation, conversationHistoryQueryRef.current);
+    const rendered = visible ? historyConversation(event.conversation, t, locale) : undefined;
+
+    setConversations((current) => {
+      const remaining = current.filter((conversation) => conversation.id !== conversationId);
+      return event.kind === "upsert" && !event.conversation.project && rendered
+        ? [rendered, ...remaining]
+        : remaining;
+    });
+    setProjects((current) => {
+      const withoutConversation = current.map((entry) => ({
+        ...entry,
+        conversations: entry.conversations.filter((conversation) => conversation.id !== conversationId),
+      }));
+      if (event.kind !== "upsert" || !event.conversation.project || !rendered) return withoutConversation;
+      const projectIndex = withoutConversation.findIndex((entry) => entry.id === event.conversation.project!.id);
+      if (projectIndex < 0) return [...withoutConversation, { ...event.conversation.project, conversations: [rendered] }];
+      return withoutConversation.map((entry, index) => index === projectIndex
+        ? { ...entry, ...event.conversation.project, conversations: [rendered, ...entry.conversations] }
+        : entry);
+    });
+    setProject((current) => {
+      if (!current) return current;
+      const remaining = current.conversations.filter((conversation) => conversation.id !== conversationId);
+      return event.kind === "upsert" && event.conversation.project?.id === current.id && rendered
+        ? { ...current, ...event.conversation.project, conversations: [rendered, ...remaining] }
+        : { ...current, conversations: remaining };
+    });
+
+    if (event.kind !== "delete") return;
+    setConversationTurns((current) => {
+      if (!(conversationId in current)) return current;
+      const next = { ...current };
+      delete next[conversationId];
+      return next;
+    });
+    setConversationContexts((current) => {
+      if (!(conversationId in current)) return current;
+      const next = { ...current };
+      delete next[conversationId];
+      return next;
+    });
+    if (selectedConversationIdRef.current === conversationId) {
+      openConversationRequestRef.current += 1;
+      selectedConversationIdRef.current = null;
+      setSelectedConversationId(null);
+      setTurns([]);
+      setPrompt("");
+      setContextUsage(undefined);
+    }
+  }
+
   function applyConversationHistory(history: ConversationHistoryItem[], append: boolean) {
     const nextConversations = history.filter((item) => !item.project).map((item) => historyConversation(item, t, locale));
     setConversations((current) => append
@@ -358,16 +426,17 @@ export function App() {
     if (!window.piDesktop || typeof window.piDesktop.agent.listConversations !== "function") return;
     const query = conversationHistoryQueryRef.current;
     const request = ++conversationHistoryRequestRef.current;
+    const updateSequence = conversationHistoryUpdateSequenceRef.current;
     try {
       if (typeof window.piDesktop.agent.listConversationPage === "function") {
         const page = await window.piDesktop.agent.listConversationPage({ limit: 100, query: query || undefined });
         if (request !== conversationHistoryRequestRef.current) return;
-        applyConversationHistory(page.items, false);
+        applyConversationHistory(replayConversationUpdates(page.items, conversationHistoryUpdatesRef.current, updateSequence, query), false);
         setConversationHistoryCursor(page.nextCursor);
       } else {
         const history = await window.piDesktop.agent.listConversations();
         if (request !== conversationHistoryRequestRef.current) return;
-        applyConversationHistory(history, false);
+        applyConversationHistory(replayConversationUpdates(history, conversationHistoryUpdatesRef.current, updateSequence, query), false);
         setConversationHistoryCursor(undefined);
       }
     } catch (error) {
@@ -378,11 +447,13 @@ export function App() {
   async function loadMoreConversationHistory() {
     if (!conversationHistoryCursor || conversationHistoryLoadingMore || !window.piDesktop?.agent.listConversationPage) return;
     const query = conversationHistoryQueryRef.current;
+    const request = ++conversationHistoryRequestRef.current;
+    const updateSequence = conversationHistoryUpdateSequenceRef.current;
     setConversationHistoryLoadingMore(true);
     try {
       const page = await window.piDesktop.agent.listConversationPage({ cursor: conversationHistoryCursor, limit: 100, query: query || undefined });
-      if (query !== conversationHistoryQueryRef.current) return;
-      applyConversationHistory(page.items, true);
+      if (request !== conversationHistoryRequestRef.current || query !== conversationHistoryQueryRef.current) return;
+      applyConversationHistory(replayConversationUpdates(page.items, conversationHistoryUpdatesRef.current, updateSequence, query), true);
       setConversationHistoryCursor(page.nextCursor);
     } catch (error) {
       setNotice({ title: t("无法读取更多会话"), message: eventError(error), type: "info" });
@@ -396,10 +467,11 @@ export function App() {
     conversationHistoryQueryRef.current = normalized;
     if (!window.piDesktop?.agent.listConversationPage) return;
     const request = ++conversationHistoryRequestRef.current;
+    const updateSequence = conversationHistoryUpdateSequenceRef.current;
     try {
       const page = await window.piDesktop.agent.listConversationPage({ limit: 100, query: normalized || undefined });
       if (request !== conversationHistoryRequestRef.current) return;
-      applyConversationHistory(page.items, false);
+      applyConversationHistory(replayConversationUpdates(page.items, conversationHistoryUpdatesRef.current, updateSequence, normalized), false);
       setConversationHistoryCursor(page.nextCursor);
     } catch (error) {
       if (request === conversationHistoryRequestRef.current) {
@@ -458,6 +530,7 @@ export function App() {
   }
 
   function startNewChat() {
+    openConversationRequestRef.current += 1;
     if (selectedConversationId) {
       setConversationContexts((current) => ({ ...current, [selectedConversationId]: contextUsage }));
     }
@@ -466,11 +539,13 @@ export function App() {
     setProject(null);
     setWorkspaceTrust(undefined);
     setSelectedConversationId(null);
+    selectedConversationIdRef.current = null;
     setContextUsage(undefined);
     void resetConversation();
   }
 
   function startProjectChat(nextProject: Project) {
+    openConversationRequestRef.current += 1;
     if (selectedConversationId) {
       setConversationContexts((current) => ({ ...current, [selectedConversationId]: contextUsage }));
     }
@@ -479,28 +554,18 @@ export function App() {
     setProject(projects.find((entry) => entry.id === nextProject.id) ?? nextProject);
     void refreshWorkspaceTrust(nextProject.path);
     setSelectedConversationId(null);
+    selectedConversationIdRef.current = null;
     setContextUsage(undefined);
     void resetConversation();
   }
 
-  async function renameConversation(conversationId: string, title: string, scopeProject?: Project) {
+  async function renameConversation(conversationId: string, title: string, _scopeProject?: Project) {
     if (!window.piDesktop?.agent.renameConversation) {
       setNotice({ title: t("无法重命名会话"), message: t("请完全退出并重新启动新版 Pi Desktop。"), type: "info" });
       throw new Error("会话重命名接口不可用。");
     }
     try {
       await window.piDesktop.agent.renameConversation(conversationId, title);
-      const rename = (conversation: Conversation) => conversation.id === conversationId ? { ...conversation, title } : conversation;
-      if (scopeProject) {
-        setProjects((current) => current.map((entry) => entry.id === scopeProject.id
-          ? { ...entry, conversations: entry.conversations.map(rename) }
-          : entry));
-        setProject((current) => current?.id === scopeProject.id
-          ? { ...current, conversations: current.conversations.map(rename) }
-          : current);
-      } else {
-        setConversations((current) => current.map(rename));
-      }
       setNotice({ title: t("会话已重命名"), message: title, type: "success" });
     } catch (error) {
       setNotice({ title: t("无法重命名会话"), message: eventError(error), type: "info" });
@@ -512,7 +577,6 @@ export function App() {
     if (!window.piDesktop?.agent.forkConversation) return;
     try {
       const fork = await window.piDesktop.agent.forkConversation(conversationId, entryId);
-      await refreshConversationHistory();
       const forkProject = fork.project ? { ...fork.project, conversations: [] } : scopeProject;
       await openConversation(fork.id, forkProject);
       setNotice({ title: t("会话 Fork 已创建"), message: entryId ? t("已从选定消息节点创建独立会话。") : t("已复制完整上下文到独立会话。"), type: "success" });
@@ -541,7 +605,6 @@ export function App() {
     if (!window.piDesktop?.agent.setConversationArchived) return;
     try {
       await window.piDesktop.agent.setConversationArchived(conversationId, archived);
-      await refreshConversationHistory();
       setNotice({ title: t(archived ? "会话已归档" : "会话已恢复"), message: t(archived ? "可在侧栏的已归档区域找到。" : "会话已回到原分组。"), type: "success" });
     } catch (error) {
       setNotice({ title: t("无法更新归档状态"), message: eventError(error), type: "info" });
@@ -552,43 +615,19 @@ export function App() {
     if (!window.piDesktop?.agent.setConversationTags) return;
     try {
       await window.piDesktop.agent.setConversationTags(conversationId, tags);
-      await refreshConversationHistory();
       setNotice({ title: t("会话标签已更新"), message: tags.join("、") || t("已清空标签"), type: "success" });
     } catch (error) {
       setNotice({ title: t("无法更新会话标签"), message: eventError(error), type: "info" });
     }
   }
 
-  async function deleteConversation(conversationId: string, scopeProject?: Project) {
+  async function deleteConversation(conversationId: string, _scopeProject?: Project) {
     if (!window.piDesktop?.agent.deleteConversation) {
       setNotice({ title: t("无法删除会话"), message: t("请完全退出并重新启动新版 Pi Desktop。"), type: "info" });
       return;
     }
     try {
       await window.piDesktop.agent.deleteConversation(conversationId);
-      const remove = (conversation: Conversation) => conversation.id !== conversationId;
-      setConversations((current) => current.filter(remove));
-      setProjects((current) => current.map((entry) => ({ ...entry, conversations: entry.conversations.filter(remove) })));
-      setProject((current) => current && scopeProject?.id === current.id
-        ? { ...current, conversations: current.conversations.filter(remove) }
-        : current);
-      setConversationTurns((current) => {
-        const next = { ...current };
-        delete next[conversationId];
-        return next;
-      });
-      setConversationContexts((current) => {
-        const next = { ...current };
-        delete next[conversationId];
-        return next;
-      });
-      if (selectedConversationId === conversationId) {
-        setSelectedConversationId(null);
-        setTurns([]);
-        setPrompt("");
-        setContextUsage(undefined);
-        if (!scopeProject) setProject(null);
-      }
       setNotice({ title: t("会话已删除"), message: t("本地会话历史已删除。"), type: "success" });
     } catch (error) {
       setNotice({ title: t("无法删除会话"), message: eventError(error), type: "info" });
@@ -600,6 +639,7 @@ export function App() {
   }
 
   async function openConversation(conversationId: string, nextProject?: Project) {
+    const request = ++openConversationRequestRef.current;
     closeBuiltInBrowser();
     if (conversationId === selectedConversationId) {
       setView("chat");
@@ -610,8 +650,10 @@ export function App() {
     }
     if (isRunning) await window.piDesktop?.agent.abort();
     await window.piDesktop?.agent.reset();
+    if (request !== openConversationRequestRef.current) return;
     setView("chat");
     setSelectedConversationId(conversationId);
+    selectedConversationIdRef.current = conversationId;
     setProject(nextProject ? projects.find((entry) => entry.id === nextProject.id) ?? nextProject : null);
     void refreshWorkspaceTrust(nextProject?.path);
     setPrompt("");
@@ -627,6 +669,7 @@ export function App() {
     }
     try {
       const history = await window.piDesktop.agent.loadConversation(conversationId);
+      if (!isCurrentConversationRequest(request, openConversationRequestRef.current, conversationId, selectedConversationIdRef.current)) return;
       const restoredTurns = Array.isArray(history.turns) ? history.turns.map(normalizeHistoryTurn) : [];
       const restoredContext = normalizeContextUsage(history.contextUsage);
       setConversationTurns((current) => ({ ...current, [conversationId]: restoredTurns }));
@@ -634,6 +677,7 @@ export function App() {
       setTurns(restoredTurns);
       setContextUsage(restoredContext);
     } catch (error) {
+      if (!isCurrentConversationRequest(request, openConversationRequestRef.current, conversationId, selectedConversationIdRef.current)) return;
       setTurns([]);
       setNotice({ title: t("无法打开会话"), message: eventError(error), type: "info" });
     }
@@ -1101,6 +1145,12 @@ export function App() {
     });
   }
 
+  function openWorkspaceFile(cwd: string, reference: string) {
+    void window.piDesktop?.workspace.openFile(cwd, reference).catch((error: unknown) => {
+      setNotice({ title: t("无法打开工作区文件"), message: eventError(error), type: "info" });
+    });
+  }
+
   async function logoutProvider(providerId: string) {
     if (!window.piDesktop?.auth) throw new Error("OAuth 模块尚未加载，请重新启动 Pi Desktop。");
     await window.piDesktop.auth.logout(providerId);
@@ -1207,6 +1257,7 @@ export function App() {
                   onOpenContextBudget={() => { setSettingsSection("context-budget"); setView("settings"); }}
                   onOpenLink={openBuiltInBrowser}
                   onOpenExternalLink={openExternalBrowser}
+                  onOpenWorkspaceFile={openWorkspaceFile}
                   onResourcesChanged={() => setResourceProfileRevision((current) => current + 1)}
                   onResolvePlanReview={resolvePlanReview}
                   onModelChange={(providerId, modelId) => void selectChatModel(providerId, modelId)}

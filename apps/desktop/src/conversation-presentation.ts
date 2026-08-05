@@ -2,14 +2,49 @@ import type { ChatTurn } from "./types.js";
 
 export const conversationFollowThreshold = 80;
 
-export function safeMarkdownHref(href: string | undefined): string | null {
+/**
+ * React.memo's default shallow comparison is the desired contract for a turn:
+ * immutable turn data may be reused, but a newly-bound action callback must
+ * never leave the rendered turn invoking a stale conversation handler.
+ */
+export function conversationTurnPropsEqual(previous: object, next: object): boolean {
+  if (previous === next) return true;
+  const previousRecord = previous as Record<string, unknown>;
+  const nextRecord = next as Record<string, unknown>;
+  const previousKeys = Object.keys(previousRecord);
+  const nextKeys = Object.keys(nextRecord);
+  return previousKeys.length === nextKeys.length
+    && previousKeys.every((key) => Object.is(previousRecord[key], nextRecord[key]));
+}
+
+export type SafeMarkdownTarget =
+  | { kind: "web"; href: string }
+  | { kind: "workspace-file"; reference: string };
+
+export function safeMarkdownTarget(href: string | undefined): SafeMarkdownTarget | null {
   if (!href) return null;
+  const reference = href.trim();
+  if (!reference || /[\0\r\n]/.test(reference)) return null;
+  if (/^[a-z]:[\\/]/i.test(reference)) return { kind: "workspace-file", reference };
   try {
-    const parsed = new URL(href);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
-  } catch {
+    const parsed = new URL(reference);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return { kind: "web", href: parsed.href };
+    }
+    if (parsed.protocol === "file:") return { kind: "workspace-file", reference };
     return null;
+  } catch {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(reference)
+      || reference.startsWith("//")
+      || reference.startsWith("#")
+      || reference.startsWith("?")) return null;
+    return { kind: "workspace-file", reference };
   }
+}
+
+export function safeMarkdownHref(href: string | undefined): string | null {
+  const target = safeMarkdownTarget(href);
+  return target?.kind === "web" ? target.href : null;
 }
 
 export function isNearConversationBottom(

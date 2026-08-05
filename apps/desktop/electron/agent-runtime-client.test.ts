@@ -114,10 +114,30 @@ afterEach(() => {
 
 describe("AgentRuntimeClient", () => {
   it("rejects ready when the worker protocol version mismatches", async () => {
-    const client = createClient();
-    emitReady(lastChild(), agentRuntimeProtocolVersion + 1);
+    const events: AgentEvent[] = [];
+    const client = createClient(events);
+    const child = lastChild();
+    const catalog = client.getModelCatalog();
+    emitReady(child, agentRuntimeProtocolVersion + 1);
 
-    await expect(client.getModelCatalog()).rejects.toThrow("协议版本不兼容");
+    await expect(catalog).rejects.toThrow("协议版本不兼容");
+    expect(child.connected).toBe(false);
+    expect(events).toContainEqual({ type: "runtime.status", status: "unresponsive" });
+  });
+
+  it("stops a worker that does not complete startup before the deadline", async () => {
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const client = createClient(events, { startupTimeoutMs: 100 });
+    const child = lastChild();
+    const catalog = client.getModelCatalog();
+    const rejected = catalog.catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    await expect(rejected).resolves.toEqual(expect.objectContaining({ message: expect.stringContaining("启动超时") }));
+    expect(child.connected).toBe(false);
+    expect(events).toContainEqual({ type: "runtime.status", status: "unresponsive" });
   });
 
   it("rejects pending requests when the child exits", async () => {
@@ -268,6 +288,33 @@ describe("AgentRuntimeClient", () => {
     await expect(client.listConversations()).rejects.toThrow("无响应");
   });
 
+  it("interrupts and exposes recovery for an active run after heartbeat loss", async () => {
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const client = createClient(events, { heartbeatIntervalMs: 100, heartbeatMissLimit: 3 });
+    const child = lastChild();
+    emitReady(child);
+
+    const sending = client.send("long task", "/tmp/workspace", "conversation-1");
+    await vi.advanceTimersByTimeAsync(0);
+    const request = lastRequest(child);
+    child.emit("message", { kind: "runtime.response", id: request.id, result: "run-heartbeat" });
+    await expect(sending).resolves.toBe("run-heartbeat");
+
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(client.isRunning()).toBe(false);
+    expect(events).toContainEqual({
+      type: "run.error",
+      runId: "run-heartbeat",
+      message: expect.stringContaining("心跳连续超时"),
+    });
+    expect(events).toContainEqual({ type: "runtime.status", status: "unresponsive" });
+    expect(client.listRecoveries()).toEqual([
+      expect.objectContaining({ runId: "run-heartbeat", status: "interrupted" }),
+    ]);
+  });
+
   it("stops the worker when send acknowledgement times out to prevent a late task", async () => {
     vi.useFakeTimers();
     const events: AgentEvent[] = [];
@@ -363,6 +410,32 @@ describe("AgentRuntimeClient", () => {
     expect(forkMock.mock.calls.length).toBe(2);
     emitReady(lastChild());
     await restarting;
+  });
+
+  it("ignores late ready messages and events from a previous worker after restart", async () => {
+    const events: AgentEvent[] = [];
+    const client = createClient(events);
+    const first = lastChild();
+    emitReady(first);
+
+    let restarted = false;
+    const restarting = client.restart().then(() => {
+      restarted = true;
+    });
+    const second = lastChild();
+    expect(second).not.toBe(first);
+
+    emitReady(first);
+    first.emit("message", { kind: "runtime.event", event: { type: "run.started", runId: "stale-run", conversationId: "c-1", provider: "openai", model: "gpt-test", cwd: "/tmp" } });
+    await Promise.resolve();
+
+    expect(restarted).toBe(false);
+    expect(client.isRunning()).toBe(false);
+    expect(events).toEqual([]);
+
+    emitReady(second);
+    await restarting;
+    expect(restarted).toBe(true);
   });
 
   it("aborts in-flight host requests on host.cancel", async () => {

@@ -73,7 +73,7 @@ export const contextBudgetRequestSchema = Type.Object({
 }, { additionalProperties: false });
 
 export const conversationListQuerySchema = Type.Object({
-  cursor: Type.Optional(Type.String({ pattern: "^[0-9]+$", maxLength: 16 })),
+  cursor: Type.Optional(Type.String({ pattern: "^(?:[0-9]{1,16}|v1:[A-Za-z0-9_-]{1,512})$", maxLength: 515 })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
   query: Type.Optional(Type.String({ maxLength: 500 })),
   archived: Type.Optional(Type.Boolean()),
