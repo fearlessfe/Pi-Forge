@@ -6,7 +6,7 @@ import { PluginCenterView } from "./components/PluginCenterView";
 import { SettingsView } from "./components/SettingsView";
 import { BrowserWorkbench } from "./components/BrowserWorkbench";
 import type { AgentEvent, AgentRuntimeStatus, AppearanceTheme, AuthEvent, ContextBudgetReport, ContextUsageInfo, ConversationHistoryItem, ConversationUpdatedEvent, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, PlanReviewArtifact, ProviderCatalogEntry, QueuedMessages, ResolvePlanReviewInput, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
-import { applyAgentEvent, applyAgentEvents, isStreamingAgentEvent } from "./agent-event-state";
+import { applyAgentEvents, isStreamingAgentEvent } from "./agent-event-state";
 import { conversationMatchesQuery, isCurrentConversationRequest, replayConversationUpdates, type SequencedConversationUpdate } from "./conversation-updates";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { conversationStreamingBatchDelayMs } from "./conversation-window";
@@ -20,6 +20,8 @@ type Notice = {
   message: string;
   type: "success" | "info";
 };
+
+type ConversationRunStatus = "running" | "queued" | "failed";
 
 /* notice 是运行期按类型拼接的动态语义类，基础类与修饰类保留在 styles.css 定制层
    （docs-internal/design-refresh-apple.md 3.5 规则 2），此处用静态映射代替字符串拼接。 */
@@ -129,6 +131,10 @@ export function App() {
   const conversationHistoryUpdatesRef = useRef<SequencedConversationUpdate[]>([]);
   const [conversationTurns, setConversationTurns] = useState<Record<string, ChatTurn[]>>({});
   const [conversationContexts, setConversationContexts] = useState<Record<string, ContextUsageInfo | undefined>>({});
+  const [conversationQueues, setConversationQueues] = useState<Record<string, QueuedMessages>>({});
+  const [conversationPlanReviews, setConversationPlanReviews] = useState<Record<string, PlanReviewArtifact[]>>({});
+  const [conversationRuntimeStatuses, setConversationRuntimeStatuses] = useState<Record<string, AgentRuntimeStatus>>({});
+  const [conversationRunStatuses, setConversationRunStatuses] = useState<Record<string, ConversationRunStatus>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [searchRequest, setSearchRequest] = useState(0);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
@@ -150,6 +156,8 @@ export function App() {
   const [composerAttachments, setComposerAttachments] = useState<ComposerAttachments>(emptyComposerAttachments);
   const [commandRunning, setCommandRunning] = useState(false);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const turnsRef = useRef<ChatTurn[]>([]);
+  turnsRef.current = turns;
   const [notice, setNotice] = useState<Notice | null>(null);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
   const queuedTurnSequence = useRef(0);
@@ -157,7 +165,8 @@ export function App() {
   const [browserOpen, setBrowserOpen] = useState(false);
   const [runtimeRecoveries, setRuntimeRecoveries] = useState<RuntimeRecoveryInfo[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<AgentRuntimeStatus>("running");
-  const runtimeUnavailable = runtimeStatus !== "running";
+  const selectedRuntimeStatus = selectedConversationId ? conversationRuntimeStatuses[selectedConversationId] ?? runtimeStatus : runtimeStatus;
+  const runtimeUnavailable = selectedRuntimeStatus !== "running";
   const resolvedTheme: AppearanceTheme = theme === "system" ? systemTheme : theme;
   const nativeMaterial = window.piDesktop?.appearance.nativeMaterial === true;
 
@@ -225,12 +234,33 @@ export function App() {
     void refreshRuntimeRecoveries();
     let streamingTimer: number | undefined;
     const streamingEvents: AgentEvent[] = [];
+    const conversationIdForEvent = (event: AgentEvent): string | undefined => {
+      if (event.type === "conversation.updated") return undefined;
+      if ("conversationId" in event && typeof event.conversationId === "string") return event.conversationId;
+      if ((event.type === "plan.review.requested" || event.type === "plan.review.resolved") && event.review.conversationId) return event.review.conversationId;
+      return undefined;
+    };
+    const applyRoutedEvents = (events: AgentEvent[]) => {
+      const grouped = new Map<string, AgentEvent[]>();
+      for (const event of events) {
+        const conversationId = conversationIdForEvent(event);
+        if (!conversationId) continue;
+        grouped.set(conversationId, [...(grouped.get(conversationId) ?? []), event]);
+      }
+      for (const [conversationId, batch] of grouped) {
+        setConversationTurns((current) => ({
+          ...current,
+          [conversationId]: applyAgentEvents(current[conversationId] ?? (selectedConversationIdRef.current === conversationId ? turnsRef.current : []), batch),
+        }));
+        if (selectedConversationIdRef.current === conversationId) setTurns((current) => applyAgentEvents(current, batch));
+      }
+    };
     const flushStreamingEvents = () => {
       if (streamingTimer !== undefined) window.clearTimeout(streamingTimer);
       streamingTimer = undefined;
       if (streamingEvents.length === 0) return;
       const batch = streamingEvents.splice(0);
-      setTurns((current) => applyAgentEvents(current, batch));
+      applyRoutedEvents(batch);
     };
     const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => {
       if (isStreamingAgentEvent(event)) {
@@ -239,16 +269,38 @@ export function App() {
         return;
       }
       flushStreamingEvents();
-      if (event.type === "runtime.status") setRuntimeStatus(event.status);
-      if (event.type === "context.updated") setContextUsage(event.usage);
-      if (event.type === "queue.updated") setQueuedMessages(event.queue);
-      if (event.type === "conversation.updated") recordConversationUpdate(event);
-      if (event.type === "plan.review.requested" || event.type === "plan.review.resolved") {
-        setPlanReviews((current) => [event.review, ...current.filter((review) => review.id !== event.review.id)]);
+      const conversationId = conversationIdForEvent(event);
+      if (event.type === "runtime.status") {
+        if (conversationId) setConversationRuntimeStatuses((current) => ({ ...current, [conversationId]: event.status }));
+        else setRuntimeStatus(event.status);
       }
-      setTurns((current) => applyAgentEvent(current, event));
+      if (event.type === "context.updated" && conversationId) {
+        setConversationContexts((current) => ({ ...current, [conversationId]: event.usage }));
+        if (selectedConversationIdRef.current === conversationId) setContextUsage(event.usage);
+      }
+      if (event.type === "queue.updated" && conversationId) {
+        setConversationQueues((current) => ({ ...current, [conversationId]: event.queue }));
+        if (selectedConversationIdRef.current === conversationId) setQueuedMessages(event.queue);
+        if (event.queue.steering.length + event.queue.followUp.length > 0) setConversationRunStatuses((current) => ({ ...current, [conversationId]: "queued" }));
+      }
+      if (event.type === "conversation.updated") recordConversationUpdate(event);
+      if ((event.type === "plan.review.requested" || event.type === "plan.review.resolved") && conversationId) {
+        setConversationPlanReviews((current) => ({ ...current, [conversationId]: [event.review, ...(current[conversationId] ?? []).filter((review) => review.id !== event.review.id)] }));
+        if (selectedConversationIdRef.current === conversationId) setPlanReviews((current) => [event.review, ...current.filter((review) => review.id !== event.review.id)]);
+      }
+      applyRoutedEvents([event]);
+      if (event.type === "run.started") setConversationRunStatuses((current) => ({ ...current, [event.conversationId]: "running" }));
       if (event.type === "run.completed" || event.type === "run.error" || event.type === "run.stopped") {
-        setQueuedMessages({ steering: [], followUp: [] });
+        if (conversationId) {
+          setConversationQueues((current) => ({ ...current, [conversationId]: { steering: [], followUp: [] } }));
+          setConversationRunStatuses((current) => {
+            const next = { ...current };
+            if (event.type === "run.error") next[conversationId] = "failed";
+            else delete next[conversationId];
+            return next;
+          });
+          if (selectedConversationIdRef.current === conversationId) setQueuedMessages({ steering: [], followUp: [] });
+        }
         void refreshRuntimeRecoveries();
       }
     });
@@ -282,8 +334,12 @@ export function App() {
       return;
     }
     let cancelled = false;
+    setPlanReviews(conversationPlanReviews[selectedConversationId] ?? []);
     void window.piDesktop.agent.listPlanReviews(selectedConversationId).then((reviews) => {
-      if (!cancelled) setPlanReviews(reviews);
+      if (!cancelled) {
+        setConversationPlanReviews((current) => ({ ...current, [selectedConversationId]: reviews }));
+        setPlanReviews(reviews);
+      }
     }).catch(() => {
       if (!cancelled) setPlanReviews([]);
     });
@@ -371,6 +427,21 @@ export function App() {
         : { ...current, conversations: remaining };
     });
 
+    if (event.kind === "upsert" && event.conversation.archived) {
+      setConversationQueues((current) => ({ ...current, [conversationId]: { steering: [], followUp: [] } }));
+      setConversationRunStatuses((current) => {
+        const next = { ...current };
+        delete next[conversationId];
+        return next;
+      });
+      setConversationRuntimeStatuses((current) => {
+        const next = { ...current };
+        delete next[conversationId];
+        return next;
+      });
+      if (selectedConversationIdRef.current === conversationId) setQueuedMessages({ steering: [], followUp: [] });
+      return;
+    }
     if (event.kind !== "delete") return;
     setConversationTurns((current) => {
       if (!(conversationId in current)) return current;
@@ -379,6 +450,30 @@ export function App() {
       return next;
     });
     setConversationContexts((current) => {
+      if (!(conversationId in current)) return current;
+      const next = { ...current };
+      delete next[conversationId];
+      return next;
+    });
+    setConversationQueues((current) => {
+      if (!(conversationId in current)) return current;
+      const next = { ...current };
+      delete next[conversationId];
+      return next;
+    });
+    setConversationPlanReviews((current) => {
+      if (!(conversationId in current)) return current;
+      const next = { ...current };
+      delete next[conversationId];
+      return next;
+    });
+    setConversationRuntimeStatuses((current) => {
+      if (!(conversationId in current)) return current;
+      const next = { ...current };
+      delete next[conversationId];
+      return next;
+    });
+    setConversationRunStatuses((current) => {
       if (!(conversationId in current)) return current;
       const next = { ...current };
       delete next[conversationId];
@@ -518,10 +613,11 @@ export function App() {
     : undefined);
 
   async function resetConversation() {
-    if (isRunning) await window.piDesktop?.agent.abort();
-    await window.piDesktop?.agent.reset();
     setTurns([]);
     setPrompt("");
+    setQueuedMessages({ steering: [], followUp: [] });
+    setPlanReviews([]);
+    await refreshModelSettings();
   }
 
   function closeBuiltInBrowser() {
@@ -646,8 +742,6 @@ export function App() {
     if (selectedConversationId) {
       setConversationContexts((current) => ({ ...current, [selectedConversationId]: contextUsage }));
     }
-    if (isRunning) await window.piDesktop?.agent.abort();
-    await window.piDesktop?.agent.reset();
     if (request !== openConversationRequestRef.current) return;
     setView("chat");
     setSelectedConversationId(conversationId);
@@ -655,6 +749,20 @@ export function App() {
     setProject(nextProject ? projects.find((entry) => entry.id === nextProject.id) ?? nextProject : null);
     void refreshWorkspaceTrust(nextProject?.path);
     setPrompt("");
+    setQueuedMessages(conversationQueues[conversationId] ?? { steering: [], followUp: [] });
+    setPlanReviews(conversationPlanReviews[conversationId] ?? []);
+    if (window.piDesktop?.agent.getProfile) {
+      void window.piDesktop.agent.getProfile(conversationId, nextProject?.path).then((profile) => {
+        if (!isCurrentConversationRequest(request, openConversationRequestRef.current, conversationId, selectedConversationIdRef.current)) return;
+        setModelSettings((current) => ({
+          ...current,
+          provider: profile.provider,
+          baseUrl: profile.baseUrl,
+          modelId: profile.modelId,
+          thinkingLevel: profile.thinkingLevel,
+        }));
+      }).catch(() => undefined);
+    }
     const cachedTurns = conversationTurns[conversationId];
     if (cachedTurns) {
       setTurns(cachedTurns);
@@ -723,6 +831,7 @@ export function App() {
       searchText: question,
     };
     setSelectedConversationId(conversationId);
+    selectedConversationIdRef.current = conversationId;
     if (project) {
       setProjects((current) => {
         const existing = current.find((entry) => entry.id === project.id);
@@ -760,6 +869,7 @@ export function App() {
     }
     const wasNewConversation = !selectedConversationId;
     const conversationId = ensureConversation(question);
+    setConversationRunStatuses((current) => ({ ...current, [conversationId]: "running" }));
     const id = `${Date.now()}-${turns.length}`;
     const turnAttachments = turnAttachmentsOf(composerAttachments);
     setTurns((current) => [...current, {
@@ -790,6 +900,7 @@ export function App() {
       });
       setTurns((current) => current.map((turn) => turn.id === id && !turn.runId ? { ...turn, runId } : turn));
     } catch (error) {
+      setConversationRunStatuses((current) => ({ ...current, [conversationId]: "failed" }));
       setTurns((current) => current.map((turn) => turn.id === id
         ? { ...turn, status: "error", error: eventError(error) }
         : turn));
@@ -882,22 +993,23 @@ export function App() {
   async function retryRuntime() {
     if (!window.piDesktop?.agent.retryRuntime) return;
     try {
-      await window.piDesktop.agent.retryRuntime();
-      setRuntimeStatus("running");
+      await window.piDesktop.agent.retryRuntime(selectedConversationId ?? undefined);
+      if (selectedConversationId) setConversationRuntimeStatuses((current) => ({ ...current, [selectedConversationId]: "running" }));
+      else setRuntimeStatus("running");
     } catch (error) {
       setNotice({ title: t("无法重启 Agent Runtime"), message: eventError(error), type: "info" });
     }
   }
 
   async function stopAgent() {
-    await window.piDesktop?.agent.abort();
+    if (selectedConversationId) await window.piDesktop?.agent.abort(selectedConversationId);
   }
 
   async function queuePrompt(mode: "steer" | "followUp", promptOverride?: string) {
     const submittedPrompt = promptOverride ?? prompt;
     const images = promptImagesOf(composerAttachments);
     const files = promptFileAttachmentsOf(composerAttachments);
-    if ((!submittedPrompt.trim() && images.length === 0 && files.length === 0) || !window.piDesktop?.agent.queue) return;
+    if ((!submittedPrompt.trim() && images.length === 0 && files.length === 0) || !selectedConversationId || !window.piDesktop?.agent.queue) return;
     const turnId = `queued-${Date.now()}-${queuedTurnSequence.current++}`;
     const turnAttachments = turnAttachmentsOf(composerAttachments);
     setTurns((current) => {
@@ -916,6 +1028,7 @@ export function App() {
     });
     try {
       setQueuedMessages(await window.piDesktop.agent.queue({
+        conversationId: selectedConversationId!,
         prompt: submittedPrompt,
         mode,
         ...(images.length > 0 ? { images } : {}),
@@ -935,7 +1048,8 @@ export function App() {
   async function clearQueuedPrompts() {
     if (!window.piDesktop?.agent.clearQueue) return;
     try {
-      setQueuedMessages(await window.piDesktop.agent.clearQueue());
+      if (!selectedConversationId) return;
+      setQueuedMessages(await window.piDesktop.agent.clearQueue(selectedConversationId));
       setTurns((current) => current.map((turn) => turn.status === "queued"
         ? { ...turn, status: "cancelled" }
         : turn));
@@ -947,7 +1061,8 @@ export function App() {
   async function acceptFileChanges(changeIds?: string[]) {
     if (!window.piDesktop?.agent.acceptChanges) return;
     try {
-      const changes = await window.piDesktop.agent.acceptChanges(changeIds);
+      if (!selectedConversationId) return;
+      const changes = await window.piDesktop.agent.acceptChanges(selectedConversationId, changeIds);
       const runId = changes[0]?.runId;
       if (runId) setTurns((current) => current.map((turn) => turn.runId === runId ? { ...turn, fileChanges: changes } : turn));
       setNotice({ title: t("文件变更已接受"), message: t("该任务的变更将保留在工作区。"), type: "success" });
@@ -959,7 +1074,8 @@ export function App() {
   async function revertFileChanges(changeIds?: string[]) {
     if (!window.piDesktop?.agent.revertChanges) return;
     try {
-      const changes = await window.piDesktop.agent.revertChanges(changeIds);
+      if (!selectedConversationId) return;
+      const changes = await window.piDesktop.agent.revertChanges(selectedConversationId, changeIds);
       const runId = changes[0]?.runId;
       if (runId) setTurns((current) => current.map((turn) => turn.runId === runId ? { ...turn, fileChanges: changes } : turn));
       const conflicts = changes.filter((change) => change.status === "conflict");
@@ -972,7 +1088,8 @@ export function App() {
   }
 
   async function answerQuestion(turnId: string, callId: string, answer: string) {
-    await window.piDesktop?.agent.answerQuestion(callId, answer);
+    if (!selectedConversationId) return;
+    await window.piDesktop?.agent.answerQuestion(selectedConversationId, callId, answer);
     setTurns((current) => current.map((turn) => turn.id === turnId ? {
       ...turn,
       activities: turn.activities.map((activity) => activity.type === "question" && activity.id === callId
@@ -983,7 +1100,8 @@ export function App() {
 
   async function resolvePlanReview(input: ResolvePlanReviewInput) {
     if (!window.piDesktop?.agent.resolvePlanReview) throw new Error(t("计划审阅仅在 Electron 应用中可用。"));
-    const review = await window.piDesktop.agent.resolvePlanReview(input);
+    if (!selectedConversationId) throw new Error("没有选中的会话。");
+    const review = await window.piDesktop.agent.resolvePlanReview(selectedConversationId, input);
     setPlanReviews((current) => [review, ...current.filter((entry) => entry.id !== review.id)]);
     setNotice({
       title: t(input.decision === "approved" ? "计划已批准" : "已要求修改计划"),
@@ -1076,27 +1194,27 @@ export function App() {
   }
 
   async function selectChatModel(providerId: string, modelId: string) {
-    if (!window.piDesktop || isRunning) return;
+    if (!window.piDesktop) return;
     const provider = providerCatalog.find((entry) => entry.id === providerId);
     if (!provider) return;
     try {
-      const startsNewConversation = turns.length > 0;
-      const saved = await window.piDesktop.settings.save({
-        provider: providerId,
-        baseUrl: providerId === modelSettings.provider ? modelSettings.baseUrl : provider.baseUrl,
-        modelId,
-        thinkingLevel: modelSettings.thinkingLevel,
-      });
-      setModelSettings(saved);
-      if (startsNewConversation) {
-        setTurns([]);
-        setPrompt("");
-        setSelectedConversationId(null);
-        setContextUsage(undefined);
+      const baseUrl = providerId === modelSettings.provider ? modelSettings.baseUrl : provider.baseUrl;
+      if (selectedConversationId) {
+        const current = await window.piDesktop.agent.getProfile(selectedConversationId, project?.path);
+        const saved = await window.piDesktop.agent.saveProfile({
+          ...current,
+          provider: providerId,
+          baseUrl,
+          modelId,
+          thinkingLevel: modelSettings.thinkingLevel,
+        });
+        setModelSettings((settings) => ({ ...settings, provider: saved.provider, baseUrl: saved.baseUrl, modelId: saved.modelId, thinkingLevel: saved.thinkingLevel }));
+      } else {
+        setModelSettings(await window.piDesktop.settings.save({ provider: providerId, baseUrl, modelId, thinkingLevel: modelSettings.thinkingLevel }));
       }
       setNotice({
         title: t("模型已切换"),
-        message: `${provider.name} · ${modelId}${startsNewConversation ? t("；已开始新对话") : ""}`,
+        message: `${provider.name} · ${modelId}${isRunning ? t("；下一轮生效") : ""}`,
         type: "success",
       });
     } catch (error) {
@@ -1202,7 +1320,8 @@ export function App() {
               onSetConversationArchived={setConversationArchived}
               onSetConversationTags={setConversationTags}
               onDeleteConversation={deleteConversation}
-              conversationActionsDisabled={isRunning}
+              conversationActionsDisabled={false}
+              conversationStatuses={conversationRunStatuses}
               hasMoreConversations={Boolean(conversationHistoryCursor)}
               loadingMoreConversations={conversationHistoryLoadingMore}
               onLoadMoreConversations={() => void loadMoreConversationHistory()}
@@ -1232,6 +1351,7 @@ export function App() {
                   <button className={`${runtimeBannerButtonClass} w-control-sm justify-center px-0 text-label-3`} type="button" disabled={isRunning} onClick={() => void discardRuntimeRecovery(runtimeRecoveries[0].id)} aria-label={t("丢弃恢复记录")}><Trash2 size={14} /></button>
                 </section>}
                 <NewChatView
+                  conversationId={selectedConversationId}
                   project={project}
                   turns={turns}
                   modelId={modelSettings.modelId}

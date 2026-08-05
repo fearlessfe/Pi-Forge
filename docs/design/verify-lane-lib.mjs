@@ -217,6 +217,19 @@ export function installMockBridge(options = {}) {
       },
     ],
   };
+  const demoConversationProfile = {
+    version: 1,
+    conversationId: demoConversation.id,
+    provider: modelSettings.provider,
+    baseUrl: modelSettings.baseUrl,
+    modelId: modelSettings.modelId,
+    thinkingLevel: modelSettings.thinkingLevel,
+    cwd: demoConversation.cwd,
+    resourceSelectionMode: "inherit",
+    selectedSkills: [],
+    selectedMcpServers: [],
+    updatedAt: now,
+  };
   const performanceMarkdownPrefix = [
     "## PERF-01 long response fixture",
     "",
@@ -445,6 +458,8 @@ export function installMockBridge(options = {}) {
       listConversations: resolve([demoConversation]),
       listConversationPage: resolve({ items: [demoConversation], nextCursor: undefined }),
       loadConversation: resolve(conversationDetail),
+      getProfile: resolve(demoConversationProfile),
+      saveProfile: resolve(demoConversationProfile),
       renameConversation: resolve(undefined),
       forkConversation: resolve(demoConversation),
       exportConversation: resolve({ filename: "demo.md", mimeType: "text/markdown", content: "" }),

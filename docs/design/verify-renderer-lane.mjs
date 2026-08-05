@@ -146,7 +146,7 @@ async function assertPerformanceConversation(page) {
       });
       observer.observe(target, { childList: true, characterData: true, subtree: true });
     });
-    window.piVerify.emitAgentEvent({ type: "message.delta", runId: "mock-run", text: marker });
+    window.piVerify.emitAgentEvent({ type: "message.delta", conversationId: "conv-demo-1", runId: "mock-run", text: marker });
     return rendered;
   });
   if (streamingElapsed > STREAMING_REFRESH_BUDGET_MS) {
@@ -166,7 +166,7 @@ async function assertPerformanceConversation(page) {
         });
         observer.observe(target, { childList: true, characterData: true, subtree: true });
       });
-      window.piVerify.emitAgentEvent({ type: "message.delta", runId: "mock-run", text: marker });
+      window.piVerify.emitAgentEvent({ type: "message.delta", conversationId: "conv-demo-1", runId: "mock-run", text: marker });
       return rendered;
     });
     throw new Error(
@@ -186,7 +186,7 @@ async function assertPerformanceConversation(page) {
     throw new Error(`[PERF-01] 顶部窗口未随视口移动或超限：${topIds.length} turns。`);
   }
   const topBeforeUpdate = await conversationScrollState(page);
-  await page.evaluate(() => window.piVerify?.emitAgentEvent({ type: "message.delta", runId: "mock-run", text: " PERF_UNREAD_MARKER" }));
+  await page.evaluate(() => window.piVerify?.emitAgentEvent({ type: "message.delta", conversationId: "conv-demo-1", runId: "mock-run", text: " PERF_UNREAD_MARKER" }));
   const returnToLatest = page.getByRole("button", { name: /有新内容.*回到最新/ });
   await returnToLatest.waitFor();
   const topAfterUpdate = await conversationScrollState(page);
@@ -218,7 +218,7 @@ async function assertPerformanceConversation(page) {
 
   const liveRegion = page.locator('[aria-label="当前对话"] > [role="status"][aria-live="polite"][aria-atomic="true"]');
   if (await liveRegion.count() !== 1) throw new Error("[UX-01] 当前对话缺少 polite + atomic live region。");
-  await page.evaluate(() => window.piVerify?.emitAgentEvent({ type: "run.completed", runId: "mock-run" }));
+  await page.evaluate(() => window.piVerify?.emitAgentEvent({ type: "run.completed", conversationId: "conv-demo-1", runId: "mock-run" }));
   await liveRegion.getByText("任务已完成").waitFor();
 
   console.log(

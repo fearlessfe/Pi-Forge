@@ -210,8 +210,9 @@ export class McpService {
     return this.connect(key, cwd);
   }
 
-  async tools(cwd?: string): Promise<McpToolDescriptor[]> {
-    const servers = this.servers(cwd).filter((server) => this.effectiveEnabled(server));
+  async tools(cwd?: string, selectedServerKeys?: readonly string[]): Promise<McpToolDescriptor[]> {
+    const selected = selectedServerKeys ? new Set(selectedServerKeys) : undefined;
+    const servers = this.servers(cwd).filter((server) => this.effectiveEnabled(server) && (!selected || selected.has(server.key)));
     await Promise.all(servers.map(async (server) => {
       try {
         await this.connectServer(server, cwd);
@@ -222,8 +223,9 @@ export class McpService {
     return this.toolDescriptors(servers);
   }
 
-  async contextInventory(cwd?: string): Promise<McpContextResource[]> {
-    const servers = this.servers(cwd);
+  async contextInventory(cwd?: string, selectedServerKeys?: readonly string[]): Promise<McpContextResource[]> {
+    const selected = selectedServerKeys ? new Set(selectedServerKeys) : undefined;
+    const servers = this.servers(cwd).filter((server) => !selected || selected.has(server.key));
     const tools = this.toolDescriptors(servers.filter((server) => this.effectiveEnabled(server)));
     return servers.map((server) => ({
       key: server.key,

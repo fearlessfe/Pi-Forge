@@ -463,6 +463,41 @@ describe("AgentRuntimeClient", () => {
     expect(client.isRunning()).toBe(false);
   });
 
+  it("intersects MCP tools with the frozen conversation selection and revalidates calls", async () => {
+    const callTool = vi.fn(async () => ({ text: "ok", details: undefined }));
+    const allowed = { serverKey: "project:allowed", name: "mcp__allowed__read", remoteName: "read", description: "read", inputSchema: { type: "object" } };
+    const blocked = { serverKey: "user:blocked", name: "mcp__blocked__read", remoteName: "read", description: "read", inputSchema: { type: "object" } };
+    const tools = vi.fn(async () => [allowed, blocked]);
+    createClient([], {
+      getActiveProfile: () => ({
+        cwd: "/trusted/project",
+        modelSettings: { provider: "openai", baseUrl: "https://example.com", modelId: "gpt-test", thinkingLevel: "off" },
+        resourceSelectionMode: "custom",
+        selectedSkills: ["safe"],
+        selectedMcpServers: ["project:allowed"],
+      }),
+      mcp: {
+        tools,
+        contextInventory: vi.fn(async () => []),
+        callTool,
+      },
+    });
+    const child = lastChild();
+    emitReady(child);
+
+    child.emit("message", { kind: "host.request", id: "tools", method: "mcp.tools", args: ["/trusted/project"] });
+    await vi.waitFor(() => expect(child.sent).toContainEqual(expect.objectContaining({ kind: "host.response", id: "tools", result: [allowed] })));
+    expect(tools).toHaveBeenCalledWith("/trusted/project", ["project:allowed"]);
+
+    child.emit("message", { kind: "host.request", id: "blocked", method: "mcp.callTool", args: [blocked, {}] });
+    await vi.waitFor(() => expect(child.sent).toContainEqual(expect.objectContaining({ kind: "host.response", id: "blocked", error: expect.objectContaining({ message: expect.stringContaining("未授权") }) })));
+    expect(callTool).not.toHaveBeenCalled();
+
+    child.emit("message", { kind: "host.request", id: "allowed", method: "mcp.callTool", args: [allowed, {}] });
+    await vi.waitFor(() => expect(child.sent).toContainEqual(expect.objectContaining({ kind: "host.response", id: "allowed", result: { text: "ok" } })));
+    expect(callTool).toHaveBeenCalledOnce();
+  });
+
   it("returns host handler errors back to the worker", async () => {
     createClient([], {
       credentials: {

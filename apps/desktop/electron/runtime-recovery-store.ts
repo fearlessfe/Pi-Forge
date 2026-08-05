@@ -88,6 +88,10 @@ export class RuntimeRecoveryStore {
     if (changed) this.persist();
   }
 
+  interruptRecord(id: string, message: string): void {
+    this.update(id, { status: "interrupted", message });
+  }
+
   discard(id: string): void {
     const next = this.records.filter((record) => record.id !== id);
     if (next.length === this.records.length) throw new Error("找不到待恢复任务。");

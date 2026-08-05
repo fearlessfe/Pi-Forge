@@ -23,6 +23,7 @@ import {
   type ResourceSettings,
   type ResolvePlanReviewInput,
   type SaveMcpServerInput,
+  type SaveConversationExecutionProfile,
   type SaveModelSettings,
   type SaveObservabilitySettings,
   type SendPromptInput,
@@ -63,9 +64,22 @@ export const sendPromptInputSchema = Type.Object({
 }, { additionalProperties: false });
 
 export const queuePromptInputSchema = Type.Object({
+  conversationId: Type.String({ minLength: 1, maxLength: 256 }),
   prompt: Type.String({ maxLength: maxPromptCharacters }),
   mode: Type.Union([Type.Literal("steer"), Type.Literal("followUp")]),
   ...promptExtrasProperties,
+}, { additionalProperties: false });
+
+export const conversationExecutionProfileSchema = Type.Object({
+  conversationId: Type.String({ minLength: 1, maxLength: 256 }),
+  provider: Type.String({ minLength: 1, maxLength: 128 }),
+  baseUrl: Type.String({ maxLength: 2048 }),
+  modelId: Type.String({ minLength: 1, maxLength: 256 }),
+  thinkingLevel: Type.Union([Type.Literal("off"), Type.Literal("minimal"), Type.Literal("low"), Type.Literal("medium"), Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max")]),
+  cwd: Type.String({ minLength: 1, maxLength: 4096 }),
+  resourceSelectionMode: Type.Union([Type.Literal("inherit"), Type.Literal("custom")]),
+  selectedSkills: Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { maxItems: 1_000 }),
+  selectedMcpServers: Type.Array(Type.String({ minLength: 1, maxLength: 2048 }), { maxItems: 1_000 }),
 }, { additionalProperties: false });
 
 export const contextBudgetRequestSchema = Type.Object({
@@ -317,6 +331,11 @@ export function requireSendPromptInput(value: unknown): SendPromptInput {
 export function requireQueuePromptInput(value: unknown): QueuePromptInput {
   const input = requireSchema<QueuePromptInput>(queuePromptInputSchema, value, "排队消息字段无效。");
   return { ...input, ...validatePromptExtras(input) };
+}
+
+export function requireConversationExecutionProfile(value: unknown): SaveConversationExecutionProfile {
+  const input = requireSchema<SaveConversationExecutionProfile>(conversationExecutionProfileSchema, value, "会话执行 Profile 无效。");
+  return { ...input, selectedSkills: [...new Set(input.selectedSkills)], selectedMcpServers: [...new Set(input.selectedMcpServers)] };
 }
 
 export function requireContextBudgetRequest(value: unknown): ContextBudgetRequest {

@@ -56,7 +56,8 @@ describe("IPC input validation", () => {
       images: [{ name: "shot.png", mimeType: "image/png" }],
       attachments: [{ name: "notes.md", mimeType: "text/markdown", content: "hello" }],
     });
-    expect(requireQueuePromptInput({ prompt: "continue", mode: "followUp" })).toEqual({
+    expect(requireQueuePromptInput({ conversationId: "conversation-1", prompt: "continue", mode: "followUp" })).toEqual({
+      conversationId: "conversation-1",
       prompt: "continue",
       mode: "followUp",
       images: undefined,

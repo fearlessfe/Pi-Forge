@@ -57,6 +57,7 @@ type ConversationSidebarProps = {
   onSetConversationTags: (conversationId: string, tags: string[]) => Promise<void>;
   onDeleteConversation: (conversationId: string, project?: Project) => Promise<void>;
   conversationActionsDisabled: boolean;
+  conversationStatuses: Record<string, "running" | "queued" | "failed">;
   hasMoreConversations: boolean;
   loadingMoreConversations: boolean;
   onLoadMoreConversations: () => void;
@@ -76,6 +77,7 @@ function ConversationRow({
   project,
   selected,
   actionsDisabled,
+  status,
   onSelect,
   onRename,
   onFork,
@@ -88,6 +90,7 @@ function ConversationRow({
   project?: Project;
   selected: boolean;
   actionsDisabled: boolean;
+  status?: "running" | "queued" | "failed";
   onSelect: () => void;
   onRename: (title: string) => Promise<void>;
   onFork: () => Promise<void>;
@@ -141,7 +144,7 @@ function ConversationRow({
   return (
     <div className={rowClassName}>
       <button className="grid min-h-[37px] min-w-0 cursor-pointer grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-base px-[6px] py-[5px] text-left" type="button" onClick={onSelect}>
-        <MessageSquare size={14} className="text-label-3" />
+        <span className="relative"><MessageSquare size={14} className="text-label-3" />{status && <i className={`absolute -right-1 -bottom-1 size-2 rounded-full border border-bg ${status === "failed" ? "bg-red" : status === "queued" ? "bg-orange" : "bg-green animate-pulse"}`} />}</span>
         <span className="min-w-0">
           <strong className="block truncate text-callout font-medium">{conversation.title}</strong>
           <small className="mt-tight block truncate font-mono text-caption text-label-3">{conversation.tags.length > 0 ? `${conversation.subtitle} · ${conversation.tags.join(" · ")}` : conversation.subtitle}</small>
@@ -208,6 +211,7 @@ function ProjectGroup({
   onSetConversationTags,
   onDeleteConversation,
   conversationActionsDisabled,
+  conversationStatuses,
 }: {
   project: Project;
   forceOpen: boolean;
@@ -221,6 +225,7 @@ function ProjectGroup({
   onSetConversationTags: (conversationId: string, tags: string[]) => Promise<void>;
   onDeleteConversation: (conversationId: string, project: Project) => Promise<void>;
   conversationActionsDisabled: boolean;
+  conversationStatuses: Record<string, "running" | "queued" | "failed">;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(project.conversations.some(({ id }) => id === selectedConversationId));
@@ -264,6 +269,7 @@ function ProjectGroup({
             project={project}
             selected={selectedConversationId === conversation.id}
             actionsDisabled={conversationActionsDisabled}
+            status={conversationStatuses[conversation.id]}
             onSelect={() => onSelectConversation(conversation.id, project)}
             onRename={(title) => onRenameConversation(conversation.id, title, project)}
             onFork={() => onForkConversation(conversation.id, project)}
@@ -296,6 +302,7 @@ export function ConversationSidebar({
   onSetConversationTags,
   onDeleteConversation,
   conversationActionsDisabled,
+  conversationStatuses,
   hasMoreConversations,
   loadingMoreConversations,
   onLoadMoreConversations,
@@ -426,6 +433,7 @@ export function ConversationSidebar({
             conversation={conversation}
             selected={selectedConversationId === conversation.id}
             actionsDisabled={conversationActionsDisabled}
+            status={conversationStatuses[conversation.id]}
             onSelect={() => onSelectConversation(conversation.id)}
             onRename={(title) => onRenameConversation(conversation.id, title)}
             onFork={() => onForkConversation(conversation.id)}
@@ -458,6 +466,7 @@ export function ConversationSidebar({
             onSetConversationTags={onSetConversationTags}
             onDeleteConversation={onDeleteConversation}
             conversationActionsDisabled={conversationActionsDisabled}
+            conversationStatuses={conversationStatuses}
           />
         ))}
         {!normalizedQuery && projects.length === 0 && <p className={`${sidebarEmptyClass} mx-loose mt-tight`}>{t("暂无项目")}</p>}
@@ -468,6 +477,7 @@ export function ConversationSidebar({
           project={project}
           selected={selectedConversationId === conversation.id}
           actionsDisabled={conversationActionsDisabled}
+          status={conversationStatuses[conversation.id]}
           onSelect={() => onSelectConversation(conversation.id, project)}
           onRename={(title) => onRenameConversation(conversation.id, title, project)}
           onFork={() => onForkConversation(conversation.id, project)}

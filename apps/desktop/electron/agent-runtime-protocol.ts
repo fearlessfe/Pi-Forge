@@ -1,6 +1,14 @@
 import type { AgentEvent, RuntimeRecoveryInfo } from "../src/contracts.js";
 
-export const agentRuntimeProtocolVersion = 5;
+export const agentRuntimeProtocolVersion = 6;
+
+export type RuntimeExecutionProfile = {
+  modelSettings: AgentRuntimeInit["modelSettings"];
+  cwd: string;
+  resourceSelectionMode: "inherit" | "custom";
+  selectedSkills: string[];
+  selectedMcpServers: string[];
+};
 
 export type AgentRuntimeInit = {
   protocolVersion: typeof agentRuntimeProtocolVersion;
@@ -15,6 +23,7 @@ export type AgentRuntimeInit = {
     thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
     apiKey?: string;
   };
+  resourceProfile?: Pick<RuntimeExecutionProfile, "resourceSelectionMode" | "selectedSkills" | "selectedMcpServers">;
 };
 
 export type AgentRuntimeMethod =

@@ -313,6 +313,25 @@ export type SaveModelSettings = Omit<ModelSettings, "hasApiKey" | "configuredPro
   apiKey?: string;
 };
 
+/** Persisted per-conversation execution choices. Credentials are deliberately excluded. */
+export type ConversationExecutionProfile = {
+  version: 1;
+  conversationId: string;
+  provider: ProviderId;
+  baseUrl: string;
+  modelId: string;
+  thinkingLevel: ThinkingLevel;
+  cwd: string;
+  resourceSelectionMode: "inherit" | "custom";
+  selectedSkills: string[];
+  selectedMcpServers: string[];
+  updatedAt: string;
+};
+
+export type SaveConversationExecutionProfile = Pick<ConversationExecutionProfile,
+  "conversationId" | "provider" | "baseUrl" | "modelId" | "thinkingLevel" | "cwd" | "resourceSelectionMode" | "selectedSkills" | "selectedMcpServers"
+>;
+
 export type ModelCatalogEntry = {
   id: string;
   name: string;
@@ -520,26 +539,26 @@ export type AgentTraceEvent = {
 export type AgentRuntimeStatus = "running" | "crash-looping" | "unresponsive";
 
 export type AgentEvent =
-  | { type: "runtime.status"; status: AgentRuntimeStatus }
+  | { type: "runtime.status"; status: AgentRuntimeStatus; conversationId?: string }
   | { type: "run.started"; runId: string; conversationId: string; provider: string; model: string; cwd: string }
-  | { type: "user.message.started"; runId: string; message: string }
-  | { type: "message.delta"; runId: string; text: string }
-  | { type: "thinking.delta"; runId: string; text: string }
-  | { type: "tool.started"; runId: string; callId: string; name: string; args: unknown }
-  | { type: "tool.updated"; runId: string; callId: string; name: string; output: string; details?: ToolActivityDetails }
-  | { type: "tool.completed"; runId: string; callId: string; name: string; output: string; isError: boolean; details?: ToolActivityDetails }
-  | { type: "question.requested"; runId: string; callId: string; question: string; options: QuestionOption[] }
-  | { type: "plan.review.requested"; runId: string; review: PlanReviewArtifact }
-  | { type: "plan.review.resolved"; runId: string; review: PlanReviewArtifact }
-  | { type: "response.usage"; runId: string; usage: ResponseUsage }
-  | { type: "context.updated"; runId: string; usage: ContextUsageInfo }
-  | { type: "queue.updated"; runId: string; queue: QueuedMessages }
-  | { type: "changes.updated"; runId: string; changes: TaskFileChange[] }
-  | { type: "agent.event"; runId: string; event: AgentTraceEvent }
+  | { type: "user.message.started"; conversationId?: string; runId: string; message: string }
+  | { type: "message.delta"; conversationId?: string; runId: string; text: string }
+  | { type: "thinking.delta"; conversationId?: string; runId: string; text: string }
+  | { type: "tool.started"; conversationId?: string; runId: string; callId: string; name: string; args: unknown }
+  | { type: "tool.updated"; conversationId?: string; runId: string; callId: string; name: string; output: string; details?: ToolActivityDetails }
+  | { type: "tool.completed"; conversationId?: string; runId: string; callId: string; name: string; output: string; isError: boolean; details?: ToolActivityDetails }
+  | { type: "question.requested"; conversationId?: string; runId: string; callId: string; question: string; options: QuestionOption[] }
+  | { type: "plan.review.requested"; conversationId?: string; runId: string; review: PlanReviewArtifact }
+  | { type: "plan.review.resolved"; conversationId?: string; runId: string; review: PlanReviewArtifact }
+  | { type: "response.usage"; conversationId?: string; runId: string; usage: ResponseUsage }
+  | { type: "context.updated"; conversationId?: string; runId: string; usage: ContextUsageInfo }
+  | { type: "queue.updated"; conversationId?: string; runId: string; queue: QueuedMessages }
+  | { type: "changes.updated"; conversationId?: string; runId: string; changes: TaskFileChange[] }
+  | { type: "agent.event"; conversationId?: string; runId: string; event: AgentTraceEvent }
   | ConversationUpdatedEvent
-  | { type: "run.completed"; runId: string }
-  | { type: "run.stopped"; runId: string }
-  | { type: "run.error"; runId: string; message: string };
+  | { type: "run.completed"; conversationId?: string; runId: string }
+  | { type: "run.stopped"; conversationId?: string; runId: string }
+  | { type: "run.error"; conversationId?: string; runId: string; message: string };
 
 /** 随消息发送的图片附件；data 为不含 data: URL 前缀的 base64。 */
 export type PromptImage = {
@@ -589,6 +608,7 @@ export type SendPromptInput = {
 };
 
 export type QueuePromptInput = {
+  conversationId: string;
   prompt: string;
   mode: "steer" | "followUp";
   images?: PromptImage[];
@@ -967,22 +987,24 @@ export type PiDesktopApi = {
     setConversationArchived(conversationId: string, archived: boolean): Promise<void>;
     setConversationTags(conversationId: string, tags: string[]): Promise<void>;
     deleteConversation(conversationId: string): Promise<void>;
-    abort(): Promise<void>;
+    getProfile(conversationId: string, cwd?: string): Promise<ConversationExecutionProfile>;
+    saveProfile(profile: SaveConversationExecutionProfile): Promise<ConversationExecutionProfile>;
+    abort(conversationId: string): Promise<void>;
     queue(input: QueuePromptInput): Promise<QueuedMessages>;
-    clearQueue(): Promise<QueuedMessages>;
-    listChanges(runId?: string): Promise<TaskFileChange[]>;
-    acceptChanges(changeIds?: string[]): Promise<TaskFileChange[]>;
-    revertChanges(changeIds?: string[]): Promise<TaskFileChange[]>;
-    openChange(changeId: string): Promise<void>;
-    revealChange(changeId: string): Promise<void>;
-    reset(): Promise<void>;
-    answerQuestion(callId: string, answer: string): Promise<void>;
+    clearQueue(conversationId: string): Promise<QueuedMessages>;
+    listChanges(conversationId: string, runId?: string): Promise<TaskFileChange[]>;
+    acceptChanges(conversationId: string, changeIds?: string[]): Promise<TaskFileChange[]>;
+    revertChanges(conversationId: string, changeIds?: string[]): Promise<TaskFileChange[]>;
+    openChange(conversationId: string, changeId: string): Promise<void>;
+    revealChange(conversationId: string, changeId: string): Promise<void>;
+    reset(conversationId: string): Promise<void>;
+    answerQuestion(conversationId: string, callId: string, answer: string): Promise<void>;
     listPlanReviews(conversationId?: string): Promise<PlanReviewArtifact[]>;
-    resolvePlanReview(input: ResolvePlanReviewInput): Promise<PlanReviewArtifact>;
+    resolvePlanReview(conversationId: string, input: ResolvePlanReviewInput): Promise<PlanReviewArtifact>;
     listRecoveries(): Promise<RuntimeRecoveryInfo[]>;
     retryRecovery(id: string): Promise<{ runId: string }>;
     discardRecovery(id: string): Promise<void>;
-    retryRuntime(): Promise<void>;
+    retryRuntime(conversationId?: string): Promise<void>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
   };
 };

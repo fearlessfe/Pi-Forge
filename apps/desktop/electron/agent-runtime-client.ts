@@ -31,6 +31,7 @@ import {
   type HostRequest,
   type HostResponse,
   type RuntimeRecoveryRecord,
+  type RuntimeExecutionProfile,
   type RuntimeRequest,
   type RuntimeResponse,
   type RuntimeToParentMessage,
@@ -56,7 +57,7 @@ function defaultRequestTimeout(method: AgentRuntimeMethod): number {
   return 10_000;
 }
 
-type RuntimeClientOptions = {
+export type RuntimeClientOptions = {
   workerPath: string;
   userDataPath: string;
   agentDir: string;
@@ -73,6 +74,10 @@ type RuntimeClientOptions = {
   heartbeatMissLimit?: number;
   startupTimeoutMs?: number;
   requestTimeoutMs?: Partial<Record<AgentRuntimeMethod, number>>;
+  recoveryStore?: RuntimeRecoveryStore;
+  initialProfile?: RuntimeExecutionProfile;
+  /** Main-owned frozen run scope used to revalidate every privileged MCP call. */
+  getActiveProfile?(): RuntimeExecutionProfile | undefined;
 };
 
 function runtimeError(error: { message: string; stack?: string }): Error {
@@ -94,6 +99,7 @@ export class AgentRuntimeClient {
   private restartTimer?: NodeJS.Timeout;
   private restartAttempt = 0;
   private pendingPrompt?: string;
+  private startingRecoveryId?: string;
   private crashTimestamps: number[] = [];
   private crashLooping = false;
   private unresponsive = false;
@@ -103,7 +109,7 @@ export class AgentRuntimeClient {
   private readyTimer?: NodeJS.Timeout;
 
   constructor(private readonly options: RuntimeClientOptions) {
-    this.recovery = new RuntimeRecoveryStore(options.userDataPath);
+    this.recovery = options.recoveryStore ?? new RuntimeRecoveryStore(options.userDataPath);
     this.start();
   }
 
@@ -122,6 +128,7 @@ export class AgentRuntimeClient {
   async send(prompt: string, cwd?: string, conversationId?: string, extras?: PromptExtras): Promise<string> {
     const input: SendPromptInput = { prompt, cwd, conversationId, images: extras?.images, attachments: extras?.attachments };
     const recovery = this.recovery.begin(input);
+    this.startingRecoveryId = recovery.id;
     this.pendingPrompt = prompt;
     try {
       // extras 仅在有附件时追加，保持旧协议调用的参数形状不变。
@@ -130,9 +137,11 @@ export class AgentRuntimeClient {
       const runId = await this.request<string>("send", ...args);
       this.activeRunId = runId;
       this.recovery.attachRun(recovery.id, runId);
+      this.startingRecoveryId = undefined;
       return runId;
     } catch (error) {
-      this.recovery.interruptRun(undefined, error instanceof Error ? error.message : String(error));
+      this.recovery.interruptRecord(recovery.id, error instanceof Error ? error.message : String(error));
+      this.startingRecoveryId = undefined;
       throw error;
     } finally {
       this.pendingPrompt = undefined;
@@ -175,8 +184,14 @@ export class AgentRuntimeClient {
   reset(): Promise<void> { return this.request("reset"); }
   testConfiguration(input: SaveModelSettings): Promise<string> { return this.request("testConfiguration", input); }
 
-  async updateConfiguration(): Promise<void> {
-    await this.request("updateConfiguration", this.options.settings.resolve());
+  async updateConfiguration(profile?: RuntimeExecutionProfile): Promise<void> {
+    await this.request("updateConfiguration", profile ?? {
+      modelSettings: this.options.settings.resolve(),
+      cwd: this.options.fallbackCwd,
+      resourceSelectionMode: "inherit",
+      selectedSkills: [],
+      selectedMcpServers: [],
+    });
   }
 
   listRecoveries(): RuntimeRecoveryRecord[] {
@@ -227,6 +242,7 @@ export class AgentRuntimeClient {
     this.clearHeartbeat();
     if (this.readyTimer) clearTimeout(this.readyTimer);
     if (this.activeRunId) this.recovery.interruptRun(this.activeRunId, "应用已退出；任务可以在下次启动后继续。");
+    if (this.startingRecoveryId) this.recovery.interruptRecord(this.startingRecoveryId, "应用已退出；任务可以在下次启动后继续。");
     this.stopChild(true);
   }
 
@@ -261,6 +277,7 @@ export class AgentRuntimeClient {
       fallbackCwd: this.options.fallbackCwd,
       sessionDir: this.options.sessionDir,
       modelSettings: this.options.settings.resolve(),
+      resourceProfile: this.options.initialProfile,
     };
     const startupTimeoutMs = this.options.startupTimeoutMs ?? defaultStartupTimeoutMs;
     if (startupTimeoutMs > 0) {
@@ -379,9 +396,32 @@ export class AgentRuntimeClient {
           break;
         }
         case "credential.delete": result = await this.options.credentials.delete(request.args[0] as string); break;
-        case "mcp.tools": result = await this.options.mcp.tools(request.args[0] as string | undefined); break;
-        case "mcp.contextInventory": result = await this.options.mcp.contextInventory(request.args[0] as string | undefined); break;
-        case "mcp.callTool": result = await this.options.mcp.callTool(request.args[0] as McpToolDescriptor, request.args[1] as Record<string, unknown>, controller.signal); break;
+        case "mcp.tools": {
+          const profile = this.options.getActiveProfile?.();
+          const tools = await this.options.mcp.tools(request.args[0] as string | undefined, profile?.resourceSelectionMode === "custom" ? profile.selectedMcpServers : undefined);
+          result = profile?.resourceSelectionMode === "custom" ? tools.filter((tool) => profile.selectedMcpServers.includes(tool.serverKey)) : tools;
+          break;
+        }
+        case "mcp.contextInventory": {
+          const profile = this.options.getActiveProfile?.();
+          const inventory = await this.options.mcp.contextInventory(request.args[0] as string | undefined, profile?.resourceSelectionMode === "custom" ? profile.selectedMcpServers : undefined);
+          result = profile?.resourceSelectionMode === "custom" ? inventory.filter((entry) => profile.selectedMcpServers.includes(entry.key)) : inventory;
+          break;
+        }
+        case "mcp.callTool": {
+          const descriptor = request.args[0] as McpToolDescriptor;
+          const profile = this.options.getActiveProfile?.();
+          if (profile?.resourceSelectionMode === "custom" && !profile.selectedMcpServers.includes(descriptor.serverKey)) throw new Error("当前会话未授权该 MCP Server。");
+          // Fetching the current effective tool list revalidates global/project enablement and trust.
+          if (profile) {
+            const effective = await this.options.mcp.tools(profile.cwd, profile.resourceSelectionMode === "custom" ? profile.selectedMcpServers : undefined);
+            if (!effective.some((tool) => tool.serverKey === descriptor.serverKey && tool.name === descriptor.name && tool.remoteName === descriptor.remoteName)) {
+              throw new Error("MCP 工具已被禁用、项目不受信任或不属于当前会话。");
+            }
+          }
+          result = await this.options.mcp.callTool(descriptor, request.args[1] as Record<string, unknown>, controller.signal);
+          break;
+        }
         case "browser.startAnnotation": result = await this.options.browser.startAnnotation(request.args[0] as string | undefined, request.args[1] as string | undefined, controller.signal); break;
       }
       response = { kind: "host.response", id: request.id, result };
@@ -411,7 +451,9 @@ export class AgentRuntimeClient {
     this.hostRequests.clear();
     const interruptedRunId = this.activeRunId;
     const message = "Agent Runtime 异常退出。任务状态已保存，可在 Runtime 恢复栏中继续。";
-    this.recovery.interruptRun(undefined, message);
+    if (interruptedRunId) this.recovery.interruptRun(interruptedRunId, message);
+    else if (this.startingRecoveryId) this.recovery.interruptRecord(this.startingRecoveryId, message);
+    this.startingRecoveryId = undefined;
     if (interruptedRunId) {
       this.activeRunId = undefined;
       this.options.emit({ type: "run.error", runId: interruptedRunId, message });

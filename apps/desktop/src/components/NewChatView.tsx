@@ -32,7 +32,7 @@ import {
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type ComponentPropsWithoutRef, type DragEvent, type KeyboardEvent } from "react";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { CommandInfo, ContextBudgetReport, ContextUsageInfo, McpOverview, PlanReviewArtifact, ProjectResourceSelection, ProviderCatalogEntry, ProviderId, QueuedMessages, ResolvePlanReviewInput, ResourceInventory, ResponseUsage, TaskFileChange } from "../contracts";
+import type { CommandInfo, ContextBudgetReport, ContextUsageInfo, ConversationExecutionProfile, McpOverview, PlanReviewArtifact, ProjectResourceSelection, ProviderCatalogEntry, ProviderId, QueuedMessages, ResolvePlanReviewInput, ResourceInventory, ResponseUsage, TaskFileChange } from "../contracts";
 import { classifyAttachmentFile, hasComposerAttachments, inlineTextFileBytes, maxImageBytes, maxTextFileBytes, type ComposerAttachments, type ComposerFile, type ComposerImage } from "../composer-attachments";
 import { normalizeVisibleActivities } from "../conversation-activity";
 import { conversationAnnouncementSnapshot, conversationTurnPropsEqual, isNearConversationBottom, nextConversationAnnouncement, safeMarkdownTarget } from "../conversation-presentation";
@@ -54,6 +54,7 @@ import { BrandMark } from "./BrandMark";
 import { PlanReviewPanel } from "./PlanReviewPanel";
 
 type NewChatViewProps = {
+  conversationId?: string | null;
   project: Project | null;
   turns: ChatTurn[];
   modelId: string;
@@ -544,7 +545,8 @@ function ProjectResourceMenu({
   isRunning,
   compact = false,
   onResourcesChanged,
-}: Pick<NewChatViewProps, "project" | "isRunning" | "onResourcesChanged"> & { compact?: boolean }) {
+  conversationId,
+}: Pick<NewChatViewProps, "project" | "conversationId" | "isRunning" | "onResourcesChanged"> & { compact?: boolean }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [inventory, setInventory] = useState<ResourceInventory>();
@@ -554,20 +556,26 @@ function ProjectResourceMenu({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [executionProfile, setExecutionProfile] = useState<ConversationExecutionProfile>();
 
   async function load() {
-    if (!project || !window.piDesktop?.resources || !window.piDesktop?.mcp) return;
+    if ((!project && !conversationId) || !window.piDesktop?.resources || !window.piDesktop?.mcp) return;
     setLoading(true);
     setError("");
     try {
-      const [nextInventory, nextOverview] = await Promise.all([
-        window.piDesktop.resources.inventory(project.path),
-        window.piDesktop.mcp.overview(project.path),
+      const resolvedProfile = conversationId ? await window.piDesktop.agent.getProfile(conversationId, project?.path) : undefined;
+      const cwd = project?.path ?? resolvedProfile?.cwd;
+      if (!cwd) return;
+      const [nextInventory, nextOverview, nextProfile] = await Promise.all([
+        window.piDesktop.resources.inventory(cwd),
+        window.piDesktop.mcp.overview(cwd),
+        Promise.resolve(resolvedProfile),
       ]);
       setInventory(nextInventory);
       setOverview(nextOverview);
-      setDraftSkills(nextInventory.skills.filter((skill) => skill.enabled).map((skill) => skill.name));
-      setDraftServers(nextOverview.servers.filter((server) => server.enabled && server.projectEnabled !== false).map((server) => server.key));
+      setExecutionProfile(nextProfile);
+      setDraftSkills(nextProfile?.resourceSelectionMode === "custom" ? nextProfile.selectedSkills : nextInventory.skills.filter((skill) => skill.enabled).map((skill) => skill.name));
+      setDraftServers(nextProfile?.resourceSelectionMode === "custom" ? nextProfile.selectedMcpServers : nextOverview.servers.filter((server) => server.enabled && server.projectEnabled !== false).map((server) => server.key));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -578,16 +586,32 @@ function ProjectResourceMenu({
   useEffect(() => {
     setInventory(undefined);
     setOverview(undefined);
+    setExecutionProfile(undefined);
     setDraftSkills([]);
     setDraftServers([]);
     if (project) void load();
-  }, [project?.path]);
+  }, [project?.path, conversationId]);
 
   async function saveSelection(selection?: { skills: string[]; mcpServers: string[] }) {
-    if (!project || !window.piDesktop?.resources) return;
+    if ((!project && !executionProfile) || !window.piDesktop?.resources) return;
     setSaving(true);
     setError("");
     try {
+      if (conversationId) {
+        const current = executionProfile ?? await window.piDesktop.agent.getProfile(conversationId, project?.path);
+        const saved = await window.piDesktop.agent.saveProfile({
+          ...current,
+          resourceSelectionMode: selection ? "custom" : "inherit",
+          selectedSkills: selection?.skills ?? [],
+          selectedMcpServers: selection?.mcpServers ?? [],
+        });
+        setExecutionProfile(saved);
+        setDraftSkills(saved.resourceSelectionMode === "custom" ? saved.selectedSkills : inventory?.skills.filter((skill) => skill.enabled).map((skill) => skill.name) ?? []);
+        setDraftServers(saved.resourceSelectionMode === "custom" ? saved.selectedMcpServers : overview?.servers.filter((server) => server.enabled && server.projectEnabled !== false).map((server) => server.key) ?? []);
+        onResourcesChanged();
+        return;
+      }
+      if (!project) return;
       const settings = await window.piDesktop.resources.setProjectSelection(project.path, selection);
       setInventory((current) => current ? {
         ...current,
@@ -632,16 +656,16 @@ function ProjectResourceMenu({
     }));
   }
 
-  if (!project) return null;
-  const custom = inventory?.projectSettings.selectionMode === "custom";
+  if (!project && !conversationId) return null;
+  const custom = executionProfile ? executionProfile.resourceSelectionMode === "custom" : inventory?.projectSettings.selectionMode === "custom";
   const selectedCount = (inventory?.skills.filter((skill) => skill.enabled).length ?? 0)
     + (overview?.servers.filter((server) => server.enabled && server.projectEnabled !== false).length ?? 0);
-  const disabled = isRunning || saving;
+  const disabled = (!conversationId && isRunning) || saving;
 
   return (
     <DropdownMenu.Root open={open} onOpenChange={(nextOpen) => { setOpen(nextOpen); if (nextOpen) void load(); }}>
       <DropdownMenu.Trigger asChild>
-        <button className={compact ? composerToolButtonClass : secondaryButtonClass} type="button" disabled={isRunning} aria-label={t("配置项目资源")} title={t("配置项目资源")}>
+        <button className={compact ? composerToolButtonClass : secondaryButtonClass} type="button" disabled={!conversationId && isRunning} aria-label={t("配置会话资源")} title={t("配置会话资源")}>
           <SlidersHorizontal size={14} />
           {!compact && <span>{t(custom ? "已选 {count} 项资源" : "资源 · 继承全局", { count: selectedCount })}</span>}
           {compact && custom && <span>{selectedCount}</span>}
@@ -650,7 +674,7 @@ function ProjectResourceMenu({
       <DropdownMenu.Portal>
         <DropdownMenu.Content className="dropdown-content grid max-h-[min(620px,calc(100vh-48px))] w-[min(480px,calc(100vw-32px))] gap-loose overflow-hidden p-card" align="start" sideOffset={8}>
           <header className="flex items-start justify-between gap-card">
-            <span><strong className="block text-body font-semibold text-label">{t("项目资源")}</strong><small className="mt-tight block text-caption leading-[1.45] text-label-3">{t("自定义后，当前项目只加载选中的 Skills 和 MCP。")}</small></span>
+            <span><strong className="block text-body font-semibold text-label">{t("会话资源")}</strong><small className="mt-tight block text-caption leading-[1.45] text-label-3">{t("自定义后，当前会话只加载选中的 Skills 和 MCP。")}</small></span>
             <span className={`rounded-full px-base py-tight text-mini font-semibold ${custom ? "bg-accent/12 text-accent" : "bg-fill text-label-3"}`}>{t(custom ? "自定义" : "继承全局")}</span>
           </header>
 
@@ -756,7 +780,7 @@ function InitialComposer(props: NewChatViewProps) {
         </form>
 
         <div className="mt-loose grid min-h-[50px] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-loose rounded-md border border-separator bg-bg-grouped px-loose py-base">
-          <span className="flex items-center gap-base"><DirectoryMenu project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} /><ProjectResourceMenu project={props.project} isRunning={props.isRunning} onResourcesChanged={props.onResourcesChanged} /></span>
+          <span className="flex items-center gap-base"><DirectoryMenu project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} /><ProjectResourceMenu project={props.project} conversationId={props.conversationId} isRunning={props.isRunning} onResourcesChanged={props.onResourcesChanged} /></span>
           <span className="min-w-0">
             <strong className="block truncate text-callout font-semibold text-label">{props.project ? props.project.path : t("普通对话")}</strong>
             <small className="mt-tight block truncate text-caption text-label-3">{props.project ? t("Pi 工具将相对 {name} 运行", { name: props.project.name }) : t("未关联工作目录，Pi 使用隔离的空目录")}</small>
@@ -841,7 +865,7 @@ function ToolGroup({ tools }: { tools: Extract<ChatActivity, { type: "tool" }>[]
         ? tools.length > 1 ? t("正在调用多个工具") : `${t("运行中")} · ${t(toolLabel(tools[0].name))}`
         : failed
           ? tools.length > 1 ? t("{failed} / {total} 个工具执行失败", { failed: failedCount, total: tools.length }) : `${t("执行失败")} · ${t(toolLabel(tools[0].name))}`
-          : tools.length > 1 ? t("{count} 个工具执行成功", { count: tools.length }) : `${t("执行成功")} · ${t(toolLabel(tools[0].name))}`;
+          : tools.length > 1 ? `${t("调用了多个工具")} · ${t("{count} 个工具执行成功", { count: tools.length })}` : `${t("执行成功")} · ${t(toolLabel(tools[0].name))}`;
 
   const groupTone = running ? "text-accent" : failed ? "text-red" : "text-green";
 
@@ -1130,7 +1154,7 @@ function FileChangesPanel({ changes, running, onOpen, onAccept, onRevert }: {
   </Collapsible.Root>;
 }
 
-function FileChangeInspector({ change, onClose }: { change: TaskFileChange; onClose: () => void }) {
+function FileChangeInspector({ conversationId, change, onClose }: { conversationId: string; change: TaskFileChange; onClose: () => void }) {
   const { t } = useI18n();
   const isArtifact = isArtifactChange(change);
   const [action, setAction] = useState<"open" | "reveal" | null>(null);
@@ -1147,8 +1171,8 @@ function FileChangeInspector({ change, onClose }: { change: TaskFileChange; onCl
     try {
       const api = window.piDesktop?.agent;
       if (!api) throw new Error(t("桌面文件操作不可用。"));
-      if (nextAction === "open") await api.openChange(change.id);
-      else await api.revealChange(change.id);
+      if (nextAction === "open") await api.openChange(conversationId, change.id);
+      else await api.revealChange(conversationId, change.id);
     } catch (error) {
       setActionError(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, "") : String(error));
     } finally {
@@ -1487,7 +1511,7 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
             <ModelSelector provider={props.modelProvider} modelId={props.modelId} providers={props.modelProviders} disabled={props.isRunning} onChange={props.onModelChange} />
             <AttachButton supportsImages={props.modelSupportsImages} onClick={composer.openPicker} />
             <DirectoryMenu compact project={props.project} onProjectChange={props.onProjectChange} onChooseWorkspace={props.onChooseWorkspace} />
-            <ProjectResourceMenu compact project={props.project} isRunning={props.isRunning} onResourcesChanged={props.onResourcesChanged} />
+            <ProjectResourceMenu compact project={props.project} conversationId={props.conversationId} isRunning={props.isRunning} onResourcesChanged={props.onResourcesChanged} />
             <button className={composerToolButtonClass} type="button" onClick={props.onOpenTerminal} aria-label={t("打开终端")} title={t("打开终端")}><TerminalSquare size={14} /></button>
             {props.isRunning && <><button className={queueButtonClass} type="button" disabled={!canSend} onClick={() => props.onQueue("steer")}>{t("立即调整")}</button><button className={queueButtonClass} type="submit" disabled={!canSend}>{t("稍后继续")}</button></>}
             <SendControl isRunning={props.isRunning} canSend={canSend} onStop={props.onStop} />
@@ -1513,6 +1537,6 @@ export function NewChatView(props: NewChatViewProps) {
   if (!props.turns.length) return <InitialComposer {...props} />;
   return <div className={`relative grid h-full w-full min-h-0 min-w-0 overflow-hidden ${selectedChange ? "grid-cols-[minmax(420px,1fr)_minmax(360px,44%)] max-[1100px]:grid-cols-[minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)]"}`}>
     <ActiveConversation key={props.turns[0]?.id} {...props} openChangeId={selectedChangeId ?? undefined} onOpenChange={(change) => setSelectedChangeId(change.id)} />
-    {selectedChange && <FileChangeInspector change={selectedChange} onClose={() => setSelectedChangeId(null)} />}
+    {selectedChange && props.conversationId && <FileChangeInspector conversationId={props.conversationId} change={selectedChange} onClose={() => setSelectedChangeId(null)} />}
   </div>;
 }

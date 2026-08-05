@@ -16,6 +16,7 @@ import {
   type HostResponse,
   type ParentToRuntimeMessage,
   type RuntimeRequest,
+  type RuntimeExecutionProfile,
   type RuntimeResponse,
   type RuntimeToParentMessage,
 } from "./agent-runtime-protocol.js";
@@ -124,6 +125,41 @@ const host = new HostRpc();
 let agent: AgentService | undefined;
 let runtimeSettings: RuntimeSettings | undefined;
 
+class ConversationResourceStore extends ResourceStore {
+  private selection: Pick<RuntimeExecutionProfile, "resourceSelectionMode" | "selectedSkills" | "selectedMcpServers"> = {
+    resourceSelectionMode: "inherit",
+    selectedSkills: [],
+    selectedMcpServers: [],
+  };
+
+  update(selection: Pick<RuntimeExecutionProfile, "resourceSelectionMode" | "selectedSkills" | "selectedMcpServers">): void {
+    this.selection = {
+      resourceSelectionMode: selection.resourceSelectionMode,
+      selectedSkills: [...selection.selectedSkills],
+      selectedMcpServers: [...selection.selectedMcpServers],
+    };
+  }
+
+  override getProjectSettings(cwd: string) {
+    const base = super.getProjectSettings(cwd);
+    if (this.selection.resourceSelectionMode !== "custom") return base;
+    const projectAllowsSkill = (name: string) => base.selectionMode === "custom"
+      ? base.selectedSkills.includes(name)
+      : base.skillOverrides[name] !== false;
+    const projectAllowsMcp = (key: string) => base.selectionMode === "custom"
+      ? base.selectedMcpServers.includes(key)
+      : base.mcpServerOverrides[key] !== false;
+    return {
+      ...base,
+      selectionMode: "custom" as const,
+      selectedSkills: this.selection.selectedSkills.filter(projectAllowsSkill),
+      selectedMcpServers: this.selection.selectedMcpServers.filter(projectAllowsMcp),
+    };
+  }
+}
+
+let conversationResources: ConversationResourceStore | undefined;
+
 function initialize(input: AgentRuntimeInit): void {
   if (input.protocolVersion !== agentRuntimeProtocolVersion) {
     throw new Error(`Unsupported runtime protocol ${input.protocolVersion}.`);
@@ -132,7 +168,9 @@ function initialize(input: AgentRuntimeInit): void {
   runtimeSettings = new RuntimeSettings(input.modelSettings);
   const capabilities = new CapabilityStore(input.userDataPath);
   const permissions = new PermissionStore(input.userDataPath);
-  const resources = new ResourceStore(input.userDataPath);
+  const resources = new ConversationResourceStore(input.userDataPath);
+  resources.update(input.resourceProfile ?? { resourceSelectionMode: "inherit", selectedSkills: [], selectedMcpServers: [] });
+  conversationResources = resources;
   const pluginSecurity = new PluginSecurityStore(input.userDataPath);
   const credentials = new HostCredentialStore(host);
   const mcp = {
@@ -203,7 +241,9 @@ async function invoke(request: RuntimeRequest): Promise<unknown> {
     case "testConfiguration": return agent.testConfiguration(args[0] as SaveModelSettings);
     case "updateConfiguration": {
       agent.reset();
-      runtimeSettings.update(args[0] as AgentRuntimeConfig);
+      const profile = args[0] as RuntimeExecutionProfile;
+      runtimeSettings.update(profile.modelSettings);
+      conversationResources?.update(profile);
       return undefined;
     }
   }

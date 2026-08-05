@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { AgentEvent, AppearancePreference, AppearanceTheme, SendPromptInput } from "../src/contracts.js";
-import { AgentRuntimeClient } from "./agent-runtime-client.js";
+import { AgentRuntimePool } from "./agent-runtime-pool.js";
+import { ConversationProfileStore } from "./conversation-profile-store.js";
 import { AppearanceStore } from "./appearance-store.js";
 import { AuthService } from "./auth-service.js";
 import { CapabilityStore } from "./capability-store.js";
@@ -28,6 +29,7 @@ import {
   requireBrowserBounds,
   requireContextBudgetRequest,
   requireConversationListQuery,
+  requireConversationExecutionProfile,
   requireMcpServerInput,
   requireModelMetadataOverride,
   requireModelSettings,
@@ -46,7 +48,7 @@ import {
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
 let appearanceStore: AppearanceStore | undefined;
-let agentService: AgentRuntimeClient | undefined;
+let agentService: AgentRuntimePool | undefined;
 let authService: AuthService | undefined;
 let pluginService: PluginService | undefined;
 let mcpService: McpService | undefined;
@@ -167,7 +169,7 @@ function requireString(value: unknown, message: string): string {
 function registerIpc(
   settings: SettingsStore,
   credentials: EncryptedCredentialStore,
-  agent: AgentRuntimeClient,
+  agent: AgentRuntimePool,
   auth: AuthService,
   plugins: PluginService,
   capabilities: CapabilityStore,
@@ -535,7 +537,8 @@ function registerIpc(
   ipcMain.handle("agent:send", async (_event, value: unknown) => {
     const input = requireSendPromptInput(value);
     if (input.cwd !== undefined) requireKnownWorkspace(resources, input.cwd);
-    const runId = await agent.send(input.prompt, input.cwd, input.conversationId, {
+    const conversationId = requireString(input.conversationId, "启动任务必须指定会话 ID。");
+    const runId = await agent.send(input.prompt, input.cwd, conversationId, {
       images: input.images,
       attachments: input.attachments,
     });
@@ -544,6 +547,15 @@ function registerIpc(
   ipcMain.handle("agent:list-conversations", () => agent.listConversations());
   ipcMain.handle("agent:list-conversation-page", (_event, query: unknown) => agent.listConversationPage(requireConversationListQuery(query)));
   ipcMain.handle("agent:load-conversation", (_event, conversationId: unknown) => agent.loadConversation(requireString(conversationId, "会话 ID 无效。")));
+  ipcMain.handle("agent:get-profile", (_event, conversationId: unknown, cwd: unknown) => {
+    const resolvedCwd = cwd === undefined ? undefined : optionalKnownWorkspace(cwd);
+    return agent.getProfile(requireString(conversationId, "会话 ID 无效。"), resolvedCwd);
+  });
+  ipcMain.handle("agent:save-profile", (_event, value: unknown) => {
+    const profile = requireConversationExecutionProfile(value);
+    requireKnownWorkspace(resources, profile.cwd);
+    return agent.saveProfile(profile);
+  });
   ipcMain.handle("agent:rename-conversation", (_event, conversationId: unknown, title: unknown) => (
     agent.renameConversation(requireString(conversationId, "会话 ID 无效。"), requireString(title, "会话名称无效。"))
   ));
@@ -566,46 +578,49 @@ function registerIpc(
   ipcMain.handle("agent:delete-conversation", (_event, conversationId: unknown) => (
     agent.deleteConversation(requireString(conversationId, "会话 ID 无效。"))
   ));
-  ipcMain.handle("agent:abort", () => agent.abort());
+  ipcMain.handle("agent:abort", (_event, conversationId: unknown) => agent.abort(requireString(conversationId, "会话 ID 无效。")));
   ipcMain.handle("agent:queue", (_event, value: unknown) => {
     const input = requireQueuePromptInput(value);
-    return agent.queueMessage(input.prompt, input.mode, {
+    return agent.queueMessage(input.conversationId, input.prompt, input.mode, {
       images: input.images,
       attachments: input.attachments,
     });
   });
-  ipcMain.handle("agent:clear-queue", () => agent.clearQueue());
-  ipcMain.handle("agent:list-changes", (_event, runId: unknown) => agent.listChanges(runId === undefined ? undefined : requireString(runId, "任务 ID 无效。")));
-  ipcMain.handle("agent:accept-changes", (_event, changeIds: unknown) => {
+  ipcMain.handle("agent:clear-queue", (_event, conversationId: unknown) => agent.clearQueue(requireString(conversationId, "会话 ID 无效。")));
+  ipcMain.handle("agent:list-changes", (_event, conversationId: unknown, runId: unknown) => agent.listChanges(requireString(conversationId, "会话 ID 无效。"), runId === undefined ? undefined : requireString(runId, "任务 ID 无效。")));
+  ipcMain.handle("agent:accept-changes", (_event, conversationId: unknown, changeIds: unknown) => {
     if (changeIds !== undefined && (!Array.isArray(changeIds) || changeIds.some((entry) => typeof entry !== "string"))) throw new Error("文件变更 ID 无效。");
-    return agent.acceptChanges(changeIds as string[] | undefined);
+    return agent.acceptChanges(requireString(conversationId, "会话 ID 无效。"), changeIds as string[] | undefined);
   });
-  ipcMain.handle("agent:revert-changes", (_event, changeIds: unknown) => {
-    if (agent.isRunning()) throw new Error("Agent 正在执行，请等待任务完成后再回退文件变更。");
+  ipcMain.handle("agent:revert-changes", (_event, conversationId: unknown, changeIds: unknown) => {
+    const id = requireString(conversationId, "会话 ID 无效。");
+    if (agent.isRunning(id)) throw new Error("该会话的 Agent 正在执行，请等待任务完成后再回退文件变更。");
     if (changeIds !== undefined && (!Array.isArray(changeIds) || changeIds.some((entry) => typeof entry !== "string"))) throw new Error("文件变更 ID 无效。");
-    return agent.revertChanges(changeIds as string[] | undefined);
+    return agent.revertChanges(id, changeIds as string[] | undefined);
   });
-  ipcMain.handle("agent:open-change", async (_event, changeId: unknown) => {
-    const filePath = await agent.changePath(requireString(changeId, "文件变更 ID 无效。"));
+  ipcMain.handle("agent:open-change", async (_event, conversationId: unknown, changeId: unknown) => {
+    const filePath = await agent.changePath(requireString(conversationId, "会话 ID 无效。"), requireString(changeId, "文件变更 ID 无效。"));
     const failure = await shell.openPath(filePath);
     if (failure) throw new Error(`无法打开文件：${failure}`);
   });
-  ipcMain.handle("agent:reveal-change", async (_event, changeId: unknown) => {
-    shell.showItemInFolder(await agent.changePath(requireString(changeId, "文件变更 ID 无效。")));
+  ipcMain.handle("agent:reveal-change", async (_event, conversationId: unknown, changeId: unknown) => {
+    shell.showItemInFolder(await agent.changePath(requireString(conversationId, "会话 ID 无效。"), requireString(changeId, "文件变更 ID 无效。")));
   });
-  ipcMain.handle("agent:answer-question", (_event, callId: unknown, answer: unknown) => {
+  ipcMain.handle("agent:answer-question", (_event, conversationId: unknown, callId: unknown, answer: unknown) => {
     if (typeof callId !== "string" || typeof answer !== "string") throw new Error("回答格式无效。");
-    return agent.answerQuestion(callId, answer);
+    return agent.answerQuestion(requireString(conversationId, "会话 ID 无效。"), callId, answer);
   });
   ipcMain.handle("agent:list-plan-reviews", (_event, conversationId: unknown) => agent.listPlanReviews(
     conversationId === undefined ? undefined : requireString(conversationId, "对话 ID 无效。"),
   ));
-  ipcMain.handle("agent:resolve-plan-review", (_event, value: unknown) => agent.resolvePlanReview(requireResolvePlanReviewInput(value)));
-  ipcMain.handle("agent:reset", () => agent.reset());
+  ipcMain.handle("agent:resolve-plan-review", (_event, conversationId: unknown, value: unknown) => agent.resolvePlanReview(requireString(conversationId, "会话 ID 无效。"), requireResolvePlanReviewInput(value)));
+  ipcMain.handle("agent:reset", (_event, conversationId: unknown) => agent.reset(conversationId === undefined ? undefined : requireString(conversationId, "会话 ID 无效。")));
   ipcMain.handle("agent:list-recoveries", () => agent.listRecoveries());
   ipcMain.handle("agent:retry-recovery", async (_event, id: unknown) => ({ runId: await agent.retryRecovery(requireString(id, "恢复任务无效。")) }));
   ipcMain.handle("agent:discard-recovery", (_event, id: unknown) => agent.discardRecovery(requireString(id, "恢复任务无效。")));
-  ipcMain.handle("agent:retry-runtime", () => agent.retryAfterCrashLoop());
+  ipcMain.handle("agent:retry-runtime", (_event, conversationId: unknown) => agent.retryAfterCrashLoop(
+    conversationId === undefined ? undefined : requireString(conversationId, "会话 ID 无效。"),
+  ));
 }
 
 if (isPrimaryInstance) void app.whenReady().then(async () => {
@@ -638,13 +653,15 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   } catch (error) {
     console.error("Credential migration failed:", error instanceof Error ? error.message : String(error));
   }
-  agentService = new AgentRuntimeClient({
+  agentService = new AgentRuntimePool({
     workerPath: path.join(currentDir, "agent-runtime-worker.js"),
     userDataPath: userData,
     agentDir: path.join(userData, "pi-agent"),
     fallbackCwd: chatSandbox,
     sessionDir,
     settings,
+    profiles: new ConversationProfileStore(userData),
+    resources,
     credentials,
     mcp: mcpService,
     browser: browserService,
