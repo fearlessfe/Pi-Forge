@@ -100,7 +100,11 @@ const toolPreClass = "m-0 max-h-[230px] overflow-auto whitespace-pre-wrap break-
 const messageActionButtonClass = "inline-flex h-control-sm cursor-pointer items-center gap-[5px] rounded-sm border-0 bg-transparent px-base text-caption text-label-3 transition-colors duration-150 ease-apple hover:bg-fill hover:text-label-2 active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40";
 const panelHeaderButtonClass = "inline-flex cursor-pointer items-center gap-tight rounded-sm border border-separator bg-transparent px-[7px] py-tight text-caption text-label-2 transition-colors duration-150 ease-apple hover:bg-fill hover:text-label active:bg-fill-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40";
 const changeStatusClass: Record<TaskFileChange["status"], string> = { pending: "text-label-3", accepted: "text-green", reverted: "text-orange", conflict: "text-red" };
-const toolOpenBorderClass: Record<Extract<ChatActivity, { type: "tool" }>["status"], string> = { running: "", success: "", error: "data-[state=open]:border-red/32" };
+const toolStatusClass: Record<Extract<ChatActivity, { type: "tool" }>["status"], { root: string; icon: string; label: string }> = {
+  running: { root: "hover:border-accent/32 data-[state=open]:border-accent/32 data-[state=open]:bg-accent/8", icon: "text-accent", label: "text-accent" },
+  success: { root: "border-green/16 bg-green/8 hover:border-green/32 data-[state=open]:border-green/32", icon: "text-green", label: "text-green" },
+  error: { root: "border-red/24 bg-red/8 hover:border-red/40 data-[state=open]:border-red/40", icon: "text-red", label: "text-red" },
+};
 const MarkdownNavigationContext = createContext<Pick<NewChatViewProps, "onOpenLink" | "onOpenExternalLink">>({
   onOpenLink: () => undefined,
   onOpenExternalLink: () => undefined,
@@ -754,13 +758,14 @@ function ToolActivity({ activity }: { activity: Extract<ChatActivity, { type: "t
   const subagent = activity.details?.subagent;
   const Icon = isSubagent ? Users : TerminalSquare;
   const title = t(toolLabel(activity.name));
+  const statusTone = toolStatusClass[activity.status];
   return (
-    <Collapsible.Root className={`w-full overflow-hidden rounded-sm border border-transparent bg-transparent transition-colors duration-150 ease-apple hover:border-separator hover:bg-fill data-[state=open]:border-separator data-[state=open]:bg-fill ${toolOpenBorderClass[activity.status]}`} defaultOpen={activity.status === "error"}>
+    <Collapsible.Root className={`w-full overflow-hidden rounded-sm border transition-colors duration-150 ease-apple ${statusTone.root}`} defaultOpen={activity.status === "error"}>
       <Collapsible.Trigger className="group flex min-h-[31px] w-full cursor-pointer items-center gap-base border-0 bg-transparent px-[6px] text-left text-caption text-label-2">
-        <Icon size={14} className="text-accent" />
+        <Icon size={14} className={statusTone.icon} />
         <span className="font-semibold">{title}</span>
-        <small className="ml-auto text-caption text-label-3">{t(activity.status === "running" ? "运行中" : activity.status === "success" ? "完成" : "失败")}</small>
-        {activity.status === "running" ? <i className="activity-spinner" /> : activity.status === "success" ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+        <small className={`ml-auto text-caption font-semibold ${statusTone.label}`}>{t(activity.status === "running" ? "运行中" : activity.status === "success" ? "执行成功" : "执行失败")}</small>
+        {activity.status === "running" ? <i className="activity-spinner" /> : activity.status === "success" ? <CheckCircle2 size={14} className="text-green" /> : <XCircle size={14} className="text-red" />}
         <ChevronDown size={14} className="text-label-3 transition-transform duration-150 ease-apple group-data-[state=open]:rotate-180" />
       </Collapsible.Trigger>
       <Collapsible.Content className="grid gap-base px-[10px] pb-[10px]">
@@ -802,21 +807,28 @@ function ToolGroup({ tools }: { tools: Extract<ChatActivity, { type: "tool" }>[]
   const { t } = useI18n();
   const allCommands = tools.length > 0 && tools.every((tool) => tool.name === "bash");
   const running = tools.some((tool) => tool.status === "running");
-  const failed = tools.some((tool) => tool.status === "error");
+  const failedCount = tools.filter((tool) => tool.status === "error").length;
+  const failed = failedCount > 0;
   const title = tools.length === 0
     ? t("分析过程")
     : allCommands
       ? running
         ? t(tools.length > 1 ? "正在运行多个命令" : "正在运行命令")
-        : t(tools.length > 1 ? "运行了多个命令" : "运行了 1 个命令")
+        : failed
+          ? tools.length > 1 ? t("{failed} / {total} 个命令执行失败", { failed: failedCount, total: tools.length }) : t("命令执行失败")
+          : tools.length > 1 ? t("{count} 个命令执行成功", { count: tools.length }) : t("命令执行成功")
       : running
         ? tools.length > 1 ? t("正在调用多个工具") : `${t("运行中")} · ${t(toolLabel(tools[0].name))}`
-        : tools.length > 1 ? t("调用了多个工具") : `${t("完成")} · ${t(toolLabel(tools[0].name))}`;
+        : failed
+          ? tools.length > 1 ? t("{failed} / {total} 个工具执行失败", { failed: failedCount, total: tools.length }) : `${t("执行失败")} · ${t(toolLabel(tools[0].name))}`
+          : tools.length > 1 ? t("{count} 个工具执行成功", { count: tools.length }) : `${t("执行成功")} · ${t(toolLabel(tools[0].name))}`;
+
+  const groupTone = running ? "text-accent" : failed ? "text-red" : "text-green";
 
   return (
     <Collapsible.Root className="w-full text-label-3" defaultOpen={failed}>
-      <Collapsible.Trigger className={`group flex min-h-[34px] w-full cursor-pointer items-center gap-base border-0 bg-transparent p-[3px] text-left text-caption transition-colors duration-150 ease-apple ${failed ? "text-red" : "text-label-3 hover:text-label-2"}`}>
-        <TerminalSquare size={16} className="text-label-3" />
+      <Collapsible.Trigger className={`group flex min-h-[34px] w-full cursor-pointer items-center gap-base border-0 bg-transparent p-[3px] text-left text-caption transition-colors duration-150 ease-apple ${groupTone}`}>
+        <TerminalSquare size={16} />
         <span className="font-semibold">{title}</span>
         {running ? <i className="activity-spinner ml-auto" /> : failed ? <XCircle size={14} className="ml-auto" /> : <CheckCircle2 size={14} className="ml-auto" />}
         <ChevronDown size={14} className="text-label-3 transition-transform duration-150 ease-apple group-data-[state=open]:rotate-180" />

@@ -168,14 +168,27 @@ export class FileChangeTracker {
     const afterHash = after ? this.hashBuffer(after) : this.hashFile(pending.path);
     if (pending.beforeHash === afterHash) return;
     const relativePath = path.relative(pending.cwd, pending.path) || path.basename(pending.path);
-    let patch = "";
-    if (after && (!pending.existed || pending.before) && !after.includes(0) && !pending.before?.includes(0)) {
-      patch = generateUnifiedPatch(relativePath, pending.before?.toString("utf8") ?? "", after.toString("utf8"));
-    } else if (result && typeof result === "object") {
-      const details = (result as { details?: { patch?: unknown } }).details;
-      if (typeof details?.patch === "string") patch = details.patch;
+    const existing = [...this.fileChanges.values()].find((change) => (
+      change.runId === runId
+      && change.path === pending.path
+      && change.status === "pending"
+    ));
+    if (existing) {
+      if (existing.beforeHash === afterHash) {
+        this.fileChanges.delete(existing.id);
+        this.changeSnapshots.delete(existing.id);
+        this.emit({ type: "changes.updated", runId, changes: this.listChanges(runId) });
+        return;
+      }
+      const originalBefore = this.changeSnapshots.get(existing.id);
+      existing.patch = this.buildPatch(relativePath, originalBefore, existing.kind === "modified", after, result);
+      existing.afterHash = afterHash;
+      existing.error = undefined;
+      this.lastChangeRunId = runId;
+      this.emit({ type: "changes.updated", runId, changes: this.listChanges(runId) });
+      return;
     }
-    if (!patch) patch = `Binary or large file changed: ${relativePath}`;
+    const patch = this.buildPatch(relativePath, pending.before, pending.existed, after, result);
     const change: TaskFileChange = {
       id: randomUUID(),
       runId,
@@ -193,6 +206,17 @@ export class FileChangeTracker {
     this.changeSnapshots.set(change.id, pending.before);
     this.lastChangeRunId = runId;
     this.emit({ type: "changes.updated", runId, changes: this.listChanges(runId) });
+  }
+
+  private buildPatch(relativePath: string, before: Buffer | undefined, existed: boolean, after: Buffer | undefined, result: unknown): string {
+    if (after && (!existed || before) && !after.includes(0) && !before?.includes(0)) {
+      return generateUnifiedPatch(relativePath, before?.toString("utf8") ?? "", after.toString("utf8"));
+    }
+    if (result && typeof result === "object") {
+      const details = (result as { details?: { patch?: unknown } }).details;
+      if (typeof details?.patch === "string" && details.patch) return details.patch;
+    }
+    return `Binary or large file changed: ${relativePath}`;
   }
 
   private selectedChanges(changeIds?: string[]): TaskFileChange[] {

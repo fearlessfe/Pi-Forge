@@ -103,6 +103,63 @@ describe("NewChatView analysis presentation", () => {
     expect(markup).toContain("稍后继续 · 等待执行");
     expect(markup).toContain("已排队 1 条消息");
   });
+
+  it("distinguishes successful and failed tool execution in summaries and rows", () => {
+    const noop = vi.fn();
+    const markup = renderToStaticMarkup(<I18nProvider>
+      <NewChatView
+        project={null}
+        turns={[{
+          id: "turn-tools",
+          question: "Run checks",
+          answer: "One check failed",
+          activities: [
+            { id: "tool-success", type: "tool", name: "read", args: { path: "README.md" }, output: "ok", status: "success" },
+            { id: "tool-error", type: "tool", name: "bash", args: { command: "pnpm test" }, output: "test failed", status: "error" },
+          ],
+          status: "completed",
+        }]}
+        modelId="test-model"
+        modelProvider="anthropic"
+        modelProviders={[]}
+        modelSupportsImages
+        resourceRevision={0}
+        planReviews={[]}
+        prompt=""
+        attachments={{ images: [], files: [] }}
+        isRunning={false}
+        queuedMessages={{ steering: [], followUp: [] }}
+        onPromptChange={noop}
+        onAttachmentsChange={noop}
+        onAttachmentError={noop}
+        onProjectChange={noop}
+        onChooseWorkspace={noop}
+        onOpenTerminal={noop}
+        onOpenContextBudget={noop}
+        onOpenLink={noop}
+        onOpenExternalLink={noop}
+        onResourcesChanged={noop}
+        onResolvePlanReview={async () => undefined}
+        onModelChange={noop}
+        onSubmit={noop}
+        onStop={noop}
+        onQueue={noop}
+        onClearQueue={noop}
+        onAcceptChanges={noop}
+        onRevertChanges={noop}
+        onRetry={noop}
+        onForkTurn={noop}
+        onAnswerQuestion={noop}
+      />
+    </I18nProvider>);
+
+    expect(markup).toContain("1 / 2 个工具执行失败");
+    expect(markup).toContain("执行成功");
+    expect(markup).toContain("执行失败");
+    expect(markup).toContain("border-green/16");
+    expect(markup).toContain("border-red/24");
+    expect(markup).not.toContain("完成 · 运行命令");
+  });
 });
 
 describe("ContextIndicator", () => {
