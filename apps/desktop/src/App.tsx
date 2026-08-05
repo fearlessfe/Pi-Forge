@@ -536,8 +536,6 @@ export function App() {
     }
     closeBuiltInBrowser();
     setView("chat");
-    setProject(null);
-    setWorkspaceTrust(undefined);
     setSelectedConversationId(null);
     selectedConversationIdRef.current = null;
     setContextUsage(undefined);
