@@ -89,8 +89,10 @@ describe("IPC input validation", () => {
     })).toThrow("文件 MIME 类型");
   });
 
+  // This intentionally validates more than 32 MiB of decoded image data; V8
+  // coverage instrumentation makes the canonical base64 checks slower in CI.
   it("enforces aggregate image and text attachment limits", () => {
-    const imagePayload = Buffer.alloc(9 * 1024 * 1024).toString("base64");
+    const imagePayload = Buffer.alloc(8 * 1024 * 1024 + 1).toString("base64");
     expect(() => validatePromptExtras({
       images: Array.from({ length: 4 }, () => image(imagePayload)).map((entry, index) => ({
         ...entry,
@@ -106,7 +108,7 @@ describe("IPC input validation", () => {
         content: textPayload,
       })),
     })).toThrow("文件总大小不能超过 5 MB");
-  });
+  }, 15_000);
 
   it("uses strict schemas for model settings and MCP configuration", () => {
     expect(requireModelSettings({
