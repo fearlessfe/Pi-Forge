@@ -308,7 +308,7 @@ For significant architectural changes, please first describe the problem, bounda
 
 ## Open-source license
 
-Pi Forge is intended to be released as open source, but the final license is still being selected. Until a formal `LICENSE` file is added, do not assume that the repository grants rights under a particular open-source license.
+Pi Forge is open source under the [MIT License](LICENSE).
 
 ## Acknowledgements
 

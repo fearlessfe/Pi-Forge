@@ -1,6 +1,7 @@
 {
   "name": "pi-desktop",
   "private": true,
+  "license": "MIT",
   "packageManager": "pnpm@10.17.0",
   "scripts": {
     "dev": "pnpm --filter @pi-desktop/renderer dev",

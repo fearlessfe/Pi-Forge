@@ -2,6 +2,7 @@
   "name": "@pi-desktop/renderer",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "description": "Open-source desktop foundation for building custom enterprise agents.",
   "author": {
     "name": "Pi Forge contributors",
