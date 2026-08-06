@@ -231,6 +231,12 @@ jobs:
         shell: bash
         run: node scripts/verify-release-assets.mjs ${{ matrix.validation_mode }} "$APP_VERSION" release
 
+      - name: Configure Linux Chromium sandbox helper
+        if: runner.os == 'Linux'
+        run: |
+          sudo chown root:root apps/desktop/release/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 apps/desktop/release/linux-unpacked/chrome-sandbox
+
       - name: Smoke test packaged application
         working-directory: apps/desktop
         shell: bash
