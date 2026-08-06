@@ -1,6 +1,7 @@
 # Pi Forge workspace guide
 
 ## Scope and architecture
+- Read `docs/PROJECT_STATUS.md` before planning substantial work. It is the living status/next-steps entry point; verify its claims against current source and update it when a change completes or materially changes a listed item.
 - This is a pnpm workspace; the only shipped package today is `apps/desktop` (`@pi-desktop/renderer`), an Electron/React reference implementation of Pi Forge. The `packages/*` layout in the README is roadmap, not implemented architecture.
 - Keep process boundaries intact: `apps/desktop/src` is the isolated renderer; `electron/main.ts` owns privileged IPC/services; `electron/preload.cts` exposes the allowlisted `window.piDesktop` API; `agent-runtime-client.ts` → `agent-runtime-protocol.ts` → `agent-runtime-worker.ts` → `agent-service.ts` is the child-process RPC path for agent execution.
 - `apps/desktop/src/contracts.ts` is shared across renderer and Electron builds. When changing a cross-boundary feature, update the contract, preload exposure, main-process validation/handler, runtime protocol/client/worker, service, and callers together. Never expose plaintext credentials or direct Node/filesystem access to the renderer.

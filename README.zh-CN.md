@@ -204,7 +204,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-工作流会生成 Windows x64 NSIS 安装程序、分别面向 Intel（x64）和 Apple Silicon（arm64）的 macOS DMG/ZIP，以及 Ubuntu x64 AppImage/Debian 安装包。`v0.2.0-beta.1` 这类 Tag 会创建预发布版本。也可以在 **Actions → Release → Run workflow** 中为已有 Tag 手动执行发布。
+工作流会生成 Windows x64 NSIS 安装程序、分别面向 Intel（x64）和 Apple Silicon（arm64）的 macOS DMG/ZIP，以及 Ubuntu x64 AppImage/Debian 安装包。上传前，每个原生 Runner 都会启动未封装的 packaged app，验证 preload、IPC、Agent Runtime handshake 和 node-pty；发布任务还会拒绝意外的自动更新 metadata、核对完整跨平台产物集合，并附带 `SHA256SUMS`。`v0.2.0-beta.1` 这类 Tag 会创建预发布版本。也可以在 **Actions → Release → Run workflow** 中为已有 Tag 手动执行发布。
 
 默认生成的是未签名安装包。正式大范围分发前，应通过 GitHub Actions Secrets 配置各平台代码签名以及 macOS 公证凭据，否则 Windows SmartScreen 或 macOS Gatekeeper 可能向用户显示警告。
 

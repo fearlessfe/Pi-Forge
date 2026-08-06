@@ -204,7 +204,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow produces a Windows x64 NSIS installer, separate macOS DMG and ZIP packages for Intel (x64) and Apple Silicon (arm64), and Ubuntu x64 AppImage and Debian packages. Tags such as `v0.2.0-beta.1` create a prerelease. The workflow can also be run manually for an existing tag from **Actions → Release → Run workflow**.
+The workflow produces a Windows x64 NSIS installer, separate macOS DMG and ZIP packages for Intel (x64) and Apple Silicon (arm64), and Ubuntu x64 AppImage and Debian packages. Before upload, each native runner launches the unpacked packaged application and verifies preload, IPC, the Agent Runtime handshake, and node-pty. The publish job rejects unexpected update metadata, verifies the exact cross-platform artifact set, and includes a `SHA256SUMS` file. Tags such as `v0.2.0-beta.1` create a prerelease. The workflow can also be run manually for an existing tag from **Actions → Release → Run workflow**.
 
 Release packages are unsigned by default. Before distributing them broadly, configure platform signing and macOS notarization credentials as GitHub Actions secrets; otherwise Windows SmartScreen and macOS Gatekeeper may warn users.
 

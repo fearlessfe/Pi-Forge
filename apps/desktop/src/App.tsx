@@ -6,7 +6,7 @@ import { PluginCenterView } from "./components/PluginCenterView";
 import { SettingsView } from "./components/SettingsView";
 import { BrowserWorkbench } from "./components/BrowserWorkbench";
 import type { AgentEvent, AgentRuntimeStatus, AppearanceTheme, AuthEvent, ContextBudgetReport, ContextUsageInfo, ConversationHistoryItem, ConversationUpdatedEvent, ModelMetadataOverride, ModelSettings, PermissionRuntime, PermissionSettings, PlanReviewArtifact, ProviderCatalogEntry, QueuedMessages, ResolvePlanReviewInput, ResourceSettings, RuntimeRecoveryInfo, SaveModelSettings, SystemPromptSettings, WorkspaceTrustStatus } from "./contracts";
-import { applyAgentEvents, isStreamingAgentEvent } from "./agent-event-state";
+import { applyAgentEvents, isStreamingAgentEvent, seedRecoveredUserMessage } from "./agent-event-state";
 import { conversationMatchesQuery, isCurrentConversationRequest, replayConversationUpdates, type SequencedConversationUpdate } from "./conversation-updates";
 import { normalizeContextUsage, normalizeHistoryTurn } from "./conversation-history";
 import { conversationStreamingBatchDelayMs } from "./conversation-window";
@@ -265,7 +265,7 @@ export function App() {
       const batch = streamingEvents.splice(0);
       applyRoutedEvents(batch);
     };
-    const unsubscribeAgent = window.piDesktop?.agent.onEvent((event) => {
+    const handleAgentEvent = (event: AgentEvent) => {
       if (isStreamingAgentEvent(event)) {
         streamingEvents.push(event);
         streamingTimer ??= window.setTimeout(flushStreamingEvents, conversationStreamingBatchDelayMs);
@@ -306,6 +306,27 @@ export function App() {
         }
         void refreshRuntimeRecoveries();
       }
+    };
+    const unsubscribeAgent = window.piDesktop?.agent.onEvent(handleAgentEvent);
+    void window.piDesktop?.agent.reconnect?.().then((snapshot) => {
+      setConversationRuntimeStatuses((current) => ({ ...current, ...snapshot.runtimeStatuses }));
+      if (snapshot.runtimeStatus) setRuntimeStatus(snapshot.runtimeStatus);
+      snapshot.events.forEach((event, index) => {
+        const conversationId = conversationIdForEvent(event);
+        if (event.type === "user.message.started" && conversationId) {
+          const recoveryId = `renderer-recovery-${event.runId}-${index}`;
+          setConversationTurns((current) => ({
+            ...current,
+            [conversationId]: seedRecoveredUserMessage(current[conversationId] ?? [], event, recoveryId),
+          }));
+          if (selectedConversationIdRef.current === conversationId) {
+            setTurns((current) => seedRecoveredUserMessage(current, event, recoveryId));
+          }
+        }
+        handleAgentEvent(event);
+      });
+    }).catch((error: unknown) => {
+      console.warn("[renderer-recovery] 无法重新同步 Agent 状态。", error);
     });
     const unsubscribeAuth = window.piDesktop?.auth?.onEvent((event) => {
       setAuthFlow((current) => applyAuthEvent(current, event, t));

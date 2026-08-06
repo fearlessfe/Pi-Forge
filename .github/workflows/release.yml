@@ -80,18 +80,22 @@ jobs:
         include:
           - name: Ubuntu x64
             artifact: linux-x64
+            validation_mode: linux-x64
             runner: ubuntu-24.04
             builder_flag: --linux --x64
           - name: Windows x64
             artifact: windows-x64
+            validation_mode: win-x64
             runner: windows-2025
             builder_flag: --win --x64
           - name: macOS Intel
             artifact: macos-x64
+            validation_mode: mac-x64
             runner: macos-15-intel
             builder_flag: --mac --x64
           - name: macOS Apple Silicon
             artifact: macos-arm64
+            validation_mode: mac-arm64
             runner: macos-15
             builder_flag: --mac --arm64
 
@@ -154,6 +158,16 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
+      - name: Verify exact release artifact set
+        working-directory: apps/desktop
+        shell: bash
+        run: node scripts/verify-release-assets.mjs ${{ matrix.validation_mode }} "$APP_VERSION" release
+
+      - name: Smoke test packaged application
+        working-directory: apps/desktop
+        shell: bash
+        run: node scripts/smoke-packaged.mjs release
+
       - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
@@ -176,12 +190,30 @@ jobs:
       contents: write
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Read version from tag
+        shell: bash
+        run: echo "APP_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+
       - name: Download packages
         uses: actions/download-artifact@v4
         with:
           pattern: pi-forge-*
           path: release-assets
           merge-multiple: true
+
+      - name: Verify merged release and generate checksums
+        run: node apps/desktop/scripts/verify-release-assets.mjs all "$APP_VERSION" release-assets
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2

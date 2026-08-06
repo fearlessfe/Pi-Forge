@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from "electron";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -25,6 +26,12 @@ import { normalizeExternalBrowserUrl } from "./browser-utils.js";
 import { ObservabilityStore } from "./observability-store.js";
 import { ObservabilityService } from "./observability-service.js";
 import { shutdownApplication } from "./application-shutdown.js";
+import {
+  RendererCrashGuard,
+  RendererEventJournal,
+  rendererStableWindowMs,
+  rendererUnresponsiveGraceMs,
+} from "./renderer-recovery.js";
 import {
   requireBrowserBounds,
   requireContextBudgetRequest,
@@ -57,6 +64,15 @@ let browserService: BrowserService | undefined;
 let observabilityService: ObservabilityService | undefined;
 let applicationShutdownPromise: Promise<void> | undefined;
 let applicationShutdownCompleted = false;
+let rendererReady = false;
+let rendererGeneration = 0;
+let deliveredRecoveryGeneration = -1;
+let rendererStableTimer: NodeJS.Timeout | undefined;
+let rendererUnresponsiveTimer: NodeJS.Timeout | undefined;
+let smokeTestStarted = false;
+const rendererCrashGuard = new RendererCrashGuard();
+const rendererEventJournal = new RendererEventJournal();
+let rendererRecoveryLog = "";
 
 /* 窗口/原生视图背景随主题切换，对齐 token v2 --bg-window（docs-internal/design-refresh-apple.md 3.2/3.6）。
    初始外观取 AppearanceStore 里最近一次偏好（无记录跟随系统）；macOS 使用透明原生材质，
@@ -88,11 +104,130 @@ app.setName("Pi Forge");
 app.setPath("userData", process.env.PI_DESKTOP_USER_DATA
   ? path.resolve(process.env.PI_DESKTOP_USER_DATA)
   : path.join(app.getPath("appData"), "Pi Desktop"));
+rendererRecoveryLog = path.join(app.getPath("userData"), "logs", "renderer-recovery.log");
 const isPrimaryInstance = app.requestSingleInstanceLock();
 if (!isPrimaryInstance) app.quit();
 
+function appendRendererRecoveryLog(event: string, details: Record<string, unknown> = {}): void {
+  try {
+    fs.mkdirSync(path.dirname(rendererRecoveryLog), { recursive: true });
+    fs.appendFileSync(rendererRecoveryLog, `${JSON.stringify({ timestamp: new Date().toISOString(), event, ...details })}\n`, { encoding: "utf8", mode: 0o600 });
+  } catch (error) {
+    console.error("Renderer recovery log failed:", error instanceof Error ? error.message : String(error));
+  }
+}
+
 function sendAgentEvent(event: AgentEvent): void {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("agent:event", event);
+  rendererEventJournal.record(event);
+  if (rendererReady && mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send("agent:event", event);
+  }
+}
+
+function startRendererGeneration(source: string): void {
+  rendererReady = false;
+  rendererGeneration += 1;
+  clearTimeout(rendererStableTimer);
+  clearTimeout(rendererUnresponsiveTimer);
+  rendererCrashGuard.markResponsive();
+  appendRendererRecoveryLog("renderer-unavailable", { source, generation: rendererGeneration });
+}
+
+function beginRendererReload(window: BrowserWindow, source: string): void {
+  if (window.isDestroyed() || applicationShutdownPromise) return;
+  startRendererGeneration(source);
+  appendRendererRecoveryLog("reload", { source, generation: rendererGeneration });
+  window.webContents.reload();
+}
+
+async function showRendererStoppedDialog(window: BrowserWindow, message: string): Promise<void> {
+  if (window.isDestroyed() || applicationShutdownPromise) return;
+  const result = await dialog.showMessageBox(window, {
+    type: "error",
+    title: "Pi Forge 界面需要恢复",
+    message,
+    detail: `Agent Runtime 仍在主进程中运行，不会自动重放工具调用。恢复日志：${rendererRecoveryLog}`,
+    buttons: ["重新加载界面", "打开日志", "退出"],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true,
+  });
+  if (result.response === 0) {
+    rendererCrashGuard.markStable();
+    beginRendererReload(window, "user");
+  } else if (result.response === 1) {
+    shell.showItemInFolder(rendererRecoveryLog);
+  } else {
+    app.quit();
+  }
+}
+
+function installRendererRecovery(window: BrowserWindow): void {
+  window.webContents.on("render-process-gone", (_event, details) => {
+    if (applicationShutdownPromise || window.isDestroyed()) return;
+    startRendererGeneration("render-process-gone");
+    const decision = rendererCrashGuard.recordCrash();
+    appendRendererRecoveryLog("render-process-gone", { ...details, crashCount: decision.count, generation: rendererGeneration });
+    if (decision.action === "reload") {
+      setTimeout(() => {
+        if (!window.isDestroyed() && !applicationShutdownPromise) window.webContents.reload();
+      }, decision.delayMs);
+    } else {
+      void showRendererStoppedDialog(window, "界面在一分钟内连续崩溃，已停止自动重载。");
+    }
+  });
+  window.webContents.on("did-start-loading", () => {
+    // Covers user/menu reloads and other same-process document replacements.
+    // Crash and controlled-reload paths already started a generation above.
+    if (rendererReady) startRendererGeneration("navigation");
+  });
+  window.on("unresponsive", () => {
+    if (!rendererCrashGuard.markUnresponsive()) return;
+    appendRendererRecoveryLog("unresponsive", { generation: rendererGeneration });
+    rendererUnresponsiveTimer = setTimeout(() => {
+      if (rendererCrashGuard.isUnresponsive()) {
+        void showRendererStoppedDialog(window, "界面持续无响应。你可以等待、查看日志，或重新加载界面。");
+      }
+    }, rendererUnresponsiveGraceMs);
+  });
+  window.on("responsive", () => {
+    if (!rendererCrashGuard.markResponsive()) return;
+    clearTimeout(rendererUnresponsiveTimer);
+    appendRendererRecoveryLog("responsive", { generation: rendererGeneration });
+  });
+  window.webContents.on("did-finish-load", () => {
+    clearTimeout(rendererStableTimer);
+    rendererStableTimer = setTimeout(() => {
+      rendererCrashGuard.markStable();
+      appendRendererRecoveryLog("stable", { generation: rendererGeneration });
+    }, rendererStableWindowMs);
+  });
+}
+
+function installPackagedSmoke(window: BrowserWindow): void {
+  const resultFile = process.env.PI_DESKTOP_SMOKE_RESULT;
+  if (!resultFile || smokeTestStarted) return;
+  window.webContents.once("did-finish-load", () => {
+    smokeTestStarted = true;
+    void window.webContents.executeJavaScript(`(async () => {
+      const api = window.piDesktop;
+      if (!api) throw new Error("preload API is unavailable");
+      await api.settings.get();
+      await api.settings.catalog();
+      await api.agent.listConversations();
+      const terminal = await api.terminal.create(undefined, 80, 24);
+      await api.terminal.kill(terminal.id);
+      return { preload: true, ipc: true, runtime: true, terminal: true };
+    })()`, true).then((checks) => {
+      fs.mkdirSync(path.dirname(resultFile), { recursive: true });
+      fs.writeFileSync(resultFile, JSON.stringify({ ok: true, checks, version: app.getVersion() }));
+      app.quit();
+    }).catch((error: unknown) => {
+      fs.mkdirSync(path.dirname(resultFile), { recursive: true });
+      fs.writeFileSync(resultFile, JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }));
+      app.exit(1);
+    });
+  });
 }
 
 function installContentSecurityPolicy(): void {
@@ -111,6 +246,7 @@ function installContentSecurityPolicy(): void {
 }
 
 function createWindow(): BrowserWindow {
+  startRendererGeneration("window-created");
   const rendererFile = path.join(currentDir, "../../dist/index.html");
   const window = new BrowserWindow({
     width: 1440,
@@ -129,6 +265,8 @@ function createWindow(): BrowserWindow {
     },
   });
 
+  installRendererRecovery(window);
+  installPackagedSmoke(window);
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, url) => {
     const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -621,11 +759,21 @@ function registerIpc(
   ipcMain.handle("agent:retry-runtime", (_event, conversationId: unknown) => agent.retryAfterCrashLoop(
     conversationId === undefined ? undefined : requireString(conversationId, "会话 ID 无效。"),
   ));
+  ipcMain.handle("agent:reconnect", () => {
+    rendererReady = true;
+    const snapshot = rendererEventJournal.snapshot();
+    if (deliveredRecoveryGeneration === rendererGeneration) return { ...snapshot, events: [] };
+    deliveredRecoveryGeneration = rendererGeneration;
+    appendRendererRecoveryLog("renderer-ready", { generation: rendererGeneration, replayedEvents: snapshot.events.length });
+    return snapshot;
+  });
 }
 
 if (isPrimaryInstance) void app.whenReady().then(async () => {
   const userData = app.getPath("userData");
-  const piDesktopHome = path.join(os.homedir(), ".pi-desktop");
+  const piDesktopHome = process.env.PI_DESKTOP_HOME
+    ? path.resolve(process.env.PI_DESKTOP_HOME)
+    : path.join(os.homedir(), ".pi-desktop");
   const chatSandbox = path.join(piDesktopHome, "workspace");
   const sessionDir = path.join(piDesktopHome, "sessions");
   const settings = new SettingsStore(userData);

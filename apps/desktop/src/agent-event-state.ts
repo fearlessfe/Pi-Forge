@@ -25,6 +25,31 @@ function activateQueuedTurn(turns: ChatTurn[], event: Extract<AgentEvent, { type
   });
 }
 
+/** Seed the optimistic turn that is absent after a full renderer reload. */
+export function seedRecoveredUserMessage(
+  turns: ChatTurn[],
+  event: Extract<AgentEvent, { type: "user.message.started" }>,
+  recoveryId: string,
+): ChatTurn[] {
+  if (turns.some((turn) => turn.id === recoveryId)) return turns;
+  const existing = turns.find((turn) => turn.runId === event.runId && turn.question === event.message && turn.status === "running");
+  if (existing) return turns;
+  return [
+    ...turns.map((turn) => turn.runId === event.runId && turn.status === "running"
+      ? { ...turn, status: "completed" as const }
+      : turn),
+    {
+      id: recoveryId,
+      runId: event.runId,
+      question: event.message,
+      answer: "",
+      activities: [],
+      fileChanges: [],
+      status: "running",
+    },
+  ];
+}
+
 function settleRun(turns: ChatTurn[], event: Extract<AgentEvent, { type: "run.completed" | "run.error" | "run.stopped" }>): ChatTurn[] {
   const hasMatchingRun = turns.some((turn) => turn.runId === event.runId);
   if (!hasMatchingRun) return turns;

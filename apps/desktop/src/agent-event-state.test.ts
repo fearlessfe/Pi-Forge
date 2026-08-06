@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "./contracts";
-import { applyAgentEvent, applyAgentEvents, coalesceStreamingAgentEvents, isStreamingAgentEvent } from "./agent-event-state";
+import { applyAgentEvent, applyAgentEvents, coalesceStreamingAgentEvents, isStreamingAgentEvent, seedRecoveredUserMessage } from "./agent-event-state";
 import type { ChatTurn } from "./types";
 
 function turn(id: string, question: string, status: ChatTurn["status"], runId = "run-1"): ChatTurn {
@@ -12,6 +12,25 @@ function apply(turns: ChatTurn[], event: AgentEvent): ChatTurn[] {
 }
 
 describe("applyAgentEvent queue lifecycle", () => {
+  it("seeds a missing turn before replaying renderer recovery events", () => {
+    let turns = seedRecoveredUserMessage([], {
+      type: "user.message.started",
+      conversationId: "conversation-1",
+      runId: "run-1",
+      message: "Recover this task",
+    }, "renderer-recovery-run-1-0");
+    turns = apply(turns, { type: "message.delta", conversationId: "conversation-1", runId: "run-1", text: "Recovered" });
+    turns = apply(turns, { type: "run.completed", conversationId: "conversation-1", runId: "run-1" });
+
+    expect(turns).toMatchObject([{
+      id: "renderer-recovery-run-1-0",
+      runId: "run-1",
+      question: "Recover this task",
+      answer: "Recovered",
+      status: "completed",
+    }]);
+  });
+
   it("activates queued messages in order and routes response deltas to the active message", () => {
     let turns = [
       turn("initial", "Initial task", "running"),

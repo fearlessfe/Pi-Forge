@@ -546,6 +546,12 @@ export type AgentTraceEvent = {
 
 export type AgentRuntimeStatus = "running" | "crash-looping" | "unresponsive";
 
+export type RendererRecoverySnapshot = {
+  events: AgentEvent[];
+  runtimeStatus?: AgentRuntimeStatus;
+  runtimeStatuses: Record<string, AgentRuntimeStatus>;
+};
+
 export type AgentEvent =
   | { type: "runtime.status"; status: AgentRuntimeStatus; conversationId?: string }
   | { type: "run.started"; runId: string; conversationId: string; provider: string; model: string; cwd: string }
@@ -1014,6 +1020,7 @@ export type PiDesktopApi = {
     retryRecovery(id: string): Promise<{ runId: string }>;
     discardRecovery(id: string): Promise<void>;
     retryRuntime(conversationId?: string): Promise<void>;
+    reconnect(): Promise<RendererRecoverySnapshot>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
   };
 };
