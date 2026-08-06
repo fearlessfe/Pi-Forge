@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   IpcInputError,
   requireBrowserBounds,
+  requireBrowserClearDataInput,
+  requireBrowserMode,
   requireContextBudgetRequest,
   requireConversationListQuery,
   requireMcpServerInput,
@@ -25,6 +27,17 @@ function image(data = Buffer.from("image").toString("base64")) {
 }
 
 describe("IPC input validation", () => {
+  it("only accepts named browser modes and bounded clear-data categories", () => {
+    expect(requireBrowserMode("private")).toBe("private");
+    expect(() => requireBrowserMode("persist:attacker-controlled")).toThrow("浏览模式无效");
+    expect(requireBrowserClearDataInput({ mode: "persistent", dataTypes: ["cookies", "cache", "storage"] }))
+      .toEqual({ mode: "persistent", dataTypes: ["cookies", "cache", "storage"] });
+    expect(() => requireBrowserClearDataInput({ mode: "private", dataTypes: [] })).toThrow("浏览数据清理选项无效");
+    expect(() => requireBrowserClearDataInput({ mode: "private", dataTypes: ["cookies", "cookies"] })).toThrow("浏览数据清理选项无效");
+    expect(() => requireBrowserClearDataInput({ mode: "private", dataTypes: ["filesystem"] })).toThrow("浏览数据清理选项无效");
+    expect(() => requireBrowserClearDataInput({ mode: "private", dataTypes: ["cache"], partition: "persist:other" })).toThrow("浏览数据清理选项无效");
+  });
+
   it("strictly validates Context Budget requests", () => {
     expect(requireContextBudgetRequest(undefined)).toEqual({});
     expect(requireContextBudgetRequest({ cwd: "/workspace" })).toEqual({ cwd: "/workspace" });

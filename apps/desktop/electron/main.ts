@@ -34,6 +34,8 @@ import {
 } from "./renderer-recovery.js";
 import {
   requireBrowserBounds,
+  requireBrowserClearDataInput,
+  requireBrowserMode,
   requireContextBudgetRequest,
   requireConversationListQuery,
   requireConversationExecutionProfile,
@@ -561,6 +563,8 @@ function registerIpc(
   ipcMain.handle("browser:forward", () => browser.forward());
   ipcMain.handle("browser:reload", () => browser.reload());
   ipcMain.handle("browser:stop", () => browser.stop());
+  ipcMain.handle("browser:set-mode", (_event, mode: unknown) => browser.setMode(requireBrowserMode(mode)));
+  ipcMain.handle("browser:clear-data", (_event, input: unknown) => browser.clearData(requireBrowserClearDataInput(input)));
   ipcMain.handle("browser:set-visible", (_event, visible: unknown) => {
     if (typeof visible !== "boolean") throw new Error("浏览器可见状态无效。");
     return browser.setVisible(visible);
@@ -571,6 +575,8 @@ function registerIpc(
   ipcMain.handle("browser:start-annotation", (_event, prompt: unknown) => browser.startAnnotation(
     undefined,
     typeof prompt === "string" ? prompt : "",
+    undefined,
+    "browser-workbench",
   ));
   ipcMain.handle("browser:cancel-annotation", () => browser.cancelAnnotation());
   ipcMain.handle("plugins:search", (_event, query: unknown, offset: unknown) => {
@@ -795,6 +801,9 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
     path.join(app.getPath("temp"), "pi-desktop-browser"),
     (event) => mainWindow?.webContents.send("browser:event", event),
   );
+  void browserService.cleanupArtifacts().catch((error: unknown) => {
+    console.error("Browser artifact cleanup failed:", error instanceof Error ? error.message : String(error));
+  });
   const systemPrompt = new SystemPromptStore(path.join(userData, "pi-agent"));
   try {
     await migrateLegacyApiKeys(settings, credentials);

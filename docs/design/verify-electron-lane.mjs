@@ -57,7 +57,13 @@ const EXPECTED_TERMINAL_BACKGROUND = { dark: "#090c11", light: "#ffffff" };
 // macOS hiddenInset 标题栏的外框→内容区换算会随 Electron/系统小版本在 897/898px
 // 间波动。截图前固定内容区尺寸，避免同一界面只因 1 个 CSS px（Retina 下 2px）
 // 被黄金图门禁误判；现有 golden 主窗口内容区即 1440×897。
-const VERIFICATION_CONTENT_SIZE = { width: 1440, height: 897 };
+const VERIFICATION_REQUEST_SIZE = { width: 1440, height: 897 };
+const VERIFICATION_CONTENT_SIZE = {
+  width: VERIFICATION_REQUEST_SIZE.width,
+  // Remote macOS desktops can cap the inner viewport below setContentSize's
+  // request. Keep the golden default strict while allowing an explicit local lane.
+  height: Number(process.env.PI_DESKTOP_VERIFY_CONTENT_HEIGHT ?? VERIFICATION_REQUEST_SIZE.height),
+};
 
 fs.mkdirSync(outputDir, { recursive: true });
 
@@ -136,7 +142,7 @@ console.log("[electron-lane] 通过：Electron 主窗口 + 终端 + 浏览器工
 
 /** 固定截图内容区尺寸，消除 macOS 标题栏换算导致的 1 CSS px 非确定性。 */
 async function stabilizeContentSize(page, windowHandle) {
-  await windowHandle.evaluate((win, size) => win.setContentSize(size.width, size.height), VERIFICATION_CONTENT_SIZE);
+  await windowHandle.evaluate((win, size) => win.setContentSize(size.width, size.height), VERIFICATION_REQUEST_SIZE);
   const deadline = Date.now() + 10_000;
   let actual = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   while (
@@ -286,6 +292,7 @@ async function sceneBrowser(page, electronApp, windowHandle) {
       await page.getByRole("button", { name: /在内置浏览器中打开/ }).click({ timeout: 20_000 });
       await page.locator('main[aria-label="内置浏览器"]').waitFor({ timeout: 15_000 });
       await waitForBrowserViewReady(electronApp);
+      await assertBrowserPrivacyLifecycle(page, electronApp);
       await prepareBrowserViewCapture(electronApp);
 
       const viewFile = path.join(outputDir, `electron-browser-view-${theme}.png`);
@@ -303,6 +310,43 @@ async function sceneBrowser(page, electronApp, windowHandle) {
   } finally {
     hangServer.close();
   }
+}
+
+/** 真实 UI → preload → IPC → BrowserService：验证模式标识、三类清理操作和隐私 View 销毁。 */
+async function assertBrowserPrivacyLifecycle(page, electronApp) {
+  await page.getByText("持久模式 · Cookie 与站点数据保留", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "切换到隐私模式" }).click();
+  await page.getByText("隐私模式 · 关闭或切换后自动清除", { exact: true }).waitFor();
+  const privateState = await page.evaluate(() => window.piDesktop?.browser.state());
+  if (privateState?.mode !== "private") throw new Error(`[browser] IPC 状态应为 private，实际为 ${privateState?.mode}。`);
+  const partitionState = await electronApp.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    return win?.contentView.children
+      .filter((child) => child.webContents.id !== win.webContents.id)
+      .map((child) => child.webContents.session.isPersistent()) ?? [];
+  });
+  if (partitionState.length !== 2 || !partitionState.includes(true) || !partitionState.includes(false)) {
+    throw new Error(`[browser] 持久/隐私 View partition 隔离异常：${JSON.stringify(partitionState)}。`);
+  }
+
+  for (const title of [
+    "清除当前模式的 Cookie",
+    "清除当前模式的 HTTP 缓存",
+    "清除当前模式的 local/session storage",
+  ]) {
+    await page.getByTitle(title).click();
+  }
+  await page.getByRole("button", { name: "切换到持久模式" }).click();
+  await page.getByText("持久模式 · Cookie 与站点数据保留", { exact: true }).waitFor();
+  const restored = await page.evaluate(() => window.piDesktop?.browser.state());
+  const remainingViews = await electronApp.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    return win?.contentView.children.filter((child) => child.webContents.id !== win.webContents.id).length ?? 0;
+  });
+  if (restored?.mode !== "persistent" || remainingViews !== 1) {
+    throw new Error(`[browser] 隐私 View 销毁或持久模式恢复异常：mode=${restored?.mode}, views=${remainingViews}。`);
+  }
+  console.log("[electron-lane] 浏览器持久/隐私 partition、三类清理 IPC 与隐私 View 销毁（断言通过）");
 }
 
 /** 等待原生 WebContentsView 挂载且 bounds 已同步到工作台 surface（ResizeObserver 异步）。 */

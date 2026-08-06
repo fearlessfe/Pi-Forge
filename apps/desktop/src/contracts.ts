@@ -476,6 +476,15 @@ export type BrowserBounds = {
   height: number;
 };
 
+export type BrowserMode = "persistent" | "private";
+
+export type BrowserDataType = "cookies" | "cache" | "storage";
+
+export type BrowserClearDataInput = {
+  mode: BrowserMode;
+  dataTypes: BrowserDataType[];
+};
+
 export type BrowserState = {
   url: string;
   title: string;
@@ -484,7 +493,18 @@ export type BrowserState = {
   canGoForward: boolean;
   visible: boolean;
   annotating: boolean;
+  mode: BrowserMode;
   error?: string;
+};
+
+export type BrowserScreenshotMetadata = {
+  id: string;
+  owner: string;
+  path: string;
+  createdAt: string;
+  expiresAt: string;
+  ttlMs: number;
+  byteSize: number;
 };
 
 export type BrowserAnnotationElement = {
@@ -516,6 +536,7 @@ export type BrowserAnnotationResult = {
   viewport: { width: number; height: number; deviceScaleFactor: number };
   elements: BrowserAnnotationElement[];
   screenshotPath?: string;
+  screenshot?: BrowserScreenshotMetadata;
 };
 
 export type BrowserAnnotationCapture = {
@@ -743,6 +764,8 @@ export type PiDesktopApi = {
     forward(): Promise<BrowserState>;
     reload(): Promise<BrowserState>;
     stop(): Promise<BrowserState>;
+    setMode(mode: BrowserMode): Promise<BrowserState>;
+    clearData(input: BrowserClearDataInput): Promise<BrowserState>;
     setBounds(bounds: BrowserBounds): Promise<void>;
     setVisible(visible: boolean): Promise<BrowserState>;
     startAnnotation(prompt?: string): Promise<BrowserAnnotationCapture>;

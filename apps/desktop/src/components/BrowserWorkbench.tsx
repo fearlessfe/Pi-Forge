@@ -2,27 +2,21 @@ import {
   ArrowLeft,
   ArrowRight,
   Bug,
+  Cookie,
+  Database,
   Globe2,
   LoaderCircle,
   MousePointer2,
   RefreshCw,
   Send,
   ShieldCheck,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { BrowserAnnotationCapture, BrowserState } from "../contracts";
+import { browserClearDataInput, browserModeDescription, initialBrowserState, nextBrowserMode } from "../browser-workbench-model";
+import type { BrowserAnnotationCapture, BrowserDataType, BrowserState } from "../contracts";
 import { useI18n } from "../i18n";
-
-const initialState: BrowserState = {
-  url: "about:blank",
-  title: "",
-  loading: false,
-  canGoBack: false,
-  canGoForward: false,
-  visible: false,
-  annotating: false,
-};
 
 type BrowserWorkbenchProps = {
   agentRunning: boolean;
@@ -45,16 +39,20 @@ const inlineMessageClass = (tone: "error" | "success") =>
   `grid min-h-control-lg grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-base border-b border-separator px-loose py-base text-caption ${tone === "error" ? "bg-red/8 text-red" : "bg-green/8 text-green"}`;
 const inlineMessageButtonClass =
   "inline-flex min-h-control-sm cursor-pointer items-center gap-base rounded-sm border border-current bg-transparent px-base text-caption transition-colors duration-150 ease-apple hover:bg-fill active:bg-fill-2 active:scale-[0.98]";
+const browserDataButtonClass =
+  "inline-flex h-control-sm cursor-pointer items-center gap-tight rounded-sm border border-separator bg-fill px-base text-caption text-label-2 transition-colors duration-150 ease-apple hover:bg-fill-2 hover:text-label active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40";
 
 export function BrowserWorkbench({ agentRunning, onClose, onSendToAgent }: BrowserWorkbenchProps) {
   const { t } = useI18n();
   const surfaceRef = useRef<HTMLDivElement>(null);
   const addressRef = useRef<HTMLInputElement>(null);
-  const [state, setState] = useState(initialState);
+  const [state, setState] = useState(initialBrowserState);
   const [address, setAddress] = useState("");
   const [error, setError] = useState<string>();
   const [capture, setCapture] = useState<BrowserAnnotationCapture>();
   const [manualAnnotation, setManualAnnotation] = useState(false);
+  const [browserActionPending, setBrowserActionPending] = useState(false);
+  const [notice, setNotice] = useState<string>();
 
   useEffect(() => {
     if (!window.piDesktop?.browser) {
@@ -71,7 +69,7 @@ export function BrowserWorkbench({ agentRunning, onClose, onSendToAgent }: Brows
     }).catch((reason: unknown) => setError(errorMessage(reason)));
     return () => {
       unsubscribe();
-      void window.piDesktop?.browser.setVisible(false);
+      void window.piDesktop?.browser.setVisible(false).catch(() => undefined);
     };
   }, [t]);
 
@@ -112,6 +110,43 @@ export function BrowserWorkbench({ agentRunning, onClose, onSendToAgent }: Brows
     if (!value || !window.piDesktop?.browser) return;
     setCapture(undefined);
     void run(() => window.piDesktop!.browser.navigate(value));
+  }
+
+  async function switchMode() {
+    if (!window.piDesktop?.browser || state.annotating || manualAnnotation || browserActionPending) return;
+    setBrowserActionPending(true);
+    setCapture(undefined);
+    setNotice(undefined);
+    setError(undefined);
+    try {
+      const next = await window.piDesktop.browser.setMode(nextBrowserMode(state.mode));
+      setState(next);
+      setAddress(next.url === "about:blank" ? "" : next.url);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBrowserActionPending(false);
+    }
+  }
+
+  async function clearBrowserData(dataType: BrowserDataType) {
+    if (!window.piDesktop?.browser || state.annotating || manualAnnotation || browserActionPending) return;
+    setBrowserActionPending(true);
+    setNotice(undefined);
+    setError(undefined);
+    try {
+      const next = await window.piDesktop.browser.clearData(browserClearDataInput(state.mode, dataType));
+      setState(next);
+      const labels = { cookies: t("Cookie"), cache: t("HTTP 缓存"), storage: t("站点存储") };
+      setNotice(t("已清除当前 {mode}的{dataType}。", {
+        mode: t(state.mode === "persistent" ? "持久模式" : "隐私模式"),
+        dataType: labels[dataType],
+      }));
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setBrowserActionPending(false);
+    }
   }
 
   async function startAnnotation() {
@@ -174,12 +209,24 @@ export function BrowserWorkbench({ agentRunning, onClose, onSendToAgent }: Brows
         </div>
       </header>
 
-      <div className="flex min-h-[31px] items-center justify-between gap-card border-b border-separator bg-bg px-card text-caption text-label-3">
+      <div className="flex min-h-[38px] flex-wrap items-center justify-between gap-base border-b border-separator bg-bg px-card py-tight text-caption text-label-3">
         <span className="flex min-w-0 items-center gap-base"><Globe2 size={14} /><strong className="max-w-[420px] truncate font-medium text-label-2">{state.title || t("Frontend Debug Browser")}</strong></span>
-        <span className={`flex items-center gap-base ${annotating ? "text-accent" : ""}`}><i className={`size-[6px] rounded-full ${annotating ? "bg-accent" : "bg-label-4"}`} />{t(annotating ? "点击页面元素添加问题说明" : "隔离浏览器会话 · 调试数据保存在本机")}</span>
+        <div className="flex flex-wrap items-center justify-end gap-base">
+          <span className={`flex items-center gap-base ${state.mode === "private" || annotating ? "text-accent" : ""}`}>
+            <i className={`size-[6px] rounded-full ${state.mode === "private" || annotating ? "bg-accent" : "bg-label-4"}`} />
+            {t(annotating ? "点击页面元素添加问题说明" : browserModeDescription(state.mode))}
+          </span>
+          <button className={browserDataButtonClass} type="button" disabled={annotating || browserActionPending} onClick={() => void switchMode()}>
+            <ShieldCheck size={13} />{t(state.mode === "persistent" ? "切换到隐私模式" : "切换到持久模式")}
+          </button>
+          <button className={browserDataButtonClass} type="button" disabled={annotating || browserActionPending} onClick={() => void clearBrowserData("cookies")} title={t("清除当前模式的 Cookie")}><Cookie size={13} />{t("Cookie")}</button>
+          <button className={browserDataButtonClass} type="button" disabled={annotating || browserActionPending} onClick={() => void clearBrowserData("cache")} title={t("清除当前模式的 HTTP 缓存")}><Trash2 size={13} />{t("缓存")}</button>
+          <button className={browserDataButtonClass} type="button" disabled={annotating || browserActionPending} onClick={() => void clearBrowserData("storage")} title={t("清除当前模式的 local/session storage")}><Database size={13} />{t("站点存储")}</button>
+        </div>
       </div>
 
       {error && <div className={inlineMessageClass("error")}><Bug size={14} /><span>{error}</span><button className={inlineMessageButtonClass} type="button" onClick={() => setError(undefined)} aria-label={t("关闭")}><X size={14} /></button></div>}
+      {notice && <div className={inlineMessageClass("success")}><ShieldCheck size={14} /><span>{notice}</span><button className={inlineMessageButtonClass} type="button" onClick={() => setNotice(undefined)} aria-label={t("关闭")}><X size={14} /></button></div>}
       {capture && (
         <div className={inlineMessageClass("success")}>
           <MousePointer2 size={14} />

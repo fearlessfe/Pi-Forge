@@ -482,7 +482,12 @@ export class AgentRuntimeClient {
           result = await this.options.mcp.callTool(descriptor, request.args[1] as Record<string, unknown>, controller.signal);
           break;
         }
-        case "browser.startAnnotation": result = await this.options.browser.startAnnotation(request.args[0] as string | undefined, request.args[1] as string | undefined, controller.signal); break;
+        case "browser.startAnnotation": result = await this.options.browser.startAnnotation(
+          request.args[0] as string | undefined,
+          request.args[1] as string | undefined,
+          controller.signal,
+          `agent:${this.options.expectedConversationId ?? "runtime"}`,
+        ); break;
       }
       response = { kind: "host.response", id: request.id, result };
     } catch (error) {

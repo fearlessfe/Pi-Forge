@@ -38,7 +38,7 @@
 - 扩展、技能、Prompt、主题和包资源管理；
 - 持久化 Subagent Session、运行状态与 usage 记录；
 - 本地 Trace、OTLP HTTP 导出、内容采集等级和凭据脱敏；
-- 集成终端、内置浏览器和浏览器页面标注；
+- 集成终端、内置浏览器、持久/隐私浏览模式和有生命周期的页面标注截图；
 - Markdown 安全外链和受工作区约束的文件引用打开；
 - 会话索引、分页、服务端搜索和 `conversation.updated` 增量事件；
 - 流式事件批处理、消息 memo、真实视口测量和有界 DOM 窗口化；
@@ -177,7 +177,11 @@
 
 #### P1-5 浏览器隐私与标注截图生命周期
 
-**状态：未完成。** 浏览器固定使用 `persist:pi-desktop-browser`；标注截图直接写临时目录。
+**状态：已完成。** 浏览器保留 `persist:pi-desktop-browser` 持久 partition，并可切换到 Main 生成的临时内存 partition；UI 持续显示当前模式。关闭或离开隐私模式会销毁对应 `WebContentsView`，清空其 session 数据、HTTP cache 并关闭连接，不销毁或清理持久 View/session。
+
+Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session storage，不能指定 partition；Main 使用严格 IPC schema 验证后执行。localStorage 通过 Electron session 清理，sessionStorage 通过销毁目标 WebContents 的浏览上下文清理。
+
+标注截图由独立 artifact store 管理，metadata 包含 owner、创建时间、TTL/过期时间、字节数和路径；默认 TTL 24 小时、最多 32 张、总计 256 MiB。启动时异步删除没有 manifest 引用、已过期或超出配额的截图。
 
 完成定义：
 
@@ -188,6 +192,14 @@
 - 启动时异步清理无引用过期文件。
 
 主要位置：`apps/desktop/electron/browser-service.ts`。
+
+其他证据：
+
+- `apps/desktop/electron/browser-artifact-store.ts`
+- `apps/desktop/electron/ipc-input-validation.ts`
+- `apps/desktop/src/components/BrowserWorkbench.tsx`
+- `apps/desktop/electron/browser-service.test.ts`
+- `apps/desktop/electron/browser-artifact-store.test.ts`
 
 #### P1-6 CI 中的 UI/Electron/可访问性门禁
 
@@ -338,23 +350,22 @@
 
 ### 如果近期聚焦桌面体验
 
-1. 浏览器隐私和截图清理；
-2. 移除或实现“Pi 宠物”占位入口；
-3. ErrorBoundary 与领域 API 收敛；
-4. 用真实性能数据决定进一步懒加载和结构拆分。
+1. 移除或实现“Pi 宠物”占位入口；
+2. ErrorBoundary 与领域 API 收敛；
+3. 用真实性能数据决定进一步懒加载和结构拆分。
 
 ## 7. 最近一次验证状态
 
-2026-08-06 当前改动验证：
+2026-08-06 浏览器隐私与截图生命周期改动验证：
 
 - `pnpm lint`：通过；
 - `pnpm typecheck`：通过；
-- `pnpm test`：通过（Runtime contracts 1 个文件/9 项，Desktop 62 个文件/427 项）；
-- `pnpm test:coverage`：通过（Runtime contracts statement 97.32%、branch 86.66%、function 98.55%、line 96.66%；Desktop statement 89.73%、branch 82.97%、function 92.22%、line 93.92%）；
-- `pnpm build`：通过，包含 `@pi-forge/runtime-contracts` declaration/ESM 构建和 Desktop 生产构建；
-- `pnpm package:dir` 与 `pnpm package`：Apple Silicon macOS 本机通过；
-- packaged smoke：通过 preload、IPC、Runtime handshake 和 node-pty；
-- Release 产物脚本：真实 macOS DMG/ZIP 校验通过，7 个跨平台 fixture 的 `SHA256SUMS` 生成通过，注入 `.blockmap` 后按预期拒绝发布集合。
+- Runtime contracts 独立测试：通过（1 个文件、9 项测试）；
+- Desktop test/coverage：浏览器分支与 Runtime 契约分支分别通过，合并后的最终数字在本次集成验证后更新；
+- `pnpm build`：两个分支均通过，包含 `@pi-forge/runtime-contracts` declaration/ESM 构建和 Desktop 生产构建；
+- `pnpm verify:renderer`：通过（双主题 8 张截图、100-turn 性能场景、无 console/pageerror）；
+- `pnpm verify:electron`：通过 Main/Preload/IPC、终端、浏览器双主题，以及持久/隐私 partition、三类清理和隐私 View 销毁真实链路。当前远程 macOS 可达到的内容区为 1440×892，因此使用 `PI_DESKTOP_VERIFY_CONTENT_HEIGHT=892`；脚本默认黄金基线仍为 1440×897；
+- `pnpm verify:a11y`：通过 reduced-motion、forced-colors 和 125%/150% 缩放断言。
 
 发布前仍应运行：
 

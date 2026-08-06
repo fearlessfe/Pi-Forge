@@ -11,6 +11,8 @@ import {
   maxPromptTextAttachmentTotalBytes,
   supportedPromptImageMimeTypes,
   type BrowserBounds,
+  type BrowserClearDataInput,
+  type BrowserMode,
   type ContextBudgetRequest,
   type ConversationListQuery,
   type ModelMetadataOverride,
@@ -205,6 +207,20 @@ export const browserBoundsSchema = Type.Object({
   height: Type.Integer({ minimum: 1, maximum: 100_000 }),
 }, { additionalProperties: false });
 
+export const browserModeSchema = Type.Union([
+  Type.Literal("persistent"),
+  Type.Literal("private"),
+]);
+
+export const browserClearDataSchema = Type.Object({
+  mode: browserModeSchema,
+  dataTypes: Type.Array(Type.Union([
+    Type.Literal("cookies"),
+    Type.Literal("cache"),
+    Type.Literal("storage"),
+  ]), { minItems: 1, maxItems: 3, uniqueItems: true }),
+}, { additionalProperties: false });
+
 export const subagentProviderSchema = Type.Union([
   Type.Object({ kind: Type.Literal("builtin") }, { additionalProperties: false }),
   Type.Object({
@@ -386,6 +402,14 @@ export function requireObservabilitySettings(value: unknown): SaveObservabilityS
 
 export function requireBrowserBounds(value: unknown): BrowserBounds {
   return requireSchema<BrowserBounds>(browserBoundsSchema, value, "浏览器边界无效。");
+}
+
+export function requireBrowserMode(value: unknown): BrowserMode {
+  return requireSchema<BrowserMode>(browserModeSchema, value, "浏览模式无效。");
+}
+
+export function requireBrowserClearDataInput(value: unknown): BrowserClearDataInput {
+  return requireSchema<BrowserClearDataInput>(browserClearDataSchema, value, "浏览数据清理选项无效。");
 }
 
 export function requireSubagentProvider(value: unknown): SubagentProvider {

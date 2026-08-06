@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { BrowserWindow, session, WebContentsView } from "electron";
+import { BrowserWindow, session, WebContentsView, type Session } from "electron";
 import type {
   AppearanceTheme,
   BrowserAnnotationCapture,
   BrowserAnnotationElement,
   BrowserAnnotationResult,
   BrowserBounds,
+  BrowserClearDataInput,
   BrowserEvent,
+  BrowserMode,
+  BrowserScreenshotMetadata,
   BrowserState,
 } from "../src/contracts.js";
 import {
@@ -17,9 +18,11 @@ import {
   startBrowserAnnotationScript,
 } from "./browser-annotation-script.js";
 import { formatBrowserAnnotation, normalizeBrowserUrl } from "./browser-utils.js";
+import { BrowserArtifactStore, type BrowserArtifactCleanupReport } from "./browser-artifact-store.js";
 
 const annotationWorldId = 999;
 const maxElements = 20;
+const persistentPartition = "persist:pi-desktop-browser";
 
 /* 原生 WebContentsView 背景随主题切换（docs-internal/design-refresh-apple.md 3.6），
    深色对齐 token v2 --bg-window，浅色对齐浅色 --bg-window。 */
@@ -114,21 +117,31 @@ function parseAnnotation(value: unknown, url: string, title: string): BrowserAnn
 }
 
 export class BrowserService {
-  private view?: WebContentsView;
+  private persistentView?: WebContentsView;
+  private privateView?: WebContentsView;
+  private privateSession?: Session;
+  private privatePartition?: string;
+  private readonly privateSessions = new Set<Session>();
+  private readonly configuredSessions = new WeakSet<Session>();
+  private readonly artifacts: BrowserArtifactStore;
   private visible = false;
   private annotating = false;
   private error?: string;
   private bounds: BrowserBounds = { x: 0, y: 0, width: 1, height: 1 };
   private theme: AppearanceTheme = "dark";
+  private mode: BrowserMode = "persistent";
 
   constructor(
     private readonly window: () => BrowserWindow | null,
-    private readonly artifactDirectory: string,
+    artifactDirectory: string,
     private readonly emit: BrowserEventSink,
-  ) {}
+    artifactStore?: BrowserArtifactStore,
+  ) {
+    this.artifacts = artifactStore ?? new BrowserArtifactStore(artifactDirectory);
+  }
 
   state(): BrowserState {
-    const contents = this.view?.webContents;
+    const contents = this.activeView()?.webContents;
     return {
       url: contents?.getURL() ?? "about:blank",
       title: contents?.getTitle() ?? "",
@@ -137,8 +150,13 @@ export class BrowserService {
       canGoForward: contents?.navigationHistory.canGoForward() ?? false,
       visible: this.visible,
       annotating: this.annotating,
+      mode: this.mode,
       error: this.error,
     };
+  }
+
+  cleanupArtifacts(): Promise<BrowserArtifactCleanupReport> {
+    return this.artifacts.cleanup();
   }
 
   async navigate(input: string): Promise<BrowserState> {
@@ -181,6 +199,43 @@ export class BrowserService {
     return this.state();
   }
 
+  async setMode(mode: BrowserMode): Promise<BrowserState> {
+    if (mode === this.mode) return this.state();
+    if (this.annotating) throw new Error("页面标注期间不能切换浏览模式。");
+    const previousMode = this.mode;
+    this.error = undefined;
+    if (previousMode === "private") await this.destroyPrivateSession();
+    else this.persistentView?.setVisible(false);
+    this.mode = mode;
+    if (this.visible) this.ensureView();
+    this.publish();
+    return this.state();
+  }
+
+  async clearData(input: BrowserClearDataInput): Promise<BrowserState> {
+    if (this.annotating && input.mode === this.mode) throw new Error("页面标注期间不能清理浏览数据。");
+    const browserSession = input.mode === "persistent"
+      ? session.fromPartition(persistentPartition)
+      : this.privateSession;
+    if (!browserSession) return this.state();
+
+    const dataTypes = new Set(input.dataTypes);
+    const view = this.viewFor(input.mode);
+    const restoreUrl = view?.webContents.isDestroyed() ? undefined : view?.webContents.getURL();
+    // Session.clearStorageData clears localStorage for every origin in the partition.
+    // Closing the target WebContents also destroys its per-tab sessionStorage namespace.
+    if (dataTypes.has("storage")) this.destroyView(input.mode);
+    if (dataTypes.has("cookies")) await browserSession.clearStorageData({ storages: ["cookies"] });
+    if (dataTypes.has("cache")) await browserSession.clearCache();
+    if (dataTypes.has("storage")) await browserSession.clearStorageData({ storages: ["localstorage"] });
+    if (dataTypes.has("storage") && input.mode === this.mode && this.visible) {
+      const next = this.ensureView();
+      if (restoreUrl && restoreUrl !== "about:blank") await next.webContents.loadURL(restoreUrl);
+    }
+    this.publish();
+    return this.state();
+  }
+
   setBounds(value: BrowserBounds): void {
     const parent = this.window();
     if (!parent || parent.isDestroyed()) return;
@@ -193,14 +248,17 @@ export class BrowserService {
       width: Math.max(1, Math.min(windowBounds.width - x, Math.round(finite(value.width, 1)))),
       height: Math.max(1, Math.min(windowBounds.height - y, Math.round(finite(value.height, 1)))),
     };
-    this.view?.setBounds(this.bounds);
+    this.activeView()?.setBounds(this.bounds);
   }
 
-  setVisible(visible: boolean): BrowserState {
+  async setVisible(visible: boolean): Promise<BrowserState> {
+    if (!visible && this.annotating) await this.cancelAnnotation();
     this.visible = visible;
     if (visible) {
       const view = this.ensureView();
       view.setBounds(this.bounds);
+    } else if (this.mode === "private") {
+      await this.destroyPrivateSession();
     }
     this.syncViewVisibility();
     this.publish();
@@ -210,10 +268,11 @@ export class BrowserService {
   /** 主题同步：记录主题并应用到已存在的原生视图；视图延迟创建时在 ensureView 里取当前主题。 */
   setTheme(theme: AppearanceTheme): void {
     this.theme = theme;
-    this.view?.setBackgroundColor(viewBackground[theme]);
+    this.persistentView?.setBackgroundColor(viewBackground[theme]);
+    this.privateView?.setBackgroundColor(viewBackground[theme]);
   }
 
-  async startAnnotation(url?: string, prompt = "", signal?: AbortSignal): Promise<BrowserAnnotationCapture> {
+  async startAnnotation(url?: string, prompt = "", signal?: AbortSignal, owner = "agent-runtime"): Promise<BrowserAnnotationCapture> {
     if (this.annotating) throw new Error("已经有一个页面标注任务正在进行。");
     const view = this.ensureView();
     if (url) await this.navigate(url);
@@ -235,7 +294,10 @@ export class BrowserService {
         true,
       );
       const result = parseAnnotation(raw, view.webContents.getURL(), view.webContents.getTitle());
-      if (result.success) result.screenshotPath = await this.captureScreenshot(view);
+      if (result.success) {
+        result.screenshot = await this.captureScreenshot(view, owner);
+        result.screenshotPath = result.screenshot.path;
+      }
       return { result, markdown: formatBrowserAnnotation(result) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -257,34 +319,39 @@ export class BrowserService {
   }
 
   async cancelAnnotation(): Promise<void> {
-    if (!this.view || this.view.webContents.isDestroyed() || !this.annotating) return;
-    await this.view.webContents.executeJavaScriptInIsolatedWorld(
+    const view = this.activeView();
+    if (!view || view.webContents.isDestroyed() || !this.annotating) return;
+    await view.webContents.executeJavaScriptInIsolatedWorld(
       annotationWorldId,
       [{ code: cancelBrowserAnnotationScript }],
       true,
     ).catch(() => undefined);
   }
 
-  dispose(): void {
-    if (!this.view) return;
-    const parent = this.window();
-    if (parent && !parent.isDestroyed()) parent.contentView.removeChildView(this.view);
-    if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
-    this.view = undefined;
+  async dispose(): Promise<void> {
+    this.destroyView("persistent");
+    await this.destroyPrivateSession();
   }
 
   private ensureView(): WebContentsView {
-    if (this.view && !this.view.webContents.isDestroyed()) return this.view;
+    const existing = this.activeView();
+    if (existing && !existing.webContents.isDestroyed()) return existing;
     const parent = this.window();
     if (!parent || parent.isDestroyed()) throw new Error("主窗口尚未准备好。");
-    const browserSession = session.fromPartition("persist:pi-desktop-browser");
-    browserSession.setPermissionCheckHandler(() => false);
-    browserSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-    browserSession.on("will-download", (event) => event.preventDefault());
+    const partition = this.mode === "persistent"
+      ? persistentPartition
+      : this.privatePartition ?? `pi-desktop-private-${randomUUID()}`;
+    const browserSession = session.fromPartition(partition);
+    if (this.mode === "private") {
+      this.privatePartition = partition;
+      this.privateSession = browserSession;
+      this.privateSessions.add(browserSession);
+    }
+    this.configureSession(browserSession);
 
     const view = new WebContentsView({
       webPreferences: {
-        partition: "persist:pi-desktop-browser",
+        partition,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -328,9 +395,54 @@ export class BrowserService {
       }
       return { action: "deny" };
     });
-    this.view = view;
+    if (this.mode === "persistent") this.persistentView = view;
+    else this.privateView = view;
     void view.webContents.loadURL("about:blank");
     return view;
+  }
+
+  private activeView(): WebContentsView | undefined {
+    return this.viewFor(this.mode);
+  }
+
+  private viewFor(mode: BrowserMode): WebContentsView | undefined {
+    return mode === "persistent" ? this.persistentView : this.privateView;
+  }
+
+  private configureSession(browserSession: Session): void {
+    if (this.configuredSessions.has(browserSession)) return;
+    this.configuredSessions.add(browserSession);
+    browserSession.setPermissionCheckHandler(() => false);
+    browserSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    browserSession.on("will-download", (event) => event.preventDefault());
+  }
+
+  private destroyView(mode: BrowserMode): void {
+    const view = this.viewFor(mode);
+    if (!view) return;
+    const parent = this.window();
+    if (parent && !parent.isDestroyed()) parent.contentView.removeChildView(view);
+    if (!view.webContents.isDestroyed()) view.webContents.close();
+    if (mode === "persistent") this.persistentView = undefined;
+    else this.privateView = undefined;
+  }
+
+  private async destroyPrivateSession(): Promise<void> {
+    this.destroyView("private");
+    this.privateSession = undefined;
+    this.privatePartition = undefined;
+    const failures: unknown[] = [];
+    for (const browserSession of this.privateSessions) {
+      const results = await Promise.allSettled([
+        browserSession.clearStorageData(),
+        browserSession.clearCache(),
+        browserSession.closeAllConnections(),
+      ]);
+      const sessionFailures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+      if (sessionFailures.length === 0) this.privateSessions.delete(browserSession);
+      else failures.push(...sessionFailures);
+    }
+    if (failures.length > 0) throw new AggregateError(failures, "隐私浏览数据清理失败。");
   }
 
   private publish(): void {
@@ -339,9 +451,12 @@ export class BrowserService {
   }
 
   private syncViewVisibility(): void {
-    if (!this.view || this.view.webContents.isDestroyed()) return;
-    const url = this.view.webContents.getURL();
-    this.view.setVisible(this.visible && Boolean(url) && url !== "about:blank");
+    this.persistentView?.setVisible(false);
+    this.privateView?.setVisible(false);
+    const view = this.activeView();
+    if (!view || view.webContents.isDestroyed()) return;
+    const url = view.webContents.getURL();
+    view.setVisible(this.visible && Boolean(url) && url !== "about:blank");
   }
 
   private waitForLoad(view: WebContentsView): Promise<void> {
@@ -362,11 +477,8 @@ export class BrowserService {
     });
   }
 
-  private async captureScreenshot(view: WebContentsView): Promise<string> {
+  private async captureScreenshot(view: WebContentsView, owner: string): Promise<BrowserScreenshotMetadata> {
     const image = await view.webContents.capturePage();
-    fs.mkdirSync(this.artifactDirectory, { recursive: true, mode: 0o700 });
-    const screenshotPath = path.join(this.artifactDirectory, `pi-browser-annotation-${randomUUID()}.png`);
-    fs.writeFileSync(screenshotPath, image.toPNG(), { mode: 0o600 });
-    return screenshotPath;
+    return this.artifacts.save(image.toPNG(), owner);
   }
 }
