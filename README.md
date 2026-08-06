@@ -191,9 +191,17 @@ pnpm test
 pnpm test:coverage
 pnpm build
 pnpm package
+pnpm verify:setup
+pnpm verify:tokens
+pnpm verify:renderer
+pnpm verify:electron
+pnpm verify:a11y
+pnpm verify:golden
 ```
 
 `pnpm build` compiles the application, while `pnpm package` creates an installer for the current operating system in `apps/desktop/release`. Use `pnpm package:dir` when you only need an unpacked application for a quick local check.
+
+`pnpm verify:setup` installs the workspace-local Playwright Chromium used by the renderer and accessibility lanes. The golden command only compares screenshots produced by the renderer, accessibility, and Electron lanes with the tracked baselines; it never updates those baselines automatically. Pushes and pull requests run token checks plus renderer and critical preload/IPC smoke coverage on Ubuntu. The complete renderer, accessibility, Electron, and golden suite runs nightly and on demand on macOS, with screenshots and logs uploaded when it fails.
 
 ### Releases
 

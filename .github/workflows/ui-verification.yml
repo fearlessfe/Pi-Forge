@@ -1,0 +1,99 @@
+name: Full UI verification
+
+on:
+  schedule:
+    # 02:30 Asia/Shanghai. GitHub Actions schedules use UTC.
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-ui-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  full-ui-verification:
+    name: Accessibility, golden, and Electron
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+      SHOTS_DIR: ${{ github.workspace }}/artifacts/full-ui/shots
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.10.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Cache Playwright Chromium
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Cache Electron runtime
+        uses: actions/cache@v4
+        with:
+          path: .cache/electron
+          key: electron-runtime-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install chromium
+
+      - name: Prepare verification artifacts
+        run: mkdir -p artifacts/full-ui/logs "$SHOTS_DIR"
+
+      - name: Verify renderer
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm verify:renderer 2>&1 | tee artifacts/full-ui/logs/renderer.log
+
+      - name: Verify accessibility
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm verify:a11y 2>&1 | tee artifacts/full-ui/logs/a11y.log
+
+      - name: Verify Electron
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm verify:electron 2>&1 | tee artifacts/full-ui/logs/electron.log
+
+      - name: Compare golden screenshots
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm verify:golden 2>&1 | tee artifacts/full-ui/logs/golden.log
+
+      - name: Upload full UI failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-ui-failure-${{ github.run_attempt }}
+          path: artifacts/full-ui
+          if-no-files-found: warn
+          retention-days: 14

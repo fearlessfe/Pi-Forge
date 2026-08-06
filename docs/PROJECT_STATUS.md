@@ -46,6 +46,7 @@
 - MIT 开源许可证及 README/package 分发元数据；
 - Renderer 崩溃熔断、无响应提示、受控重载和活动 Agent 事件恢复；
 - 原生平台 packaged-app 启动冒烟、精确 Release 产物校验和 SHA-256 校验清单。
+- PR/push 的 token、renderer、关键 Electron IPC 快速门禁，以及 nightly/手动完整 UI、a11y、golden、Electron 门禁。
 
 关键证据：
 
@@ -203,23 +204,25 @@ Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session st
 
 #### P1-6 CI 中的 UI/Electron/可访问性门禁
 
-**状态：部分完成。** 验证脚本已经存在，但未接入 CI/Release。
+**状态：已完成。** PR/push 快速车道在固定 Node/pnpm 版本的 Ubuntu Runner 上执行 token、四场景双主题 renderer smoke，以及真实 preload/主题 IPC 往返；nightly/手动车道在 macOS 上执行完整 renderer、a11y、Electron 与 golden 验证。两条车道缓存 pnpm 与固定 Playwright Chromium，失败时上传已有截图、diff 和分步日志。
 
-现有脚本：
+验证入口：
 
 - `pnpm verify:tokens`
+- `pnpm verify:renderer:smoke`
+- `pnpm verify:electron:smoke`
 - `pnpm verify:renderer`
 - `pnpm verify:electron`
 - `pnpm verify:a11y`
 - `pnpm verify:golden`
 
-剩余工作：
+分层边界：
 
-- PR 快速车道接入 tokens、renderer smoke 和关键 Electron IPC；
-- nightly 接入完整 a11y/golden/Electron；
-- release 已接入 packaged-app 启动；剩余升级/回滚测试。
+- smoke 模式是新增的显式入口，不改变现有完整命令；renderer smoke 只跳过易受共享 Runner 负载影响的 PERF-01 时延/长会话探针，Electron smoke 只跳过真实 node-pty 与原生 WebContentsView 场景；
+- golden 依赖三条完整车道在同一 macOS Runner 产出截图，且只比较、不自动更新人工确认的基线，因此不进入每个 PR；
+- Release 已接入各原生平台 packaged-app 启动；自动更新、升级与回滚测试仍未完成，归入发布可靠性后续工作。
 
-证据：`.github/workflows/ci.yml`、`.github/workflows/release.yml`。
+证据：`.github/workflows/ci.yml`、`.github/workflows/ui-verification.yml`、`.github/workflows/release.yml`、`docs/design/verify-*-lane.mjs`。
 
 #### P1-7 性能与 bundle 自动预算
 
@@ -310,7 +313,7 @@ Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session st
 - 多个 Renderer 组件直接访问 `window.piDesktop`，没有统一领域 API 入口；
 - 目前只有 `TerminalPanel` 懒加载，Settings、Plugin Center、Markdown 等仍可继续按测量结果拆分；
 - 根目录缺少 `.node-version`、Volta 或 mise 等本地 Node 固定文件；
-- UI 组件和若干 Electron 入口仍被单元覆盖率排除，需要 E2E/设计车道补足，而不是简单追求覆盖率数字。
+- UI 组件和若干 Electron 入口仍被单元覆盖率排除，由 renderer/Electron/a11y 设计车道补证；仍需按风险扩充真实交互覆盖，而不是简单追求单元覆盖率数字。
 
 相关旧计划：`docs-internal/refactor-plan.md`。执行时应重新按当前代码评估，不要照搬旧行号或已完成项。
 
@@ -338,7 +341,7 @@ Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session st
 1. 签名和公证；
 2. SBOM 与 artifact provenance；
 3. 自动更新、升级验证和回滚；
-4. CI 接入 Electron、renderer 和 a11y 门禁。
+4. 在 Windows/Linux 扩充签名后安装、升级和回滚的 UI 取证。
 
 ### 如果近期继续建设 Agent 平台
 
@@ -356,16 +359,21 @@ Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session st
 
 ## 7. 最近一次验证状态
 
-2026-08-06 浏览器隐私与截图生命周期改动验证：
+2026-08-06 Runtime 契约、浏览器隐私与 UI CI 三项集成验证：
 
 - `pnpm lint`：通过；
 - `pnpm typecheck`：通过；
 - Runtime contracts 独立测试：通过（1 个文件、9 项测试）；
 - Desktop test/coverage：浏览器分支与 Runtime 契约分支分别通过，合并后的最终数字在本次集成验证后更新；
 - `pnpm build`：两个分支均通过，包含 `@pi-forge/runtime-contracts` declaration/ESM 构建和 Desktop 生产构建；
-- `pnpm verify:renderer`：通过（双主题 8 张截图、100-turn 性能场景、无 console/pageerror）；
+- `pnpm verify:tokens`：通过（54 个 token 工具类）；
+- `pnpm verify:renderer:smoke` 与完整 `pnpm verify:renderer`：通过（四场景双主题、100-turn 性能场景、无 console/pageerror）；
+- `pnpm verify:electron:smoke`：通过（真实 preload、BrowserWindow 背景与主题 IPC 往返）；
 - `pnpm verify:electron`：通过 Main/Preload/IPC、终端、浏览器双主题，以及持久/隐私 partition、三类清理和隐私 View 销毁真实链路。当前远程 macOS 可达到的内容区为 1440×892，因此使用 `PI_DESKTOP_VERIFY_CONTENT_HEIGHT=892`；脚本默认黄金基线仍为 1440×897；
 - `pnpm verify:a11y`：通过 reduced-motion、forced-colors 和 125%/150% 缩放断言。
+- `pnpm package:dir` 与 `pnpm package`：Apple Silicon macOS 本机通过；
+- packaged smoke：通过 preload、IPC、Runtime handshake 和 node-pty；
+- Release 产物脚本：真实 macOS DMG/ZIP 校验通过，7 个跨平台 fixture 的 `SHA256SUMS` 生成通过，注入 `.blockmap` 后按预期拒绝发布集合。
 
 发布前仍应运行：
 

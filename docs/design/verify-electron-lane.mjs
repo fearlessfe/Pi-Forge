@@ -19,8 +19,10 @@
  * （electron-browser-view-*.png）。
  *
  * 用法：
- *   node docs/design/verify-electron-lane.mjs [输出目录]
+ *   node docs/design/verify-electron-lane.mjs [--smoke] [输出目录]
  *   输出目录也可用环境变量 SHOTS_DIR 指定，默认 docs/design/shots/。
+ *   --smoke 只执行主窗口与真实主题 IPC 往返，供 PR/push 快速车道使用；不传参数时
+ *   仍执行包含真实 node-pty 与原生 WebContentsView 的完整 Electron 车道。
  *   构建产物缺失或过期时自动执行 pnpm --filter @pi-desktop/renderer build。
  *   浏览器/运行时二进制缺失时先跑 pnpm verify:setup。
  *   应用用户数据通过 PI_DESKTOP_USER_DATA 重定向到临时目录，退出时清理。
@@ -43,7 +45,10 @@ const repoRoot = path.resolve(import.meta.dirname, "../..");
 const appDir = path.join(repoRoot, "apps/desktop");
 const mainJs = path.join(appDir, "dist-electron/electron/main.js");
 const rendererHtml = path.join(appDir, "dist/index.html");
-const outputDir = path.resolve(process.argv[2] ?? process.env.SHOTS_DIR ?? path.join(import.meta.dirname, "shots"));
+const args = process.argv.slice(2);
+const smokeOnly = args.includes("--smoke");
+const outputArg = args.find((arg) => !arg.startsWith("--"));
+const outputDir = path.resolve(outputArg ?? process.env.SHOTS_DIR ?? path.join(import.meta.dirname, "shots"));
 
 // D4（3.6 跨进程主题链路）后：BrowserWindow 背景对齐 token v2 的 --bg-window
 // （styles.css 主题变量层），深色 #1C1C1E / 浅色 #F5F5F7。
@@ -125,11 +130,13 @@ try {
   const page = await electronApp.firstWindow();
   attachPageListeners(page);
   const windowHandle = await electronApp.browserWindow(page);
-  await stabilizeContentSize(page, windowHandle);
+  await stabilizeContentSize(page, windowHandle, { strict: !smokeOnly });
 
   await sceneMainWindow(page, windowHandle);
-  await sceneTerminal(page, windowHandle);
-  await sceneBrowser(page, electronApp, windowHandle);
+  if (!smokeOnly) {
+    await sceneTerminal(page, windowHandle);
+    await sceneBrowser(page, electronApp, windowHandle);
+  }
 } finally {
   await electronApp?.close();
   fs.rmSync(userDataDir, { recursive: true, force: true });
@@ -138,12 +145,14 @@ try {
 if (consoleErrors.length) {
   console.warn(`[electron-lane] 渲染进程 console/pageerror（D0 仅打印不拦截）：\n${consoleErrors.join("\n")}`);
 }
-console.log("[electron-lane] 通过：Electron 主窗口 + 终端 + 浏览器工作台场景完成。");
+console.log(smokeOnly
+  ? "[electron-lane] smoke 通过：Electron 主窗口、preload 与主题 IPC 往返完成。"
+  : "[electron-lane] 通过：Electron 主窗口 + 终端 + 浏览器工作台场景完成。");
 
 /** 固定截图内容区尺寸，消除 macOS 标题栏换算导致的 1 CSS px 非确定性。 */
-async function stabilizeContentSize(page, windowHandle) {
+async function stabilizeContentSize(page, windowHandle, { strict }) {
   await windowHandle.evaluate((win, size) => win.setContentSize(size.width, size.height), VERIFICATION_REQUEST_SIZE);
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + (strict ? 10_000 : 1_000);
   let actual = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   while (
     (actual.width !== VERIFICATION_CONTENT_SIZE.width || actual.height !== VERIFICATION_CONTENT_SIZE.height)
@@ -153,6 +162,13 @@ async function stabilizeContentSize(page, windowHandle) {
     actual = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
   }
   if (actual.width !== VERIFICATION_CONTENT_SIZE.width || actual.height !== VERIFICATION_CONTENT_SIZE.height) {
+    if (!strict && actual.width === VERIFICATION_CONTENT_SIZE.width && actual.height >= 800) {
+      console.log(
+        `[electron-lane] smoke 使用系统可用内容区 ${actual.width}x${actual.height}；`
+        + "完整 golden 车道仍严格要求 1440x897。",
+      );
+      return;
+    }
     throw new Error(
       `Electron 验收内容区尺寸应为 ${VERIFICATION_CONTENT_SIZE.width}x${VERIFICATION_CONTENT_SIZE.height}，`
       + `实际为 ${actual.width}x${actual.height}。`,

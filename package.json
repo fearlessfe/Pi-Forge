@@ -14,7 +14,9 @@
     "typecheck": "pnpm --filter @pi-forge/runtime-contracts typecheck && pnpm --filter @pi-desktop/renderer typecheck",
     "verify:setup": "PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium",
     "verify:tokens": "node docs/design/verify-tokens.mjs",
+    "verify:renderer:smoke": "node docs/design/verify-renderer-lane.mjs --smoke",
     "verify:renderer": "node docs/design/verify-renderer-lane.mjs",
+    "verify:electron:smoke": "node docs/design/verify-electron-lane.mjs --smoke",
     "verify:electron": "node docs/design/verify-electron-lane.mjs",
     "verify:a11y": "node docs/design/verify-a11y.mjs",
     "verify:golden": "node docs/design/verify-golden.mjs"

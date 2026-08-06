@@ -191,9 +191,17 @@ pnpm test
 pnpm test:coverage
 pnpm build
 pnpm package
+pnpm verify:setup
+pnpm verify:tokens
+pnpm verify:renderer
+pnpm verify:electron
+pnpm verify:a11y
+pnpm verify:golden
 ```
 
 `pnpm build` 只编译应用，`pnpm package` 会为当前操作系统生成安装包，产物位于 `apps/desktop/release`。如果只想快速检查未封装的应用目录，可以运行 `pnpm package:dir`。
+
+`pnpm verify:setup` 会安装 renderer 与可访问性车道使用的 workspace-local Playwright Chromium。golden 命令只把 renderer、a11y、Electron 车道生成的截图与仓库内基线比较，绝不会自动更新基线。push 和 PR 会在 Ubuntu 上执行 token、renderer smoke 与关键 preload/IPC smoke；完整 renderer、a11y、Electron、golden 套件则在 macOS 上 nightly 运行，也可手动触发，失败时会上传截图和日志。
 
 ### 版本发布
 

@@ -10,8 +10,10 @@
  * mock 的契约同步维护要求见该文件头。
  *
  * 用法：
- *   node docs/design/verify-renderer-lane.mjs [输出目录]
+ *   node docs/design/verify-renderer-lane.mjs [--smoke] [输出目录]
  *   输出目录也可用环境变量 SHOTS_DIR 指定，默认 docs/design/shots/。
+ *   --smoke 保留四场景 × 双主题与 console/pageerror 门禁，仅跳过对 CI 负载敏感的
+ *   PERF-01 时延/长会话探针；不传参数时仍执行完整车道。
  *   浏览器二进制缺失时先跑 pnpm verify:setup。
  *   页面出现任何 console error / pageerror，或双主题断言失败时以非零码退出。
  */
@@ -28,7 +30,10 @@ import {
   scenarios,
 } from "./verify-lane-lib.mjs";
 
-const outputDir = path.resolve(process.argv[2] ?? process.env.SHOTS_DIR ?? path.join(import.meta.dirname, "shots"));
+const args = process.argv.slice(2);
+const smokeOnly = args.includes("--smoke");
+const outputArg = args.find((arg) => !arg.startsWith("--"));
+const outputDir = path.resolve(outputArg ?? process.env.SHOTS_DIR ?? path.join(import.meta.dirname, "shots"));
 fs.mkdirSync(outputDir, { recursive: true });
 
 let serverProcess = null;
@@ -253,15 +258,17 @@ try {
     await page.close();
   }
 
-  const performancePage = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
-  performancePage.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(`[performance] console: ${message.text()}`);
-  });
-  performancePage.on("pageerror", (err) => consoleErrors.push(`[performance] pageerror: ${err.message}`));
-  await performancePage.addInitScript(installMockBridge, { performanceConversation: true });
-  await performancePage.addInitScript(() => window.localStorage.setItem("pi-theme", "dark"));
-  await assertPerformanceConversation(performancePage);
-  await performancePage.close();
+  if (!smokeOnly) {
+    const performancePage = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+    performancePage.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(`[performance] console: ${message.text()}`);
+    });
+    performancePage.on("pageerror", (err) => consoleErrors.push(`[performance] pageerror: ${err.message}`));
+    await performancePage.addInitScript(installMockBridge, { performanceConversation: true });
+    await performancePage.addInitScript(() => window.localStorage.setItem("pi-theme", "dark"));
+    await assertPerformanceConversation(performancePage);
+    await performancePage.close();
+  }
 } finally {
   await browser?.close();
   await killServer(serverProcess);
@@ -271,4 +278,6 @@ if (consoleErrors.length) {
   console.error(`浏览器 console/pageerror：\n${consoleErrors.join("\n")}`);
   process.exit(1);
 }
-console.log("[renderer-lane] 通过：8 张渲染层截图与 PERF-01 长会话真实 DOM 验证已完成，双主题断言通过，无 console/pageerror。");
+console.log(smokeOnly
+  ? "[renderer-lane] smoke 通过：8 张渲染层截图已产出，四场景双主题断言通过，无 console/pageerror。"
+  : "[renderer-lane] 通过：8 张渲染层截图与 PERF-01 长会话真实 DOM 验证已完成，双主题断言通过，无 console/pageerror。");
