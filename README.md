@@ -217,20 +217,24 @@ pi-forge/
 │       ├── electron/       # Electron main process and application services
 │       ├── src/            # React renderer, components, and shared contracts
 │       └── scripts/        # Development and runtime support scripts
+├── packages/
+│   └── runtime-contracts/   # Internal prerelease v0 Runtime/Session/Event wire contract
 ├── docs/                   # Design assets and verification scripts
 ├── package.json
 └── pnpm-workspace.yaml
 ```
 
-As the runtime boundaries stabilize, we plan to extract:
+`@pi-forge/runtime-contracts` is the first real platform package. It provides protocol-versioned envelopes, capability negotiation, fail-closed runtime validators, and shared Session/Event types. It remains private at version `0.0.0`: this is an internal prerelease v0 contract, not a stable v1 compatibility promise. Electron host RPC for credentials, MCP, browser access, and desktop services is deliberately excluded.
+
+The remaining platform packages are still planned:
 
 ```text
 packages/
+├── runtime-contracts/      # Implemented internal v0 wire contracts
 ├── runtime/                # Agent lifecycle and harness
 ├── session/                # Durable events and context queries
 ├── hands/                  # Sandbox, MCP, and remote execution adapters
 ├── policy/                 # Permissions, approvals, and organization policy
-├── contracts/              # Stable public protocols
 └── sdk/                    # Custom agent development APIs
 ```
 

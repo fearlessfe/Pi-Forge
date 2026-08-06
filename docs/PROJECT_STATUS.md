@@ -134,7 +134,15 @@
 
 #### P1-3 稳定公共契约与定制 Agent SDK
 
-**状态：未完成。** 当前契约和 Runtime 协议仍在桌面应用内部，仓库没有实际 `packages/*` 实现。
+**状态：部分完成（公共契约 v0 第一阶段）。** 仓库已有真实 `packages/runtime-contracts` workspace package，Desktop client/worker 通过它共享版本化 Runtime envelope、method/capability/error 语义、Session/Event 类型和运行时 schema validator。协议 v0 使用精确版本兼容；必需 capability 缺失、未知方法、版本不兼容和 malformed envelope 都会 fail closed。该 package 仍为私有 `0.0.0` 内部预发布契约，不是稳定 v1。
+
+已完成边界：
+
+- compatibility fixtures、schema validation、JSON round-trip 和 capability negotiation 测试；
+- client/worker method 清单穷尽性检查，以及 client 对畸形 worker 消息的断路；
+- 凭据、MCP、浏览器和桌面服务 host RPC 仍保留在 Electron 私有层，没有进入公共 package。
+
+剩余工作：完整耐久事件流及其 offset/checkpoint/迁移语义、可发布 SDK、最小示例 Agent 和模板、v1 兼容政策；这些均不属于本阶段。
 
 完成定义：
 
@@ -145,6 +153,7 @@
 
 当前相关位置：
 
+- `packages/runtime-contracts`
 - `apps/desktop/src/contracts.ts`
 - `apps/desktop/electron/agent-runtime-protocol.ts`
 - `pnpm-workspace.yaml`
@@ -340,8 +349,9 @@
 
 - `pnpm lint`：通过；
 - `pnpm typecheck`：通过；
-- `pnpm test`：通过（61 个文件、423 项测试）；
-- `pnpm test:coverage`：通过（statement 89.73%、branch 82.96%、function 92.21%、line 93.95%）；
+- `pnpm test`：通过（Runtime contracts 1 个文件/9 项，Desktop 62 个文件/427 项）；
+- `pnpm test:coverage`：通过（Runtime contracts statement 97.32%、branch 86.66%、function 98.55%、line 96.66%；Desktop statement 89.73%、branch 82.97%、function 92.22%、line 93.92%）；
+- `pnpm build`：通过，包含 `@pi-forge/runtime-contracts` declaration/ESM 构建和 Desktop 生产构建；
 - `pnpm package:dir` 与 `pnpm package`：Apple Silicon macOS 本机通过；
 - packaged smoke：通过 preload、IPC、Runtime handshake 和 node-pty；
 - Release 产物脚本：真实 macOS DMG/ZIP 校验通过，7 个跨平台 fixture 的 `SHA256SUMS` 生成通过，注入 `.blockmap` 后按预期拒绝发布集合。

@@ -1,24 +1,28 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
+import {
+  runtimeProtocolVersion,
+  validateRuntimeServerEnvelope,
+  type AgentEvent,
+  type ConversationExport,
+  type ConversationHistoryDetail,
+  type ConversationHistoryItem,
+  type ConversationHistoryPage,
+  type ConversationListQuery,
+  type PlanReviewArtifact,
+  type QueuedMessages,
+  type ResolvePlanReviewInput,
+  type SendPromptInput,
+  type TaskFileChange,
+} from "@pi-forge/runtime-contracts";
 import type {
-  AgentEvent,
   ContextBudgetReport,
-  ConversationExport,
-  ConversationHistoryDetail,
-  ConversationHistoryItem,
-  ConversationHistoryPage,
-  ConversationListQuery,
   PermissionRuntime,
-  PlanReviewArtifact,
   PluginRuntimeStatus,
   ProviderCatalogEntry,
-  QueuedMessages,
   ResourceInventory,
-  ResolvePlanReviewInput,
   SaveModelSettings,
-  SendPromptInput,
-  TaskFileChange,
 } from "../src/contracts.js";
 import type { SettingsStore } from "./settings-store.js";
 import type { McpService, McpToolDescriptor } from "./mcp-service.js";
@@ -26,6 +30,9 @@ import type { BrowserDebugPort } from "./browser-service.js";
 import type { PromptExtras } from "./agent-service.js";
 import {
   agentRuntimeProtocolVersion,
+  createRuntimeHandshakeOffer,
+  isHostCancel,
+  isHostRequest,
   type AgentRuntimeInit,
   type AgentRuntimeMethod,
   type HostRequest,
@@ -34,7 +41,6 @@ import {
   type RuntimeExecutionProfile,
   type RuntimeRequest,
   type RuntimeResponse,
-  type RuntimeToParentMessage,
 } from "./agent-runtime-protocol.js";
 import { RuntimeRecoveryStore } from "./runtime-recovery-store.js";
 
@@ -290,11 +296,11 @@ export class AgentRuntimeClient {
     this.child = child;
     child.stdout?.on("data", (chunk) => process.stdout.write(`[agent-runtime] ${String(chunk)}`));
     child.stderr?.on("data", (chunk) => process.stderr.write(`[agent-runtime] ${String(chunk)}`));
-    child.on("message", (message: RuntimeToParentMessage) => this.handleMessage(child, message));
+    child.on("message", (message: unknown) => this.handleMessage(child, message));
     child.once("error", (error) => this.handleExit(child, error));
     child.once("exit", (code, signal) => this.handleExit(child, new Error(`Agent Runtime exited (${signal ?? code ?? "unknown"}).`)));
     const init: AgentRuntimeInit = {
-      protocolVersion: agentRuntimeProtocolVersion,
+      ...createRuntimeHandshakeOffer(),
       userDataPath: this.options.userDataPath,
       agentDir: this.options.agentDir,
       fallbackCwd: this.options.fallbackCwd,
@@ -319,7 +325,7 @@ export class AgentRuntimeClient {
     const child = this.child;
     if (!child?.connected) throw new Error("Agent Runtime 当前不可用，正在重新启动。");
     const id = randomUUID();
-    const request: RuntimeRequest = { kind: "runtime.request", id, method, args };
+    const request: RuntimeRequest = { kind: "runtime.request", protocolVersion: runtimeProtocolVersion, id, method, args };
     return new Promise<T>((resolve, reject) => {
       const timeoutMs = this.options.requestTimeoutMs?.[method] ?? defaultRequestTimeout(method);
       const pending: PendingRequest = { method, resolve: (value) => resolve(value as T), reject };
@@ -342,15 +348,35 @@ export class AgentRuntimeClient {
     });
   }
 
-  private handleMessage(child: ChildProcess, message: RuntimeToParentMessage): void {
+  private handleMessage(child: ChildProcess, input: unknown): void {
     // A killed or disconnected worker may still have messages queued in the
     // parent event loop. Never let a previous generation resolve the current
     // ready promise, mutate run state, or invoke privileged host handlers.
     if (this.child !== child) return;
-    if (!message || typeof message !== "object") return;
+    if (isHostCancel(input)) {
+      this.hostRequests.get(input.id)?.abort();
+      return;
+    }
+    if (isHostRequest(input)) {
+      void this.handleHostRequest(input);
+      return;
+    }
+    const parsed = validateRuntimeServerEnvelope(input);
+    if (!parsed.success) {
+      const detail = parsed.error.code === "incompatible_version" ? "协议版本不兼容" : "收到畸形或未知协议消息";
+      this.markUnresponsive(child, `Agent Runtime ${detail}，已拒绝该 Runtime。`);
+      return;
+    }
+    const message = parsed.value;
     if (message.kind === "runtime.ready") {
       if (message.protocolVersion !== agentRuntimeProtocolVersion) {
         this.markUnresponsive(child, "Agent Runtime 协议版本不兼容。");
+        return;
+      }
+      const required = createRuntimeHandshakeOffer().requiredCapabilities;
+      const missing = required.filter((capability) => !message.capabilities.includes(capability));
+      if (missing.length > 0) {
+        this.markUnresponsive(child, `Agent Runtime 缺少必需能力：${missing.join(", ")}。`);
         return;
       }
       if (this.readyTimer) clearTimeout(this.readyTimer);
@@ -376,11 +402,6 @@ export class AgentRuntimeClient {
       this.handleEvent(message.event);
       return;
     }
-    if (message.kind === "host.cancel") {
-      this.hostRequests.get(message.id)?.abort();
-      return;
-    }
-    if (message.kind === "host.request") void this.handleHostRequest(message);
   }
 
   private handleResponse(message: RuntimeResponse): void {
@@ -562,7 +583,7 @@ export class AgentRuntimeClient {
     const id = randomUUID();
     this.heartbeatId = id;
     this.heartbeatMisses = 1;
-    child.send({ kind: "runtime.ping", id }, (error) => {
+    child.send({ kind: "runtime.ping", protocolVersion: runtimeProtocolVersion, id }, (error) => {
       if (error) this.markUnresponsive(child, `Agent Runtime 心跳发送失败：${error.message}`);
     });
   }

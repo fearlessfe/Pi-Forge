@@ -1,0 +1,7 @@
+{
+  "kind": "runtime.request",
+  "protocolVersion": 0,
+  "id": "request-1",
+  "method": "loadConversation",
+  "args": ["conversation-1"]
+}

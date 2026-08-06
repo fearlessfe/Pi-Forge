@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, ProjectResourceSettings, SaveModelSettings } from "../src/contracts.js";
 import { AgentRuntimePool } from "./agent-runtime-pool.js";
-import { agentRuntimeProtocolVersion, type ParentToRuntimeMessage } from "./agent-runtime-protocol.js";
+import { agentRuntimeProtocolVersion, runtimeCapabilities, type ParentToRuntimeMessage } from "./agent-runtime-protocol.js";
 import { ConversationProfileStore } from "./conversation-profile-store.js";
 
 class FakeRuntime extends EventEmitter {
@@ -21,11 +21,11 @@ class FakeRuntime extends EventEmitter {
   send(message: ParentToRuntimeMessage, callback?: (error: Error | null) => void): boolean {
     callback?.(null);
     if (message.kind === "runtime.init") {
-      queueMicrotask(() => this.emit("message", { kind: "runtime.ready", protocolVersion: agentRuntimeProtocolVersion, pid: 42 }));
+      queueMicrotask(() => this.emit("message", { kind: "runtime.ready", protocolVersion: agentRuntimeProtocolVersion, pid: 42, capabilities: [...runtimeCapabilities] }));
       return true;
     }
     if (message.kind === "runtime.ping") {
-      if (this.respondToPing) queueMicrotask(() => this.emit("message", { kind: "runtime.pong", id: message.id }));
+      if (this.respondToPing) queueMicrotask(() => this.emit("message", { kind: "runtime.pong", protocolVersion: agentRuntimeProtocolVersion, id: message.id }));
       return true;
     }
     if (message.kind !== "runtime.request") return true;
@@ -42,12 +42,12 @@ class FakeRuntime extends EventEmitter {
     else if (message.method === "clearQueue" || message.method === "queueMessage") result = { steering: [], followUp: [] };
     else if (message.method === "listChanges" || message.method === "acceptChanges" || message.method === "revertChanges" || message.method === "listPlanReviews") result = [];
     queueMicrotask(() => {
-      this.emit("message", { kind: "runtime.response", id: message.id, result });
+      this.emit("message", { kind: "runtime.response", protocolVersion: agentRuntimeProtocolVersion, id: message.id, result });
       if (message.method === "send" && this.activeRunId && this.conversationId) {
-        this.emit("message", { kind: "runtime.event", event: { type: "run.started", runId: this.activeRunId, conversationId: this.conversationId, provider: "test", model: "test", cwd: "/tmp" } });
+        this.emit("message", { kind: "runtime.event", protocolVersion: agentRuntimeProtocolVersion, event: { type: "run.started", runId: this.activeRunId, conversationId: this.conversationId, provider: "test", model: "test", cwd: "/tmp" } });
       }
       if (message.method === "abort" && this.activeRunId) {
-        this.emit("message", { kind: "runtime.event", event: { type: "run.stopped", runId: this.activeRunId } });
+        this.emit("message", { kind: "runtime.event", protocolVersion: agentRuntimeProtocolVersion, event: { type: "run.stopped", runId: this.activeRunId } });
         this.activeRunId = undefined;
       }
     });
@@ -56,7 +56,7 @@ class FakeRuntime extends EventEmitter {
 
   complete(): void {
     if (!this.activeRunId) return;
-    this.emit("message", { kind: "runtime.event", event: { type: "run.completed", runId: this.activeRunId } });
+    this.emit("message", { kind: "runtime.event", protocolVersion: agentRuntimeProtocolVersion, event: { type: "run.completed", runId: this.activeRunId } });
     this.activeRunId = undefined;
   }
 

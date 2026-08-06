@@ -1,0 +1,33 @@
+{
+  "name": "@pi-forge/runtime-contracts",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Internal prerelease v0 wire contracts for Pi Forge runtimes, sessions, and events.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
+  },
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@vitest/coverage-v8": "4.1.10",
+    "typescript": "7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

@@ -217,20 +217,24 @@ pi-forge/
 │       ├── electron/       # Electron 主进程与应用服务
 │       ├── src/            # React Renderer、组件与共享契约
 │       └── scripts/        # 开发和运行时辅助脚本
+├── packages/
+│   └── runtime-contracts/   # 内部预发布 v0 Runtime/Session/Event wire contract
 ├── docs/                   # 设计资料与验证脚本
 ├── package.json
 └── pnpm-workspace.yaml
 ```
 
-随着运行时边界稳定，计划逐步提取：
+`@pi-forge/runtime-contracts` 是第一个真实的平台 package，提供带协议版本的 envelope、capability negotiation、fail-closed 运行时校验器和共享 Session/Event 类型。它仍是私有的 `0.0.0` 内部预发布 v0 契约，不代表稳定 v1 兼容承诺；凭据、MCP、浏览器访问和桌面服务相关的 Electron host RPC 被明确排除。
+
+其余平台 package 仍处于规划阶段：
 
 ```text
 packages/
+├── runtime-contracts/      # 已实现的内部 v0 wire contract
 ├── runtime/                # Agent 生命周期与 Harness
 ├── session/                # 持久化事件与 Context 查询
 ├── hands/                  # Sandbox、MCP 和远程执行适配器
 ├── policy/                 # 权限、审批和组织策略
-├── contracts/              # 稳定的公共协议
 └── sdk/                    # 定制 Agent 开发接口
 ```
 

@@ -1,0 +1,12 @@
+{
+  "kind": "runtime.ready",
+  "protocolVersion": 0,
+  "pid": 4242,
+  "capabilities": [
+    "runtime.rpc",
+    "runtime.events",
+    "runtime.heartbeat",
+    "session.lifecycle",
+    "session.events"
+  ]
+}

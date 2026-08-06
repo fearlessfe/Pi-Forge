@@ -1,0 +1,12 @@
+{
+  "kind": "runtime.event",
+  "protocolVersion": 0,
+  "event": {
+    "type": "run.started",
+    "runId": "run-1",
+    "conversationId": "conversation-1",
+    "provider": "openai",
+    "model": "gpt-test",
+    "cwd": "/workspace"
+  }
+}

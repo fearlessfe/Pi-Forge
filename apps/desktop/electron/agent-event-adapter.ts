@@ -1,5 +1,5 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { AgentTraceEvent, PiAgentEventType } from "../src/contracts.js";
+import type { AgentTraceEvent, PiAgentEventType } from "@pi-forge/runtime-contracts";
 
 type MissingAgentEventTypes = Exclude<AgentSessionEvent["type"], PiAgentEventType>;
 type UnknownAgentEventTypes = Exclude<PiAgentEventType, AgentSessionEvent["type"]>;

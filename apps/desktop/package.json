@@ -16,20 +16,26 @@
     "node": ">=24.10.0"
   },
   "scripts": {
+    "predev": "pnpm --filter @pi-forge/runtime-contracts build",
     "postinstall": "node scripts/ensure-node-pty-helper.mjs",
     "dev": "tsc -p tsconfig.electron.json && concurrently -k -s first \"vite\" \"wait-on tcp:4173 && VITE_DEV_SERVER_URL=http://127.0.0.1:4173 electron dist-electron/electron/main.js\"",
+    "prebuild": "pnpm --filter @pi-forge/runtime-contracts build",
     "build": "tsc -p tsconfig.electron.json && tsc -b && vite build",
     "package": "pnpm build && electron-builder --publish never",
     "package:dir": "pnpm build && electron-builder --dir",
     "smoke:packaged": "node scripts/smoke-packaged.mjs",
     "verify:release-assets": "node scripts/verify-release-assets.mjs",
+    "pretest": "pnpm --filter @pi-forge/runtime-contracts build",
     "test": "vitest run",
+    "pretest:coverage": "pnpm --filter @pi-forge/runtime-contracts build",
     "test:coverage": "vitest run --coverage",
+    "pretypecheck": "pnpm --filter @pi-forge/runtime-contracts build",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.electron.json --noEmit --pretty false && tsc -p tsconfig.test.json --pretty false",
     "preview": "vite preview",
     "start": "electron dist-electron/electron/main.js"
   },
   "dependencies": {
+    "@pi-forge/runtime-contracts": "workspace:*",
     "@anthropic-ai/sandbox-runtime": "0.0.26",
     "@anthropic-ai/tokenizer": "^0.0.4",
     "@earendil-works/pi-ai": "0.81.1",

@@ -1,3 +1,54 @@
+import type {
+  AgentEvent,
+  AgentRuntimeStatus,
+  ConversationExport,
+  ConversationHistoryDetail,
+  ConversationHistoryItem,
+  ConversationHistoryPage,
+  ConversationListQuery,
+  PlanReviewArtifact,
+  PromptFileAttachment,
+  PromptImage,
+  QueuedMessages,
+  ResolvePlanReviewInput,
+  RuntimeRecoveryInfo,
+  SendPromptInput,
+  TaskFileChange,
+} from "@pi-forge/runtime-contracts";
+
+export type {
+  AgentEvent,
+  AgentRuntimeStatus,
+  AgentTraceEvent,
+  ContextUsageInfo,
+  ConversationActivity,
+  ConversationExport,
+  ConversationHistoryDetail,
+  ConversationHistoryItem,
+  ConversationHistoryPage,
+  ConversationHistoryTurn,
+  ConversationListQuery,
+  ConversationUpdatedEvent,
+  PiAgentEventType,
+  PlanReviewAnnotation,
+  PlanReviewArtifact,
+  PlanReviewDecision,
+  PlanReviewDraft,
+  PlanReviewVersion,
+  PromptFileAttachment,
+  PromptImage,
+  QuestionOption,
+  QueuedMessages,
+  ResolvePlanReviewInput,
+  ResponseUsage,
+  RuntimeRecoveryInfo,
+  SendPromptInput,
+  SubagentRunInfo,
+  TaskFileChange,
+  ToolActivityDetails,
+  TurnAttachment,
+} from "@pi-forge/runtime-contracts";
+
 export const compatibleProviderIds = [
   "openai-compatible",
   "openai-responses-compatible",
@@ -173,55 +224,6 @@ export type ContextBudgetReport = {
 
 export type ContextBudgetRequest = {
   cwd?: string;
-};
-
-export type PlanReviewDecision = "approved" | "changes_requested";
-
-export type PlanReviewAnnotation = {
-  id: string;
-  anchorId: string;
-  quote: string;
-  comment: string;
-  createdAt: string;
-};
-
-export type PlanReviewVersion = {
-  id: string;
-  number: number;
-  markdown: string;
-  contentHash: string;
-  createdAt: string;
-  annotations: PlanReviewAnnotation[];
-  decision?: PlanReviewDecision;
-  decidedAt?: string;
-};
-
-export type PlanReviewArtifact = {
-  id: string;
-  cwd: string;
-  conversationId: string;
-  runId: string;
-  toolCallId: string;
-  title: string;
-  status: "pending" | PlanReviewDecision;
-  activeVersionId: string;
-  createdAt: string;
-  updatedAt: string;
-  versions: PlanReviewVersion[];
-};
-
-export type PlanReviewDraft = {
-  runId: string;
-  toolCallId: string;
-  title: string;
-  markdown: string;
-};
-
-export type ResolvePlanReviewInput = {
-  reviewId: string;
-  versionId: string;
-  decision: PlanReviewDecision;
-  annotations: Array<Pick<PlanReviewAnnotation, "anchorId" | "quote" | "comment">>;
 };
 
 export type McpServerScope = "user" | "project";
@@ -402,52 +404,6 @@ export type AuthEvent =
   | { type: "auth.cancelled"; loginId: string; providerId: ProviderId }
   | { type: "auth.error"; loginId: string; providerId: ProviderId; message: string };
 
-export type QuestionOption = {
-  label: string;
-  description?: string;
-};
-
-export type ContextUsageInfo = {
-  tokens: number | null;
-  contextWindow: number;
-  percent: number | null;
-};
-
-export type QueuedMessages = {
-  steering: string[];
-  followUp: string[];
-};
-
-export type TaskFileChange = {
-  id: string;
-  runId: string;
-  callId: string;
-  path: string;
-  relativePath: string;
-  kind: "created" | "modified";
-  patch: string;
-  beforeHash?: string;
-  afterHash: string;
-  status: "pending" | "accepted" | "reverted" | "conflict";
-  revertible: boolean;
-  error?: string;
-};
-
-export type ResponseUsage = {
-  provider: string;
-  model: string;
-  responseModel?: string;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  totalTokens: number;
-  /** Number of internal model requests made while producing this answer. */
-  requestCount: number;
-  /** Aggregate cost of all internal model requests for this answer. */
-  cost: number;
-};
-
 export type TraceCaptureContent = "none" | "metadata" | "full";
 
 export type OtlpTraceExporterSettings = {
@@ -484,104 +440,13 @@ export type TraceRuntimeStatus = {
   lastError?: string;
 };
 
-export type SubagentRunInfo = {
-  id: string;
-  parentRunId?: string;
-  parentConversationId?: string;
-  toolCallId: string;
-  role: string;
-  task: string;
-  cwd: string;
-  sessionId: string;
-  status: "running" | "completed" | "error" | "stopped";
-  startedAt: string;
-  updatedAt: string;
-  completedAt?: string;
-  usage?: ResponseUsage;
-  error?: string;
-};
-
-export type ToolActivityDetails = {
-  subagent?: SubagentRunInfo;
-  [key: string]: unknown;
-};
-
-export type ConversationActivity =
-  | { id: string; type: "message"; text: string }
-  | { id: string; type: "thinking"; text: string }
-  | { id: string; type: "tool"; name: string; args: unknown; output: string; status: "running" | "success" | "error"; details?: ToolActivityDetails }
-  | { id: string; type: "question"; question: string; options: QuestionOption[]; answer?: string; status: "pending" | "answered" }
-  | { id: string; type: "plan_review"; title: string; markdown: string; status: "streaming" | PlanReviewArtifact["status"]; review?: PlanReviewArtifact };
-
-export type PiAgentEventType =
-  | "agent_start"
-  | "agent_end"
-  | "agent_settled"
-  | "turn_start"
-  | "turn_end"
-  | "message_start"
-  | "message_update"
-  | "message_end"
-  | "tool_execution_start"
-  | "tool_execution_update"
-  | "tool_execution_end"
-  | "queue_update"
-  | "compaction_start"
-  | "compaction_end"
-  | "entry_appended"
-  | "session_info_changed"
-  | "thinking_level_changed"
-  | "auto_retry_start"
-  | "auto_retry_end"
-  | "summarization_retry_scheduled"
-  | "summarization_retry_attempt_start"
-  | "summarization_retry_finished";
-
-export type AgentTraceEvent = {
-  sequence: number;
-  timestamp: number;
-  eventType: PiAgentEventType;
-  payload: unknown;
-};
-
-export type AgentRuntimeStatus = "running" | "crash-looping" | "unresponsive";
-
 export type RendererRecoverySnapshot = {
   events: AgentEvent[];
   runtimeStatus?: AgentRuntimeStatus;
   runtimeStatuses: Record<string, AgentRuntimeStatus>;
 };
 
-export type AgentEvent =
-  | { type: "runtime.status"; status: AgentRuntimeStatus; conversationId?: string }
-  | { type: "run.started"; runId: string; conversationId: string; provider: string; model: string; cwd: string }
-  | { type: "user.message.started"; conversationId?: string; runId: string; message: string }
-  | { type: "message.delta"; conversationId?: string; runId: string; text: string }
-  | { type: "thinking.delta"; conversationId?: string; runId: string; text: string }
-  | { type: "tool.started"; conversationId?: string; runId: string; callId: string; name: string; args: unknown }
-  | { type: "tool.updated"; conversationId?: string; runId: string; callId: string; name: string; output: string; details?: ToolActivityDetails }
-  | { type: "tool.completed"; conversationId?: string; runId: string; callId: string; name: string; output: string; isError: boolean; details?: ToolActivityDetails }
-  | { type: "question.requested"; conversationId?: string; runId: string; callId: string; question: string; options: QuestionOption[] }
-  | { type: "plan.review.draft"; conversationId?: string; runId: string; draft: PlanReviewDraft }
-  | { type: "plan.review.requested"; conversationId?: string; runId: string; review: PlanReviewArtifact }
-  | { type: "plan.review.resolved"; conversationId?: string; runId: string; review: PlanReviewArtifact }
-  | { type: "response.usage"; conversationId?: string; runId: string; usage: ResponseUsage }
-  | { type: "context.updated"; conversationId?: string; runId: string; usage: ContextUsageInfo }
-  | { type: "queue.updated"; conversationId?: string; runId: string; queue: QueuedMessages }
-  | { type: "changes.updated"; conversationId?: string; runId: string; changes: TaskFileChange[] }
-  | { type: "agent.event"; conversationId?: string; runId: string; event: AgentTraceEvent }
-  | ConversationUpdatedEvent
-  | { type: "run.completed"; conversationId?: string; runId: string }
-  | { type: "run.stopped"; conversationId?: string; runId: string }
-  | { type: "run.error"; conversationId?: string; runId: string; message: string };
-
 /** 随消息发送的图片附件；data 为不含 data: URL 前缀的 base64。 */
-export type PromptImage = {
-  name: string;
-  mimeType: string;
-  data: string;
-};
-
 /** IPC 与 Agent Runtime 共同执行的消息附件资源上限。 */
 export const maxPromptImageBytes = 10 * 1024 * 1024;
 export const maxPromptImagesPerMessage = 8;
@@ -593,34 +458,8 @@ export const maxPromptAttachmentNameBytes = 512;
 export const maxPromptMimeTypeLength = 128;
 export const supportedPromptImageMimeTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
 
-/** 随消息发送的文本文件附件；Electron 根据实际字节数决定内联或按需读取。 */
-export type PromptFileAttachment = {
-  name: string;
-  mimeType?: string;
-  content: string;
-};
-
 /** 文本附件超过此 UTF-8 字节数时，只向模型提供引用并通过工具按需读取。 */
 export const inlineTextAttachmentMaxBytes = 64 * 1024;
-
-/** 用户消息里展示的附件（图片可带 dataUrl 缩略图）。 */
-export type TurnAttachment = {
-  kind: "image" | "file";
-  name: string;
-  dataUrl?: string;
-  id?: string;
-  mimeType?: string;
-  size?: number;
-  access?: "inline" | "tool";
-};
-
-export type SendPromptInput = {
-  prompt: string;
-  cwd?: string;
-  conversationId?: string;
-  images?: PromptImage[];
-  attachments?: PromptFileAttachment[];
-};
 
 export type QueuePromptInput = {
   conversationId: string;
@@ -629,74 +468,6 @@ export type QueuePromptInput = {
   images?: PromptImage[];
   attachments?: PromptFileAttachment[];
 };
-
-export type RuntimeRecoveryInfo = {
-  id: string;
-  runId?: string;
-  input: SendPromptInput;
-  status: "starting" | "running" | "interrupted";
-  attempts: number;
-  startedAt: string;
-  updatedAt: string;
-  message?: string;
-};
-
-export type ConversationHistoryItem = {
-  id: string;
-  title: string;
-  cwd: string;
-  createdAt: string;
-  updatedAt: string;
-  tags: string[];
-  archived: boolean;
-  searchText: string;
-  parentConversationId?: string;
-  project?: { id: string; name: string; path: string };
-};
-
-export type ConversationListQuery = {
-  cursor?: string;
-  limit?: number;
-  query?: string;
-  archived?: boolean;
-  projectId?: string;
-};
-
-export type ConversationHistoryPage = {
-  items: ConversationHistoryItem[];
-  nextCursor?: string;
-  total: number;
-};
-
-export type ConversationHistoryTurn = {
-  id: string;
-  question: string;
-  answer: string;
-  activities: ConversationActivity[];
-  attachments?: TurnAttachment[];
-  fileChanges?: TaskFileChange[];
-  usage?: ResponseUsage;
-};
-
-export type ConversationHistoryDetail = ConversationHistoryItem & {
-  turns: ConversationHistoryTurn[];
-  contextUsage?: ContextUsageInfo;
-};
-
-export type ConversationExport = {
-  filename: string;
-  mimeType: "text/markdown" | "application/json";
-  content: string;
-};
-
-export type ConversationUpdatedEvent =
-  | {
-      type: "conversation.updated";
-      kind: "upsert";
-      reason: "run-completed" | "run-error" | "run-stopped" | "renamed" | "tags-changed" | "archive-changed" | "forked";
-      conversation: ConversationHistoryItem;
-    }
-  | { type: "conversation.updated"; kind: "delete"; reason: "deleted"; conversationId: string };
 
 export type BrowserBounds = {
   x: number;

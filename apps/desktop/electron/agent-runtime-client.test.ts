@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CredentialStore } from "@earendil-works/pi-ai";
+import { runtimeCapabilities, runtimeProtocolVersion } from "@pi-forge/runtime-contracts";
 import type { AgentEvent } from "../src/contracts.js";
 import { AgentRuntimeClient } from "./agent-runtime-client.js";
 import { agentRuntimeProtocolVersion, type ParentToRuntimeMessage, type RuntimeToParentMessage } from "./agent-runtime-protocol.js";
@@ -36,6 +37,24 @@ class FakeChildProcess extends EventEmitter {
 
   disconnect(): void {
     this.connected = false;
+  }
+
+  override emit(eventName: string | symbol, ...args: unknown[]): boolean {
+    if (eventName === "message" && args[0] && typeof args[0] === "object") {
+      const message = args[0] as Record<string, unknown>;
+      if (typeof message.kind === "string" && message.kind.startsWith("runtime.")) {
+        message.protocolVersion ??= runtimeProtocolVersion;
+        if (message.kind === "runtime.ready") message.capabilities ??= [...runtimeCapabilities];
+        if (message.kind === "runtime.response" && message.error && typeof message.error === "object") {
+          (message.error as Record<string, unknown>).code ??= "internal_error";
+        }
+      }
+    }
+    return super.emit(eventName, ...args);
+  }
+
+  emitRawMessage(message: unknown): boolean {
+    return super.emit("message", message);
   }
 }
 
@@ -122,6 +141,44 @@ describe("AgentRuntimeClient", () => {
     emitReady(child, agentRuntimeProtocolVersion + 1);
 
     await expect(catalog).rejects.toThrow("协议版本不兼容");
+    expect(child.connected).toBe(false);
+    expect(events).toContainEqual({ type: "runtime.status", status: "unresponsive" });
+  });
+
+  it("rejects a worker that does not negotiate every required capability", async () => {
+    const events: AgentEvent[] = [];
+    const client = createClient(events);
+    const child = lastChild();
+    const catalog = client.getModelCatalog();
+    child.emitRawMessage({
+      kind: "runtime.ready",
+      protocolVersion: runtimeProtocolVersion,
+      pid: 4242,
+      capabilities: ["runtime.rpc", "runtime.events"],
+    });
+
+    await expect(catalog).rejects.toThrow("缺少必需能力");
+    expect(child.connected).toBe(false);
+    expect(events).toContainEqual({ type: "runtime.status", status: "unresponsive" });
+  });
+
+  it("fails closed when the worker sends a malformed response", async () => {
+    const events: AgentEvent[] = [];
+    const client = createClient(events);
+    const child = lastChild();
+    emitReady(child);
+    const catalog = client.getModelCatalog();
+    const rejected = catalog.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(child.sent.some((message) => message.kind === "runtime.request")).toBe(true));
+
+    child.emitRawMessage({
+      kind: "runtime.response",
+      protocolVersion: runtimeProtocolVersion,
+      id: lastRequest(child).id,
+      error: { message: "missing error code" },
+    });
+
+    await expect(rejected).resolves.toEqual(expect.objectContaining({ message: expect.stringContaining("畸形") }));
     expect(child.connected).toBe(false);
     expect(events).toContainEqual({ type: "runtime.status", status: "unresponsive" });
   });

@@ -1,6 +1,33 @@
-import type { AgentEvent, RuntimeRecoveryInfo } from "../src/contracts.js";
+import {
+  runtimeCapabilities,
+  runtimeProtocolVersion,
+  type RuntimeCapability,
+  type RuntimeClientEnvelope,
+  type RuntimeEventMessage,
+  type RuntimeHandshakeOffer,
+  type RuntimeMethod,
+  type RuntimePing,
+  type RuntimePong,
+  type RuntimeReadyMessage,
+  type RuntimeRequest,
+  type RuntimeResponse,
+  type RuntimeServerEnvelope,
+} from "@pi-forge/runtime-contracts";
+import type { RuntimeRecoveryInfo } from "../src/contracts.js";
 
-export const agentRuntimeProtocolVersion = 6;
+export {
+  runtimeCapabilities,
+  runtimeProtocolVersion as agentRuntimeProtocolVersion,
+  type RuntimeCapability,
+  type RuntimeEventMessage,
+  type RuntimePing,
+  type RuntimePong,
+  type RuntimeReadyMessage,
+  type RuntimeRequest,
+  type RuntimeResponse,
+};
+
+export type AgentRuntimeMethod = RuntimeMethod;
 
 export type RuntimeExecutionProfile = {
   modelSettings: AgentRuntimeInit["modelSettings"];
@@ -10,8 +37,7 @@ export type RuntimeExecutionProfile = {
   selectedMcpServers: string[];
 };
 
-export type AgentRuntimeInit = {
-  protocolVersion: typeof agentRuntimeProtocolVersion;
+export type AgentRuntimeInit = RuntimeHandshakeOffer & {
   userDataPath: string;
   agentDir: string;
   fallbackCwd: string;
@@ -26,68 +52,6 @@ export type AgentRuntimeInit = {
   resourceProfile?: Pick<RuntimeExecutionProfile, "resourceSelectionMode" | "selectedSkills" | "selectedMcpServers">;
 };
 
-export type AgentRuntimeMethod =
-  | "getModelCatalog"
-  | "discoverModels"
-  | "send"
-  | "executeExtensionCommand"
-  | "listConversations"
-  | "listConversationPage"
-  | "loadConversation"
-  | "forkConversation"
-  | "exportConversation"
-  | "setConversationArchived"
-  | "setConversationTags"
-  | "renameConversation"
-  | "deleteConversation"
-  | "abort"
-  | "queueMessage"
-  | "clearQueue"
-  | "listChanges"
-  | "changePath"
-  | "acceptChanges"
-  | "revertChanges"
-  | "getPermissionRuntime"
-  | "getResourceInventory"
-  | "getContextBudget"
-  | "reloadPackages"
-  | "refreshCapabilities"
-  | "getPluginRuntime"
-  | "answerQuestion"
-  | "listPlanReviews"
-  | "resolvePlanReview"
-  | "reset"
-  | "testConfiguration"
-  | "updateConfiguration";
-
-export type RuntimeRequest = {
-  kind: "runtime.request";
-  id: string;
-  method: AgentRuntimeMethod;
-  args: unknown[];
-};
-
-export type RuntimeResponse = {
-  kind: "runtime.response";
-  id: string;
-  result?: unknown;
-  error?: { message: string; stack?: string };
-};
-
-export type RuntimeEventMessage = {
-  kind: "runtime.event";
-  event: AgentEvent;
-};
-
-export type RuntimeReadyMessage = {
-  kind: "runtime.ready";
-  protocolVersion: typeof agentRuntimeProtocolVersion;
-  pid: number;
-};
-
-export type RuntimePing = { kind: "runtime.ping"; id: string };
-export type RuntimePong = { kind: "runtime.pong"; id: string };
-
 export type HostMethod =
   | "credential.read"
   | "credential.list"
@@ -98,6 +62,11 @@ export type HostMethod =
   | "mcp.callTool"
   | "browser.startAnnotation";
 
+export const hostMethods = [
+  "credential.read", "credential.list", "credential.write", "credential.delete",
+  "mcp.tools", "mcp.contextInventory", "mcp.callTool", "browser.startAnnotation",
+] as const satisfies readonly HostMethod[];
+
 export type HostRequest = {
   kind: "host.request";
   id: string;
@@ -105,10 +74,7 @@ export type HostRequest = {
   args: unknown[];
 };
 
-export type HostCancel = {
-  kind: "host.cancel";
-  id: string;
-};
+export type HostCancel = { kind: "host.cancel"; id: string };
 
 export type HostResponse = {
   kind: "host.response";
@@ -119,10 +85,43 @@ export type HostResponse = {
 
 export type ParentToRuntimeMessage =
   | { kind: "runtime.init"; value: AgentRuntimeInit }
-  | RuntimePing
-  | RuntimeRequest
+  | RuntimeClientEnvelope
   | HostResponse;
 
-export type RuntimeToParentMessage = RuntimeResponse | RuntimeEventMessage | RuntimeReadyMessage | RuntimePong | HostRequest | HostCancel;
+export type RuntimeToParentMessage = RuntimeServerEnvelope | HostRequest | HostCancel;
 
 export type RuntimeRecoveryRecord = RuntimeRecoveryInfo;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isIdentifier(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 256;
+}
+
+export function isHostRequest(value: unknown): value is HostRequest {
+  if (!isRecord(value) || value.kind !== "host.request" || !isIdentifier(value.id) || !Array.isArray(value.args)) return false;
+  return typeof value.method === "string" && hostMethods.includes(value.method as HostMethod);
+}
+
+export function isHostCancel(value: unknown): value is HostCancel {
+  return isRecord(value) && value.kind === "host.cancel" && isIdentifier(value.id) && Object.keys(value).length === 2;
+}
+
+export function isHostResponse(value: unknown): value is HostResponse {
+  if (!isRecord(value) || value.kind !== "host.response" || !isIdentifier(value.id)) return false;
+  if (value.error !== undefined) {
+    if (!isRecord(value.error) || typeof value.error.message !== "string") return false;
+    if (value.error.stack !== undefined && typeof value.error.stack !== "string") return false;
+  }
+  return Object.keys(value).every((key) => key === "kind" || key === "id" || key === "result" || key === "error");
+}
+
+export function createRuntimeHandshakeOffer(): RuntimeHandshakeOffer {
+  return {
+    protocolVersion: runtimeProtocolVersion,
+    capabilities: [...runtimeCapabilities],
+    requiredCapabilities: ["runtime.rpc", "runtime.events", "runtime.heartbeat"],
+  };
+}

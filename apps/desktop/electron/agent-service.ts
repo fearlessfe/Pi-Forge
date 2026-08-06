@@ -9,36 +9,38 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { InMemoryCredentialStore, parseStreamingJson, type Api, type CredentialStore, type ImageContent, type Model } from "@earendil-works/pi-ai";
+import type {
+  AgentEvent,
+  ConversationHistoryDetail,
+  ConversationHistoryItem,
+  ConversationHistoryPage,
+  ConversationListQuery,
+  PlanReviewArtifact,
+  PromptFileAttachment,
+  PromptImage,
+  QuestionOption,
+  ResolvePlanReviewInput,
+  ResponseUsage,
+  TaskFileChange,
+  ToolActivityDetails,
+} from "@pi-forge/runtime-contracts";
 import { Type, type TSchema } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
-  AgentEvent,
   CapabilitySettings,
   ContextBudgetReport,
-  ConversationHistoryDetail,
-  ConversationHistoryItem,
-  ConversationHistoryPage,
-  ConversationListQuery,
   PluginRuntimeStatus,
-  PlanReviewArtifact,
   PermissionRuntime,
   PermissionSettings,
   ProjectResourceSettings,
   ModelCatalogEntry,
-  PromptFileAttachment,
-  PromptImage,
   ProviderCatalogEntry,
-  QuestionOption,
-  ResponseUsage,
   ResourceSettings,
   ResourceInventory,
-  ResolvePlanReviewInput,
   WorkspaceTrustStatus,
   SaveModelSettings,
-  TaskFileChange,
-  ToolActivityDetails,
 } from "../src/contracts.js";
 import { captureAgentSessionEvent } from "./agent-event-adapter.js";
 import { decideToolPermission, type PermissionGrant } from "./permission-policy.js";
