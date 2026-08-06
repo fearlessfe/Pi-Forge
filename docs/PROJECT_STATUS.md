@@ -364,8 +364,8 @@ Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session st
 - `pnpm lint`：通过；
 - `pnpm typecheck`：通过；
 - Runtime contracts 独立测试：通过（1 个文件、9 项测试）；
-- Desktop test/coverage：浏览器分支与 Runtime 契约分支分别通过，合并后的最终数字在本次集成验证后更新；
-- `pnpm build`：两个分支均通过，包含 `@pi-forge/runtime-contracts` declaration/ESM 构建和 Desktop 生产构建；
+- Desktop test/coverage：通过（64 个文件、440 项测试）；Desktop 覆盖率 statements 89.67%、branches 83.07%、functions 91.96%、lines 93.97%；Runtime contracts 覆盖率 statements 97.32%、branches 86.66%、functions 98.55%、lines 96.66%；
+- `pnpm build`：合并态通过，包含 `@pi-forge/runtime-contracts` declaration/ESM 构建和 Desktop 生产构建；
 - `pnpm verify:tokens`：通过（54 个 token 工具类）；
 - `pnpm verify:renderer:smoke` 与完整 `pnpm verify:renderer`：通过（四场景双主题、100-turn 性能场景、无 console/pageerror）；
 - `pnpm verify:electron:smoke`：通过（真实 preload、BrowserWindow 背景与主题 IPC 往返）；
