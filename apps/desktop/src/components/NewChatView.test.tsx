@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
-import type { ContextBudgetReport } from "../contracts";
+import type { ContextBudgetReport, PlanReviewArtifact } from "../contracts";
 import { createConversationPerformanceFixture } from "../conversation-performance-fixture";
 import { conversationMountedTurnBudget, pinnedConversationTurnIndices } from "../conversation-window";
 import { ContextIndicator, NewChatView, nextProjectResourceSelection } from "./NewChatView";
@@ -35,6 +35,50 @@ describe("nextProjectResourceSelection", () => {
 });
 
 describe("NewChatView analysis presentation", () => {
+  it("keeps a post-plan question visible in activity order and exposes a direct answer action", () => {
+    const noop = vi.fn();
+    const review: PlanReviewArtifact = {
+      id: "review-1",
+      cwd: "/workspace",
+      conversationId: "conversation-1",
+      runId: "run-1",
+      toolCallId: "call-plan",
+      title: "TokenGov plan",
+      status: "approved",
+      activeVersionId: "version-1",
+      createdAt: "2026-08-05T00:00:00.000Z",
+      updatedAt: "2026-08-05T00:00:00.000Z",
+      versions: [{ id: "version-1", number: 1, markdown: "## Plan body", contentHash: "hash", createdAt: "2026-08-05T00:00:00.000Z", annotations: [], decision: "approved" }],
+    };
+    const markup = renderToStaticMarkup(<I18nProvider>
+      <NewChatView
+        project={{ id: "/workspace", name: "workspace", path: "/workspace", conversations: [] }}
+        turns={[{
+          id: "turn-1",
+          runId: "run-1",
+          question: "Plan TokenGov",
+          answer: "",
+          activities: [
+            { id: "call-plan", type: "plan_review", title: review.title, markdown: "## Plan body", status: "approved", review },
+            { id: "call-question", type: "question", question: "Need confirmation?", options: [{ label: "Continue" }], status: "pending" },
+          ],
+          status: "running",
+        }]}
+        modelId="test-model" modelProvider="anthropic" modelProviders={[]} modelSupportsImages resourceRevision={0}
+        planReviews={[review]} prompt="" attachments={{ images: [], files: [] }} isRunning queuedMessages={{ steering: [], followUp: [] }}
+        onPromptChange={noop} onAttachmentsChange={noop} onAttachmentError={noop} onProjectChange={noop} onChooseWorkspace={noop}
+        onOpenTerminal={noop} onOpenContextBudget={noop} onOpenLink={noop} onOpenExternalLink={noop} onOpenWorkspaceFile={noop}
+        onResourcesChanged={noop} onResolvePlanReview={async () => undefined} onModelChange={noop} onSubmit={noop} onStop={noop}
+        onQueue={noop} onClearQueue={noop} onAcceptChanges={noop} onRevertChanges={noop} onRetry={noop} onForkTurn={noop} onAnswerQuestion={noop}
+      />
+    </I18nProvider>);
+
+    expect(markup.indexOf("Plan body")).toBeLessThan(markup.indexOf("Need confirmation?"));
+    expect(markup).toContain("回答问题");
+    expect(markup.match(/TokenGov plan/g)).toHaveLength(1);
+    expect(markup).toContain('data-pending-question="true"');
+  });
+
   it("renders thinking content directly as response text without an analysis wrapper", () => {
     const noop = vi.fn();
     const markup = renderToStaticMarkup(<I18nProvider>

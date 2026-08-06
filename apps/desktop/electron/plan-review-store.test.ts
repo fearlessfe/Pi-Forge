@@ -31,4 +31,15 @@ describe("PlanReviewStore", () => {
     const review = store.request({ cwd: root, conversationId: "conversation-1", runId: "run-1", toolCallId: "call-1", title: "Plan", markdown: "One step" });
     expect(() => store.resolve({ reviewId: review.id, versionId: review.activeVersionId, decision: "changes_requested", annotations: [] })).toThrow("至少需要一条批注");
   });
+
+  it("reuses an identical persisted version while correlating it to the current tool call", () => {
+    const root = directory();
+    const store = new PlanReviewStore(root);
+    const first = store.request({ cwd: root, conversationId: "conversation-1", runId: "run-1", toolCallId: "call-1", title: "Plan", markdown: "One step" });
+    const second = store.request({ cwd: root, conversationId: "conversation-1", runId: "run-2", toolCallId: "call-2", title: "Plan", markdown: "One step" });
+
+    expect(second).toMatchObject({ id: first.id, runId: "run-2", toolCallId: "call-2" });
+    expect(second.versions).toHaveLength(1);
+    expect(new PlanReviewStore(root).list("conversation-1")[0]).toEqual(second);
+  });
 });

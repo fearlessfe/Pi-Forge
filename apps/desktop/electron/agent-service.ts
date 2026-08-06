@@ -8,7 +8,7 @@ import {
   type AgentSessionEvent,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { InMemoryCredentialStore, type Api, type CredentialStore, type ImageContent, type Model } from "@earendil-works/pi-ai";
+import { InMemoryCredentialStore, parseStreamingJson, type Api, type CredentialStore, type ImageContent, type Model } from "@earendil-works/pi-ai";
 import { Type, type TSchema } from "typebox";
 import fs from "node:fs";
 import path from "node:path";
@@ -86,6 +86,11 @@ type PendingQuestion = {
 type PendingPlanReview = {
   resolve: (review: PlanReviewArtifact) => void;
   reject: (error: Error) => void;
+};
+
+type StreamingPlanDraft = {
+  toolCallId: string;
+  json: string;
 };
 
 export type AgentRuntimeConfig = {
@@ -240,6 +245,7 @@ export class AgentService {
   private activeRunId?: string;
   private pendingQuestions = new Map<string, PendingQuestion>();
   private pendingPlanReviews = new Map<string, PendingPlanReview>();
+  private streamingPlanDrafts = new Map<number, StreamingPlanDraft>();
   private running = false;
   private eventSequence = 0;
   private readonly runPermissionGrants = new Set<PermissionGrant>();
@@ -1308,14 +1314,55 @@ export class AgentService {
     if (!runId) return;
     this.eventSequence += 1;
     this.emit({ type: "agent.event", runId, event: captureAgentSessionEvent(event, this.eventSequence) });
-    if (event.type === "message_start" && event.message.role === "user") {
-      const message = messageContentText(event.message.content).trim();
-      this.emit({ type: "user.message.started", runId, message });
+    if (event.type === "message_start") {
+      this.streamingPlanDrafts.clear();
+      if (event.message.role === "user") {
+        const message = messageContentText(event.message.content).trim();
+        this.emit({ type: "user.message.started", runId, message });
+      }
     } else if (event.type === "message_update") {
-      if (event.assistantMessageEvent.type === "text_delta") {
-        this.emit({ type: "message.delta", runId, text: event.assistantMessageEvent.delta });
-      } else if (event.assistantMessageEvent.type === "thinking_delta") {
-        this.emit({ type: "thinking.delta", runId, text: event.assistantMessageEvent.delta });
+      const update = event.assistantMessageEvent;
+      if (update.type === "text_delta") {
+        this.emit({ type: "message.delta", runId, text: update.delta });
+      } else if (update.type === "thinking_delta") {
+        this.emit({ type: "thinking.delta", runId, text: update.delta });
+      } else if (update.type === "toolcall_start") {
+        const content = update.partial.content[update.contentIndex];
+        if (content?.type === "toolCall" && content.name === "request_plan_review") {
+          this.streamingPlanDrafts.set(update.contentIndex, { toolCallId: content.id, json: "" });
+        }
+      } else if (update.type === "toolcall_delta") {
+        const draft = this.streamingPlanDrafts.get(update.contentIndex);
+        if (draft) {
+          draft.json += update.delta;
+          const params = parseStreamingJson<Record<string, unknown>>(draft.json);
+          this.emit({
+            type: "plan.review.draft",
+            runId,
+            draft: {
+              runId,
+              toolCallId: draft.toolCallId,
+              title: typeof params.title === "string" ? params.title : "",
+              markdown: typeof params.markdown === "string" ? params.markdown : "",
+            },
+          });
+        }
+      } else if (update.type === "toolcall_end") {
+        const draft = this.streamingPlanDrafts.get(update.contentIndex);
+        if (draft && update.toolCall.name === "request_plan_review") {
+          const params = update.toolCall.arguments;
+          this.emit({
+            type: "plan.review.draft",
+            runId,
+            draft: {
+              runId,
+              toolCallId: update.toolCall.id,
+              title: typeof params.title === "string" ? params.title : "",
+              markdown: typeof params.markdown === "string" ? params.markdown : "",
+            },
+          });
+        }
+        this.streamingPlanDrafts.delete(update.contentIndex);
       }
     } else if (event.type === "message_end" && event.message.role === "assistant") {
       const usage = responseUsage(event.message);
@@ -1460,5 +1507,6 @@ export class AgentService {
     this.pendingQuestions.clear();
     for (const pending of this.pendingPlanReviews.values()) pending.reject(new Error("Runtime 会话已结束；待审阅计划仍已保存。"));
     this.pendingPlanReviews.clear();
+    this.streamingPlanDrafts.clear();
   }
 }

@@ -51,7 +51,7 @@ import { useI18n } from "../i18n";
 import type { ChatActivity, ChatTurn, Project } from "../types";
 import { parseModelValue } from "./model-selector-value";
 import { BrandMark } from "./BrandMark";
-import { PlanReviewPanel } from "./PlanReviewPanel";
+import { PlanReviewCard, PlanReviewDraftCard, PlanReviewPanel } from "./PlanReviewPanel";
 
 type NewChatViewProps = {
   project: Project | null;
@@ -878,7 +878,7 @@ function QuestionActivity({
     });
   }
   return (
-    <section className="w-full overflow-hidden rounded-md border border-orange/32 bg-orange/8 p-loose">
+    <section className="w-full overflow-hidden rounded-md border border-orange/32 bg-orange/8 p-loose" data-pending-question={activity.status === "pending" ? "true" : undefined}>
       <header className="flex items-center gap-[7px] text-caption text-orange"><MessageCircleQuestion size={16} /><strong>{t("Pi 需要你的回答")}</strong></header>
       <p className="my-[10px] whitespace-pre-wrap text-caption leading-[1.6] text-label-2">{activity.question}</p>
       {activity.status === "answered" ? (
@@ -934,7 +934,7 @@ function formatElapsedTime(seconds: number, t: ReturnType<typeof useI18n>["t"]):
     : t("已运行 {minutes} 分", { minutes });
 }
 
-function RunningTaskStatus({ turn, onStop }: { turn: ChatTurn; onStop: () => void }) {
+function RunningTaskStatus({ turn, onStop, onShowQuestion }: { turn: ChatTurn; onStop: () => void; onShowQuestion: () => void }) {
   const { t } = useI18n();
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const visible = normalizeVisibleActivities(Array.isArray(turn.activities) ? turn.activities : []);
@@ -961,13 +961,14 @@ function RunningTaskStatus({ turn, onStop }: { turn: ChatTurn; onStop: () => voi
   const statusTone = waitingForAnswer
     ? { bar: "border-orange/32", signal: "bg-orange/8 text-orange", label: "text-orange" }
     : { bar: "border-accent/32", signal: "bg-accent/8 text-accent", label: "text-accent" };
-  return <div className={`task-status-bar relative mx-auto mb-[9px] grid min-h-[54px] w-[min(760px,100%)] grid-cols-[30px_minmax(0,1fr)_auto_auto] items-center gap-[10px] overflow-hidden rounded-md border bg-bg-grouped py-base pl-loose pr-[9px] shadow-2 ${statusTone.bar}`}>
+  return <div className={`task-status-bar relative mx-auto mb-[9px] grid min-h-[54px] w-[min(760px,100%)] grid-cols-[30px_minmax(0,1fr)_auto_auto_auto] items-center gap-[10px] overflow-hidden rounded-md border bg-bg-grouped py-base pl-loose pr-[9px] shadow-2 ${statusTone.bar}`}>
     <span className={`task-status-signal flex size-[28px] items-center justify-center gap-[3px] rounded-sm ${statusTone.signal}`} aria-hidden="true"><i /><i /><i /></span>
     <span className="grid min-w-0 gap-[2px]" role="status" aria-live="polite">
       <small className={`text-caption font-bold tracking-[0.07em] ${statusTone.label}`}>{t(waitingForAnswer ? "等待你的输入" : "任务进行中")}</small>
       <strong className="truncate text-caption font-semibold text-label-2">{phase}</strong>
     </span>
     <time className="whitespace-nowrap font-mono text-caption text-label-3 tabular-nums" title={t("任务运行时长")} aria-hidden="true">{formatElapsedTime(elapsedSeconds, t)}</time>
+    {waitingForAnswer && <button className="inline-flex h-control-md cursor-pointer items-center gap-[6px] rounded-sm border border-orange/32 bg-orange/8 px-[9px] text-caption font-semibold text-orange transition-colors duration-150 ease-apple hover:bg-orange/16 active:scale-[0.98]" type="button" onClick={onShowQuestion}><MessageCircleQuestion size={14} />{t("回答问题")}</button>}
     <button className="inline-flex h-control-md cursor-pointer items-center gap-[6px] rounded-sm border border-red/32 bg-red/8 px-[9px] text-caption text-red transition-colors duration-150 ease-apple hover:bg-red/16 active:scale-[0.98]" type="button" onClick={onStop}><CircleStop size={14} />{t("停止任务")}</button>
   </div>;
 }
@@ -978,6 +979,7 @@ function ActivityTimeline({
   onOpenLink,
   onOpenExternalLink,
   onOpenWorkspaceFile,
+  onResolvePlanReview,
   workspacePath,
 }: {
   turn: ChatTurn;
@@ -985,6 +987,7 @@ function ActivityTimeline({
   onOpenLink: NewChatViewProps["onOpenLink"];
   onOpenExternalLink: NewChatViewProps["onOpenExternalLink"];
   onOpenWorkspaceFile: NewChatViewProps["onOpenWorkspaceFile"];
+  onResolvePlanReview: NewChatViewProps["onResolvePlanReview"];
   workspacePath?: string;
 }) {
   const { t } = useI18n();
@@ -1024,6 +1027,9 @@ function ActivityTimeline({
         if (item.type === "tools") return <ToolGroup key={item.key} tools={item.tools} />;
         if (item.activity.type === "message") return <MessageActivity key={item.activity.id} text={item.activity.text} workspacePath={workspacePath} onOpenLink={onOpenLink} onOpenExternalLink={onOpenExternalLink} onOpenWorkspaceFile={onOpenWorkspaceFile} />;
         if (item.activity.type === "thinking") return <MessageActivity key={item.activity.id} text={item.activity.text} workspacePath={workspacePath} onOpenLink={onOpenLink} onOpenExternalLink={onOpenExternalLink} onOpenWorkspaceFile={onOpenWorkspaceFile} />;
+        if (item.activity.type === "plan_review") return item.activity.review
+          ? <PlanReviewCard key={item.activity.id} review={item.activity.review} onResolve={onResolvePlanReview} />
+          : <PlanReviewDraftCard key={item.activity.id} title={item.activity.title} markdown={item.activity.markdown} />;
         return <QuestionActivity key={item.activity.id} turnId={turn.id} activity={item.activity} onAnswer={onAnswerQuestion} />;
       })}
       {!hasMessages && turn.answer && <MessageActivity text={turn.answer} workspacePath={workspacePath} onOpenLink={onOpenLink} onOpenExternalLink={onOpenExternalLink} onOpenWorkspaceFile={onOpenWorkspaceFile} />}
@@ -1031,7 +1037,7 @@ function ActivityTimeline({
   );
 }
 
-const ConversationTurn = memo(function ConversationTurn({ turn, running, workspacePath, onRetry, onForkTurn, onAnswerQuestion, onOpenLink, onOpenExternalLink, onOpenWorkspaceFile, onOpenChange, onAcceptChanges, onRevertChanges }: {
+const ConversationTurn = memo(function ConversationTurn({ turn, running, workspacePath, onRetry, onForkTurn, onAnswerQuestion, onOpenLink, onOpenExternalLink, onOpenWorkspaceFile, onResolvePlanReview, onOpenChange, onAcceptChanges, onRevertChanges }: {
   turn: ChatTurn;
   running: boolean;
   workspacePath?: string;
@@ -1041,6 +1047,7 @@ const ConversationTurn = memo(function ConversationTurn({ turn, running, workspa
   onOpenLink: NewChatViewProps["onOpenLink"];
   onOpenExternalLink: NewChatViewProps["onOpenExternalLink"];
   onOpenWorkspaceFile: NewChatViewProps["onOpenWorkspaceFile"];
+  onResolvePlanReview: NewChatViewProps["onResolvePlanReview"];
   onOpenChange: (change: TaskFileChange) => void;
   onAcceptChanges: NewChatViewProps["onAcceptChanges"];
   onRevertChanges: NewChatViewProps["onRevertChanges"];
@@ -1084,7 +1091,7 @@ const ConversationTurn = memo(function ConversationTurn({ turn, running, workspa
       </section>
       {turn.status !== "queued" && turn.status !== "cancelled" && <section className="relative mt-[19px] flex w-[86%] items-start justify-start" aria-label={t("Agent 回答")}>
         <div className="grid w-full gap-[9px]">
-          <ActivityTimeline turn={turn} workspacePath={workspacePath} onAnswerQuestion={onAnswerQuestion} onOpenLink={onOpenLink} onOpenExternalLink={onOpenExternalLink} onOpenWorkspaceFile={onOpenWorkspaceFile} />
+          <ActivityTimeline turn={turn} workspacePath={workspacePath} onAnswerQuestion={onAnswerQuestion} onOpenLink={onOpenLink} onOpenExternalLink={onOpenExternalLink} onOpenWorkspaceFile={onOpenWorkspaceFile} onResolvePlanReview={onResolvePlanReview} />
           {turn.usage && <ResponseUsageLine usage={turn.usage} />}
           {turn.status === "error" && <div className="flex items-center gap-base rounded-md bg-red/8 px-loose py-[10px] text-caption text-red"><XCircle size={14} />{turn.error}</div>}
           {turn.status === "stopped" && <div className="flex items-center gap-base rounded-md bg-bg-grouped px-loose py-[10px] text-caption text-orange">{t("任务已停止")}</div>}
@@ -1206,6 +1213,7 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
   const retryTurn = useStableCallback(props.onRetry);
   const forkTurn = useStableCallback(props.onForkTurn);
   const answerQuestion = useStableCallback(props.onAnswerQuestion);
+  const resolvePlanReview = useStableCallback(props.onResolvePlanReview);
   const openLink = useStableCallback(props.onOpenLink);
   const openExternalLink = useStableCallback(props.onOpenExternalLink);
   const openWorkspaceFile = useStableCallback(props.onOpenWorkspaceFile);
@@ -1216,6 +1224,8 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
   const steeringCount = props.queuedMessages.steering.length;
   const followUpCount = props.queuedMessages.followUp.length;
   const queuedCount = steeringCount + followUpCount;
+  const embeddedReviewIds = useMemo(() => new Set(props.turns.flatMap((turn) => turn.activities.flatMap((activity) => activity.type === "plan_review" && activity.review ? [activity.review.id] : []))), [props.turns]);
+  const standalonePlanReviews = useMemo(() => props.planReviews.filter((review) => !embeddedReviewIds.has(review.id)), [embeddedReviewIds, props.planReviews]);
   const layout = useMemo(
     () => buildConversationTurnLayout(props.turns, measuredHeightsRef.current),
     [measurementRevision, props.turns],
@@ -1399,6 +1409,13 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
     updateViewport();
   }
 
+  function showPendingQuestion() {
+    const question = historyContentRef.current?.querySelector<HTMLElement>("[data-pending-question='true']");
+    if (!question) return;
+    question.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.requestAnimationFrame(() => question.querySelector<HTMLElement>("button, input")?.focus());
+  }
+
   function observeTurn(turnId: string, element: HTMLDivElement | null) {
     const previous = measuredElementsRef.current.get(turnId);
     if (previous === element) return;
@@ -1437,11 +1454,11 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
                   ref={(element) => observeTurn(turn.id, element)}
                   style={{ transform: `translateY(${layout.offsets[index]}px)` }}
                 >
-                  <ConversationTurn turn={turn} workspacePath={props.project?.path} running={props.isRunning} onRetry={retryTurn} onForkTurn={forkTurn} onAnswerQuestion={answerQuestion} onOpenLink={openLink} onOpenExternalLink={openExternalLink} onOpenWorkspaceFile={openWorkspaceFile} onOpenChange={openChange} onAcceptChanges={acceptChanges} onRevertChanges={revertChanges} />
+                  <ConversationTurn turn={turn} workspacePath={props.project?.path} running={props.isRunning} onRetry={retryTurn} onForkTurn={forkTurn} onAnswerQuestion={answerQuestion} onOpenLink={openLink} onOpenExternalLink={openExternalLink} onOpenWorkspaceFile={openWorkspaceFile} onResolvePlanReview={resolvePlanReview} onOpenChange={openChange} onAcceptChanges={acceptChanges} onRevertChanges={revertChanges} />
                 </div>;
               })}
             </div>
-            <PlanReviewPanel reviews={props.planReviews} onResolve={props.onResolvePlanReview} />
+            <PlanReviewPanel reviews={standalonePlanReviews} onResolve={resolvePlanReview} />
           </div>
         </div>
         {!followsLatest && <button className="absolute right-[22px] bottom-[12px] inline-flex h-control-md cursor-pointer items-center gap-base rounded-full border border-separator bg-bg-grouped px-loose text-caption text-label-2 shadow-2 transition-colors duration-150 ease-apple hover:bg-fill" type="button" onClick={scrollToLatest}>
@@ -1450,7 +1467,7 @@ function ActiveConversation(props: NewChatViewProps & { onOpenChange: (change: T
       </div>
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement.text && <span key={announcement.id}>{announcement.text}</span>}</div>
       <footer className="relative bg-linear-to-b from-transparent via-20% via-bg to-bg px-[52px] pt-[14px] pb-[17px]">
-        {props.isRunning && runningTurn && <RunningTaskStatus turn={runningTurn} onStop={props.onStop} />}
+        {props.isRunning && runningTurn && <RunningTaskStatus turn={runningTurn} onStop={props.onStop} onShowQuestion={showPendingQuestion} />}
         {queuedCount > 0 && <div className="mx-auto mb-[7px] flex min-h-[28px] w-[min(760px,100%)] items-center gap-base rounded-sm border border-accent/16 bg-accent/8 px-base text-caption text-label-3" aria-live="polite"><Clock3 size={13} className="shrink-0 text-accent" /><strong className="font-semibold text-accent">{t("已排队 {count} 条消息", { count: queuedCount })}</strong>{steeringCount > 0 && <small>{t("立即调整")} {steeringCount}</small>}{followUpCount > 0 && <small>{t("稍后继续")} {followUpCount}</small>}<button className="ml-auto cursor-pointer border-0 bg-transparent text-caption text-label-3 transition-colors duration-150 ease-apple hover:text-label-2" type="button" onClick={props.onClearQueue}>{t("清空队列")}</button></div>}
         <form className="composer-shell relative mx-auto flex h-[108px] w-[min(760px,100%)] flex-col rounded-lg bg-bg-grouped px-[14px] pt-loose pb-tight shadow-2 transition-shadow duration-150 ease-apple" onSubmit={(event) => {
           event.preventDefault();

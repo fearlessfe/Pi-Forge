@@ -911,9 +911,12 @@ describe("AgentService with a real Pi session", () => {
       req.on("end", () => {
         requests.push(JSON.parse(body) as ChatRequest);
         if (requests.length === 1) {
+          const argumentsJson = JSON.stringify({ title: "Migration", markdown });
+          const splitAt = argumentsJson.indexOf("Update") + 3;
           writeSse(res, [
             chunk({ role: "assistant" }),
-            chunk({ tool_calls: [{ index: 0, id: "call-plan", type: "function", function: { name: "request_plan_review", arguments: JSON.stringify({ title: "Migration", markdown }) } }] }),
+            chunk({ tool_calls: [{ index: 0, id: "call-plan", type: "function", function: { name: "request_plan_review", arguments: argumentsJson.slice(0, splitAt) } }] }),
+            chunk({ tool_calls: [{ index: 0, function: { arguments: argumentsJson.slice(splitAt) } }] }),
             chunk({}, "tool_calls"),
           ]);
         } else {
@@ -936,6 +939,10 @@ describe("AgentService with a real Pi session", () => {
     try {
       const runId = await service.send("Prepare a migration plan", cwd);
       await vi.waitFor(() => expect(events.some((event) => event.type === "run.completed" && event.runId === runId)).toBe(true), { timeout: 8_000 });
+      const drafts = eventsOfType(events, "plan.review.draft");
+      expect(drafts.length).toBeGreaterThan(1);
+      expect(drafts.some((event) => event.draft.markdown.length > 0 && event.draft.markdown.length < markdown.length)).toBe(true);
+      expect(drafts.at(-1)?.draft).toMatchObject({ toolCallId: "call-plan", title: "Migration", markdown });
       expect(events.some((event) => event.type === "plan.review.requested")).toBe(true);
       expect(events.some((event) => event.type === "plan.review.resolved" && event.review.status === "changes_requested")).toBe(true);
       expect(requests[1].messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: "tool", content: expect.stringContaining("Add a rollback step") })]));

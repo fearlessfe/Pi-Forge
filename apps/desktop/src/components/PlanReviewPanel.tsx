@@ -45,7 +45,20 @@ function statusLabel(status: PlanReviewArtifact["status"]): string {
   return status === "approved" ? "已批准" : status === "changes_requested" ? "已要求修改" : "等待审阅";
 }
 
-function PlanReviewCard({ review, onResolve }: { review: PlanReviewArtifact; onResolve: PlanReviewPanelProps["onResolve"] }) {
+export function PlanReviewDraftCard({ title, markdown }: { title: string; markdown: string }) {
+  const { t } = useI18n();
+  return <article className="overflow-hidden rounded-md border border-accent/24 bg-bg-grouped shadow-1" aria-live="polite" aria-busy="true">
+    <header className="flex items-start justify-between gap-card border-b border-separator bg-accent/8 px-card py-loose">
+      <span className="min-w-0"><small className="text-mini font-semibold uppercase tracking-[0.08em] text-accent">{t("计划 Artifact")}</small><h3 className="mt-tight truncate text-title font-semibold text-label">{title || t("正在生成计划…")}</h3><p className="mt-tight text-caption text-label-3">{t("计划内容正在流式生成，完成后即可审阅。")}</p></span>
+      <span className="inline-flex shrink-0 items-center gap-base rounded-full border border-accent/32 bg-accent/8 px-base py-base text-caption text-accent"><i className="activity-spinner" />{t("生成中")}</span>
+    </header>
+    <div className="markdown-content min-h-[96px] p-card text-body leading-[1.7] text-label-2">
+      {markdown ? <Markdown components={markdownComponents} remarkPlugins={[remarkGfm]} skipHtml>{markdown}</Markdown> : <span className="text-caption text-label-3">{t("正在生成计划内容…")}</span>}
+    </div>
+  </article>;
+}
+
+export function PlanReviewCard({ review, onResolve }: { review: PlanReviewArtifact; onResolve: PlanReviewPanelProps["onResolve"] }) {
   const { t } = useI18n();
   const [selectedVersionId, setSelectedVersionId] = useState(review.activeVersionId);
   const [selectedAnchor, setSelectedAnchor] = useState<string>();

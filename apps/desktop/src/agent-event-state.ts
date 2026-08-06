@@ -44,8 +44,6 @@ export function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[
     || event.type === "conversation.updated"
     || event.type === "context.updated"
     || event.type === "queue.updated"
-    || event.type === "plan.review.requested"
-    || event.type === "plan.review.resolved"
     || event.type === "agent.event") return turns;
   if (event.type === "user.message.started") return activateQueuedTurn(turns, event);
   if (event.type === "run.completed" || event.type === "run.error" || event.type === "run.stopped") {
@@ -116,6 +114,46 @@ export function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[
             status: "pending",
           }],
         };
+      case "plan.review.draft": {
+        const existing = current.activities.some((item) => item.type === "plan_review" && item.id === event.draft.toolCallId);
+        const activity = {
+          id: event.draft.toolCallId,
+          type: "plan_review" as const,
+          title: event.draft.title,
+          markdown: event.draft.markdown,
+          status: "streaming" as const,
+        };
+        return {
+          ...current,
+          activities: existing
+            ? current.activities.map((item) => item.type === "plan_review" && item.id === event.draft.toolCallId ? activity : item)
+            : [...current.activities, activity],
+        };
+      }
+      case "plan.review.requested":
+      case "plan.review.resolved": {
+        const version = event.review.versions.find((entry) => entry.id === event.review.activeVersionId) ?? event.review.versions.at(-1);
+        const activity = {
+          id: event.review.toolCallId,
+          type: "plan_review" as const,
+          title: event.review.title,
+          markdown: version?.markdown ?? "",
+          status: event.review.status,
+          review: event.review,
+        };
+        const draftIndex = current.activities.findIndex((item) => item.type === "plan_review" && item.id === event.review.toolCallId);
+        const reviewIndex = current.activities.findIndex((item) => item.type === "plan_review" && item.review?.id === event.review.id);
+        const targetIndex = draftIndex >= 0 ? draftIndex : reviewIndex;
+        return {
+          ...current,
+          activities: targetIndex >= 0
+            ? current.activities.flatMap((item, index) => {
+                if (index === targetIndex) return [activity];
+                return item.type === "plan_review" && item.review?.id === event.review.id ? [] : [item];
+              })
+            : [...current.activities, activity],
+        };
+      }
       case "response.usage":
         return { ...current, usage: mergeAnswerUsage(current.usage, event.usage) };
       case "changes.updated":
@@ -124,15 +162,17 @@ export function applyAgentEvent(turns: ChatTurn[], event: AgentEvent): ChatTurn[
   });
 }
 
-export function isStreamingAgentEvent(event: AgentEvent): event is Extract<AgentEvent, { type: "message.delta" | "thinking.delta" }> {
-  return event.type === "message.delta" || event.type === "thinking.delta";
+export function isStreamingAgentEvent(event: AgentEvent): event is Extract<AgentEvent, { type: "message.delta" | "thinking.delta" | "plan.review.draft" }> {
+  return event.type === "message.delta" || event.type === "thinking.delta" || event.type === "plan.review.draft";
 }
 
 export function coalesceStreamingAgentEvents(events: AgentEvent[]): AgentEvent[] {
   const result: AgentEvent[] = [];
   for (const event of events) {
     const previous = result.at(-1);
-    if (isStreamingAgentEvent(event) && previous?.type === event.type && previous.runId === event.runId) {
+    if (event.type === "plan.review.draft" && previous?.type === event.type && previous.runId === event.runId && previous.draft.toolCallId === event.draft.toolCallId) {
+      result[result.length - 1] = event;
+    } else if ((event.type === "message.delta" || event.type === "thinking.delta") && previous?.type === event.type && previous.runId === event.runId) {
       result[result.length - 1] = { ...previous, text: previous.text + event.text };
     } else {
       result.push(event);
