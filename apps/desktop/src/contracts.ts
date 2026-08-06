@@ -210,6 +210,13 @@ export type PlanReviewArtifact = {
   versions: PlanReviewVersion[];
 };
 
+export type PlanReviewDraft = {
+  runId: string;
+  toolCallId: string;
+  title: string;
+  markdown: string;
+};
+
 export type ResolvePlanReviewInput = {
   reviewId: string;
   versionId: string;
@@ -503,7 +510,8 @@ export type ConversationActivity =
   | { id: string; type: "message"; text: string }
   | { id: string; type: "thinking"; text: string }
   | { id: string; type: "tool"; name: string; args: unknown; output: string; status: "running" | "success" | "error"; details?: ToolActivityDetails }
-  | { id: string; type: "question"; question: string; options: QuestionOption[]; answer?: string; status: "pending" | "answered" };
+  | { id: string; type: "question"; question: string; options: QuestionOption[]; answer?: string; status: "pending" | "answered" }
+  | { id: string; type: "plan_review"; title: string; markdown: string; status: "streaming" | PlanReviewArtifact["status"]; review?: PlanReviewArtifact };
 
 export type PiAgentEventType =
   | "agent_start"
@@ -548,6 +556,7 @@ export type AgentEvent =
   | { type: "tool.updated"; conversationId?: string; runId: string; callId: string; name: string; output: string; details?: ToolActivityDetails }
   | { type: "tool.completed"; conversationId?: string; runId: string; callId: string; name: string; output: string; isError: boolean; details?: ToolActivityDetails }
   | { type: "question.requested"; conversationId?: string; runId: string; callId: string; question: string; options: QuestionOption[] }
+  | { type: "plan.review.draft"; conversationId?: string; runId: string; draft: PlanReviewDraft }
   | { type: "plan.review.requested"; conversationId?: string; runId: string; review: PlanReviewArtifact }
   | { type: "plan.review.resolved"; conversationId?: string; runId: string; review: PlanReviewArtifact }
   | { type: "response.usage"; conversationId?: string; runId: string; usage: ResponseUsage }

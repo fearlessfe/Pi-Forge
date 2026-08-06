@@ -84,7 +84,11 @@ export class PlanReviewStore {
     const existing = this.list(input.conversationId).find((review) => review.title === title);
     if (existing) {
       const active = existing.versions.find((version) => version.id === existing.activeVersionId);
-      if (active?.contentHash === hash) return existing;
+      if (active?.contentHash === hash) {
+        const updated = { ...existing, runId: input.runId, toolCallId: input.toolCallId, updatedAt: new Date().toISOString() };
+        this.replace(updated);
+        return cloneReview(updated);
+      }
       const now = new Date().toISOString();
       const version = { id: randomUUID(), number: existing.versions.length + 1, markdown, contentHash: hash, createdAt: now, annotations: [] };
       const updated: PlanReviewArtifact = { ...existing, runId: input.runId, toolCallId: input.toolCallId, status: "pending", activeVersionId: version.id, updatedAt: now, versions: [...existing.versions, version] };

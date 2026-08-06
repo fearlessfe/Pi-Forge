@@ -11,7 +11,7 @@ export function appendMessageDelta(activities: ConversationActivity[], text: str
 export function normalizeVisibleActivities(activities: ConversationActivity[]): ConversationActivity[] {
   const normalized: ConversationActivity[] = [];
   for (const activity of activities) {
-    if (activity.type === "tool" && activity.name === "ask_user") continue;
+    if (activity.type === "tool" && (activity.name === "ask_user" || activity.name === "request_plan_review")) continue;
     const previous = normalized.at(-1);
     if (previous?.type === "thinking" && activity.type === "thinking") {
       const separator = previous.text && activity.text ? "\n\n" : "";

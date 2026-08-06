@@ -148,30 +148,66 @@ describe("applyAgentEvent activity union", () => {
 
   it("leaves renderer-independent control events out of turn state", () => {
     const turns = [turn("initial", "Initial", "running")];
-    const review = {
-      id: "review-1",
-      cwd: "/workspace",
-      conversationId: "conversation-1",
-      runId: "run-1",
-      toolCallId: "call-1",
-      title: "Plan",
-      status: "pending" as const,
-      activeVersionId: "version-1",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      versions: [],
-    };
     const controls: AgentEvent[] = [
       { type: "runtime.status", status: "running" },
       { type: "context.updated", runId: "run-1", usage: { tokens: 10, contextWindow: 100, percent: 10 } },
       { type: "queue.updated", runId: "run-1", queue: { steering: ["adjust"], followUp: ["later"] } },
-      { type: "plan.review.requested", runId: "run-1", review },
-      { type: "plan.review.resolved", runId: "run-1", review: { ...review, status: "approved" } },
       { type: "agent.event", runId: "run-1", event: { sequence: 1, timestamp: 1, eventType: "agent_start", payload: {} } },
       { type: "conversation.updated", kind: "delete", reason: "deleted", conversationId: "conversation-1" },
     ];
 
     for (const event of controls) expect(apply(turns, event)).toBe(turns);
+  });
+
+  it("streams a plan in activity order and replaces the draft with its review", () => {
+    const review = {
+      id: "review-1",
+      cwd: "/workspace",
+      conversationId: "conversation-1",
+      runId: "run-1",
+      toolCallId: "call-plan",
+      title: "Migration",
+      status: "pending" as const,
+      activeVersionId: "version-1",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      versions: [{ id: "version-1", number: 1, markdown: "# Full plan", contentHash: "hash", createdAt: "2026-01-01T00:00:00.000Z", annotations: [] }],
+    };
+    let turns = [turn("initial", "Initial", "running")];
+    turns = apply(turns, { type: "plan.review.draft", runId: "run-1", draft: { runId: "run-1", toolCallId: "call-plan", title: "Mig", markdown: "# Fu" } });
+    turns = apply(turns, { type: "plan.review.draft", runId: "run-1", draft: { runId: "run-1", toolCallId: "call-plan", title: "Migration", markdown: "# Full plan" } });
+    turns = apply(turns, { type: "plan.review.requested", runId: "run-1", review });
+    turns = apply(turns, { type: "question.requested", runId: "run-1", callId: "question-after-plan", question: "Start implementation?", options: [] });
+    turns = apply(turns, { type: "plan.review.resolved", runId: "run-1", review: { ...review, status: "approved" } });
+
+    expect(turns[0].activities).toEqual([
+      expect.objectContaining({ id: "call-plan", type: "plan_review", title: "Migration", markdown: "# Full plan", status: "approved" }),
+      expect.objectContaining({ id: "question-after-plan", type: "question", status: "pending" }),
+    ]);
+  });
+
+  it("moves a revised plan to its new streamed position without duplicating the artifact", () => {
+    const firstReview = {
+      id: "review-1", cwd: "/workspace", conversationId: "conversation-1", runId: "run-1", toolCallId: "call-plan-1",
+      title: "Migration", status: "changes_requested" as const, activeVersionId: "version-1",
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+      versions: [{ id: "version-1", number: 1, markdown: "# First", contentHash: "hash-1", createdAt: "2026-01-01T00:00:00.000Z", annotations: [], decision: "changes_requested" as const }],
+    };
+    const secondReview = {
+      ...firstReview,
+      toolCallId: "call-plan-2",
+      status: "pending" as const,
+      activeVersionId: "version-2",
+      versions: [...firstReview.versions, { id: "version-2", number: 2, markdown: "# Revised", contentHash: "hash-2", createdAt: "2026-01-01T00:01:00.000Z", annotations: [] }],
+    };
+    let turns = [turn("initial", "Initial", "running")];
+    turns = apply(turns, { type: "plan.review.requested", runId: "run-1", review: firstReview });
+    turns = apply(turns, { type: "message.delta", runId: "run-1", text: "Revising." });
+    turns = apply(turns, { type: "plan.review.draft", runId: "run-1", draft: { runId: "run-1", toolCallId: "call-plan-2", title: "Migration", markdown: "# Rev" } });
+    turns = apply(turns, { type: "plan.review.requested", runId: "run-1", review: secondReview });
+
+    expect(turns[0].activities.map((activity) => activity.type)).toEqual(["message", "plan_review"]);
+    expect(turns[0].activities.at(-1)).toMatchObject({ id: "call-plan-2", type: "plan_review", markdown: "# Revised", status: "pending" });
   });
 });
 
@@ -195,6 +231,15 @@ describe("streaming event batches", () => {
         { type: "thinking", text: "ab" },
       ],
     });
+  });
+
+  it("keeps only the latest adjacent plan draft for a tool call", () => {
+    const events: AgentEvent[] = [
+      { type: "plan.review.draft", runId: "run-1", draft: { runId: "run-1", toolCallId: "call-plan", title: "P", markdown: "one" } },
+      { type: "plan.review.draft", runId: "run-1", draft: { runId: "run-1", toolCallId: "call-plan", title: "Plan", markdown: "one two" } },
+    ];
+    expect(events.every(isStreamingAgentEvent)).toBe(true);
+    expect(coalesceStreamingAgentEvents(events)).toEqual([events[1]]);
   });
 
   it("preserves deltas around control flush boundaries and settles only the matching mixed queue on error", () => {

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { PlanReviewArtifact } from "../contracts";
 import { I18nProvider } from "../i18n";
-import { PlanReviewPanel } from "./PlanReviewPanel";
+import { PlanReviewDraftCard, PlanReviewPanel } from "./PlanReviewPanel";
 
 const review: PlanReviewArtifact = {
   id: "review-1",
@@ -19,6 +19,14 @@ const review: PlanReviewArtifact = {
 };
 
 describe("PlanReviewPanel", () => {
+  it("renders an incremental plan draft without review actions", () => {
+    const markup = renderToStaticMarkup(<I18nProvider><PlanReviewDraftCard title="Streaming plan" markdown="## First streamed section" /></I18nProvider>);
+    expect(markup).toContain("Streaming plan");
+    expect(markup).toContain("First streamed section");
+    expect(markup).toContain("计划内容正在流式生成");
+    expect(markup).not.toContain("批准计划");
+  });
+
   it("renders an accessible pending review without conflating tool permission", () => {
     const markup = renderToStaticMarkup(<I18nProvider><PlanReviewPanel reviews={[review]} onResolve={vi.fn()} /></I18nProvider>);
     expect(markup).toContain("Migration plan");

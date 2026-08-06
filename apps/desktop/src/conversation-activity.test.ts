@@ -28,6 +28,7 @@ describe("conversation activity ordering", () => {
     const activities: ConversationActivity[] = [
       { id: "thinking-1", type: "thinking", text: "Inspect the project." },
       { id: "hidden-question", type: "tool", name: "ask_user", args: {}, output: "", status: "success" },
+      { id: "hidden-plan-tool", type: "tool", name: "request_plan_review", args: {}, output: "", status: "success" },
       { id: "thinking-2", type: "thinking", text: "Choose the next step." },
       { id: "call-read", type: "tool", name: "read", args: {}, output: "done", status: "success" },
       { id: "thinking-3", type: "thinking", text: "Summarize the result." },
