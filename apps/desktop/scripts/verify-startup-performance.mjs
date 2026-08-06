@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 const desktopRoot = path.resolve(import.meta.dirname, "..");
-const appRoot = path.resolve(process.argv[2] ?? path.join(desktopRoot, "release"));
+const appRootArgument = process.argv.slice(2).find((argument) => argument !== "--");
+const appRoot = path.resolve(appRootArgument ?? path.join(desktopRoot, "release"));
 const budgets = JSON.parse(fs.readFileSync(path.join(desktopRoot, "performance-budgets.json"), "utf8"));
 if (budgets.version !== 1) throw new Error(`Unsupported performance budget version: ${budgets.version}`);
 const outputRoot = path.resolve(process.env.PI_PERFORMANCE_OUTPUT_DIR ?? path.join(desktopRoot, "../../artifacts/performance"));
