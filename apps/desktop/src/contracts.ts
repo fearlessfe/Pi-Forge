@@ -11,6 +11,10 @@ import type {
   PromptImage,
   QueuedMessages,
   ResolvePlanReviewInput,
+  RuntimeEventCheckpoint,
+  RuntimeEventPage,
+  RuntimeEventQuery,
+  RuntimeReplaySnapshot,
   RuntimeRecoveryInfo,
   SendPromptInput,
   TaskFileChange,
@@ -41,6 +45,14 @@ export type {
   QueuedMessages,
   ResolvePlanReviewInput,
   ResponseUsage,
+  RuntimeEventCheckpoint,
+  RuntimeEventPage,
+  RuntimeEventQuery,
+  RuntimeEventRecord,
+  RuntimeReplayRun,
+  RuntimeReplaySnapshot,
+  RuntimeReplayTool,
+  RuntimeReplayTurn,
   RuntimeRecoveryInfo,
   SendPromptInput,
   SubagentRunInfo,
@@ -814,6 +826,10 @@ export type PiDesktopApi = {
     retryRecovery(id: string): Promise<{ runId: string }>;
     discardRecovery(id: string): Promise<void>;
     retryRuntime(conversationId?: string): Promise<void>;
+    queryRuntimeEvents(query?: RuntimeEventQuery): Promise<RuntimeEventPage>;
+    replayRuntimeEvents(query?: RuntimeEventQuery): Promise<RuntimeReplaySnapshot>;
+    saveRuntimeEventCheckpoint(name: string, offset?: number): Promise<RuntimeEventCheckpoint>;
+    listRuntimeEventCheckpoints(): Promise<RuntimeEventCheckpoint[]>;
     reconnect(): Promise<RendererRecoverySnapshot>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
   };

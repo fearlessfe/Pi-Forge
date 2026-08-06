@@ -1,5 +1,6 @@
 import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
+import { runtimeEventTypes } from "@pi-forge/runtime-contracts";
 import {
   maxPromptAttachmentNameBytes,
   maxPromptImageBytes,
@@ -24,6 +25,7 @@ import {
   type QueuePromptInput,
   type ResourceSettings,
   type ResolvePlanReviewInput,
+  type RuntimeEventQuery,
   type SaveMcpServerInput,
   type SaveConversationExecutionProfile,
   type SaveModelSettings,
@@ -94,6 +96,16 @@ export const conversationListQuerySchema = Type.Object({
   query: Type.Optional(Type.String({ maxLength: 500 })),
   archived: Type.Optional(Type.Boolean()),
   projectId: Type.Optional(Type.String({ maxLength: 4096 })),
+}, { additionalProperties: false });
+
+export const runtimeEventQuerySchema = Type.Object({
+  conversationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  runId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  turnId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  toolCallId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+  eventTypes: Type.Optional(Type.Array(Type.Union(runtimeEventTypes.map((eventType) => Type.Literal(eventType))), { maxItems: runtimeEventTypes.length, uniqueItems: true })),
+  afterOffset: Type.Optional(Type.Integer({ minimum: 0 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000 })),
 }, { additionalProperties: false });
 
 export const resolvePlanReviewInputSchema = Type.Object({
@@ -360,6 +372,10 @@ export function requireContextBudgetRequest(value: unknown): ContextBudgetReques
 
 export function requireConversationListQuery(value: unknown): ConversationListQuery {
   return requireSchema<ConversationListQuery>(conversationListQuerySchema, value ?? {}, "会话列表请求无效。");
+}
+
+export function requireRuntimeEventQuery(value: unknown): RuntimeEventQuery {
+  return requireSchema<RuntimeEventQuery>(runtimeEventQuerySchema, value ?? {}, "Runtime 事件查询无效。");
 }
 
 export function requireResolvePlanReviewInput(value: unknown): ResolvePlanReviewInput {

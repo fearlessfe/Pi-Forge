@@ -143,6 +143,10 @@ const api: PiDesktopApi = {
     retryRecovery: (id: string) => ipcRenderer.invoke("agent:retry-recovery", id),
     discardRecovery: (id: string) => ipcRenderer.invoke("agent:discard-recovery", id),
     retryRuntime: (conversationId) => ipcRenderer.invoke("agent:retry-runtime", conversationId),
+    queryRuntimeEvents: (query) => ipcRenderer.invoke("agent:query-runtime-events", query ?? {}),
+    replayRuntimeEvents: (query) => ipcRenderer.invoke("agent:replay-runtime-events", query ?? {}),
+    saveRuntimeEventCheckpoint: (name, offset) => ipcRenderer.invoke("agent:save-runtime-event-checkpoint", name, offset),
+    listRuntimeEventCheckpoints: () => ipcRenderer.invoke("agent:list-runtime-event-checkpoints"),
     reconnect: () => ipcRenderer.invoke("agent:reconnect"),
     onEvent: (listener: (event: AgentEvent) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: AgentEvent) => listener(payload);

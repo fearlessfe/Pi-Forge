@@ -16,6 +16,7 @@ import {
   requireQueuePromptInput,
   requireResourceSettings,
   requireResolvePlanReviewInput,
+  requireRuntimeEventQuery,
   requireSendPromptInput,
   requireSubagentProvider,
   requireSystemPromptSettings,
@@ -50,6 +51,14 @@ describe("IPC input validation", () => {
     expect(requireConversationListQuery({ cursor: "v1:eyJ1cGRhdGVkQXQiOiIyMDI2IiwiaWQiOiJjLTEifQ", limit: 50 })).toEqual({ cursor: "v1:eyJ1cGRhdGVkQXQiOiIyMDI2IiwiaWQiOiJjLTEifQ", limit: 50 });
     expect(() => requireConversationListQuery({ cursor: "next", limit: 50 })).toThrow("会话列表请求无效");
     expect(() => requireConversationListQuery({ limit: 201 })).toThrow("会话列表请求无效");
+  });
+
+  it("strictly validates bounded Runtime event queries", () => {
+    expect(requireRuntimeEventQuery({ conversationId: "conversation-1", afterOffset: 42, limit: 200, eventTypes: ["tool.completed"] }))
+      .toEqual({ conversationId: "conversation-1", afterOffset: 42, limit: 200, eventTypes: ["tool.completed"] });
+    expect(() => requireRuntimeEventQuery({ limit: 1_001 })).toThrow("Runtime 事件查询无效");
+    expect(() => requireRuntimeEventQuery({ eventTypes: ["future.event"] })).toThrow("Runtime 事件查询无效");
+    expect(() => requireRuntimeEventQuery({ runId: "run-1", partition: "secret" })).toThrow("Runtime 事件查询无效");
   });
 
   it("strictly validates bounded plan review decisions", () => {

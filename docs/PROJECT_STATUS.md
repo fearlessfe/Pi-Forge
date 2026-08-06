@@ -124,7 +124,9 @@
 
 #### P1-2 完整、可查询、可重放的 Runtime 事件流
 
-**状态：未完成。** 当前有 Session JSONL 和聚合 Trace span，但没有完整桌面 Runtime 事件存储。
+**状态：已完成。** Electron Main 现在将完整桌面 `AgentEvent` 追加到独立的版本化 JSONL 事实日志；每条记录在对外可查询前完成 `fsync`，并获得全局单调 offset、稳定 event ID、记录时间以及 conversation/run/turn/tool call 作用域。
+
+Renderer 通过严格 schema 校验的 preload API 按作用域、事件类型和 `afterOffset` 分页查询；命名 checkpoint 独立原子持久化。存储可以把旧版无 manifest 的 `events.jsonl` 迁移为 v1，恢复迁移中断和末尾 torn write，并拒绝未知未来版本。状态重放从事实事件归约出 run、turn、流式文本和工具生命周期，不依赖 Trace span 或 Session 消息冒充事件流。
 
 完成定义：
 
@@ -132,6 +134,14 @@
 - 支持按 conversation/run/turn/tool call 查询；
 - 支持 checkpoint、offset 和 schema 迁移；
 - 能重放状态，不把 Trace span 或 Session 消息误当作完整事件流。
+
+证据：
+
+- `apps/desktop/electron/runtime-event-store.ts`
+- `apps/desktop/electron/runtime-event-store.test.ts`
+- `apps/desktop/electron/main.ts`
+- `apps/desktop/electron/preload.cts`
+- `packages/runtime-contracts/src/events.ts`
 
 #### P1-3 稳定公共契约与定制 Agent SDK
 
@@ -364,7 +374,7 @@ Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session st
 - `pnpm lint`：通过；
 - `pnpm typecheck`：通过；
 - Runtime contracts 独立测试：通过（1 个文件、9 项测试）；
-- Desktop test/coverage：通过（64 个文件、440 项测试）；Desktop 覆盖率 statements 89.67%、branches 83.07%、functions 91.96%、lines 93.97%；Runtime contracts 覆盖率 statements 97.32%、branches 86.66%、functions 98.55%、lines 96.66%；
+- Desktop test：通过（65 个文件、446 项测试）；最近一次完整覆盖率基线仍为 Desktop statements 89.67%、branches 83.07%、functions 91.96%、lines 93.97%，Runtime contracts statements 97.32%、branches 86.66%、functions 98.55%、lines 96.66%；
 - `pnpm build`：合并态通过，包含 `@pi-forge/runtime-contracts` declaration/ESM 构建和 Desktop 生产构建；
 - `pnpm verify:tokens`：通过（54 个 token 工具类）；
 - `pnpm verify:renderer:smoke` 与完整 `pnpm verify:renderer`：通过（四场景双主题、100-turn 性能场景、无 console/pageerror）；

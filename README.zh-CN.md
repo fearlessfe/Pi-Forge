@@ -81,7 +81,7 @@ Pi Forge 将事件协议和执行轨迹视为运行时能力，而不是 UI 装�
 | 凭据 | 支持 API Key、OAuth 和 Provider 凭据链；持久化凭据通过 Electron `safeStorage` 加密 |
 | Session | 本地持久化多轮会话，支持恢复、Fork、重命名、标签、归档和导出 |
 | Context | 支持 Pi Session 上下文构建、compaction、上下文占用显示和模型用量记录 |
-| Agent 事件 | 捕获完整的 Pi `AgentSessionEvent` 联合类型，并转换为稳定的桌面端事件 |
+| Agent 事件 | 捕获完整的 Pi `AgentSessionEvent` 联合类型，持久化全部桌面事件，并支持作用域 offset 查询、checkpoint、迁移和状态重放 |
 | 工具 | 支持读取、搜索、Shell、编辑、写入、用户询问和只读子 Agent |
 | 任务控制 | 支持停止、steering、follow-up 队列和等待用户回答 |
 | Runtime | Agent Harness 运行在独立子进程，支持协议化 RPC、异常自动重启和中断任务安全续跑 |
@@ -275,7 +275,7 @@ packages/
 
 - [x] 从 Electron 主进程提取独立 Agent Worker
 - [ ] 定义稳定的 Runtime、Session、Event 和 Hand 契约
-- [ ] 将完整运行事件持久化为可查询、可重放的事件流
+- [x] 将完整运行事件持久化为可查询、可重放的事件流
 - [x] 支持 Runtime 崩溃检测、自动重启和中断任务安全续跑
 - [ ] 支持未完成工具调用的幂等重放与完全透明恢复
 - [ ] 提供用于定制 Agent 的 SDK 和示例模板

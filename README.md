@@ -81,7 +81,7 @@ Project files, sessions, and tool execution remain in environments controlled by
 | Credentials | Supports API keys, OAuth, and provider credential chains; persisted credentials are encrypted with Electron `safeStorage` |
 | Sessions | Persists local multi-turn sessions with resume, fork, rename, tag, archive, and export support |
 | Context | Supports Pi session context construction, compaction, context usage display, and model usage records |
-| Agent events | Exhaustively captures the Pi `AgentSessionEvent` union and adapts it into stable desktop events |
+| Agent events | Captures the Pi `AgentSessionEvent` union, durably journals complete desktop events, and supports scoped offset queries, checkpoints, migration, and state replay |
 | Tools | Supports reading, searching, shell commands, editing, writing, user questions, and read-only subagents |
 | Task control | Supports aborting, steering, follow-up queues, and waiting for user answers |
 | Runtime | Runs the agent harness in an independent child process with protocol RPC, automatic restart, and safe continuation of interrupted tasks |
@@ -275,7 +275,7 @@ The long-term goal is to separate the agent runtime, execution environments, and
 
 - [x] Move agent execution out of Electron into an independent worker
 - [ ] Define stable runtime, session, event, and hand contracts
-- [ ] Persist complete runtime events as a queryable, replayable event stream
+- [x] Persist complete runtime events as a queryable, replayable event stream
 - [x] Detect Runtime crashes, restart automatically, and safely continue interrupted tasks
 - [ ] Add idempotent replay of unfinished tool calls and fully transparent recovery
 - [ ] Provide an SDK and example templates for custom agents

@@ -25,6 +25,7 @@ import { BrowserService } from "./browser-service.js";
 import { normalizeExternalBrowserUrl } from "./browser-utils.js";
 import { ObservabilityStore } from "./observability-store.js";
 import { ObservabilityService } from "./observability-service.js";
+import { RuntimeEventStore } from "./runtime-event-store.js";
 import { shutdownApplication } from "./application-shutdown.js";
 import {
   RendererCrashGuard,
@@ -49,6 +50,7 @@ import {
   requireQueuePromptInput,
   requireResourceSettings,
   requireResolvePlanReviewInput,
+  requireRuntimeEventQuery,
   requireSendPromptInput,
   requireSubagentProvider,
   requireSystemPromptSettings,
@@ -64,6 +66,7 @@ let mcpService: McpService | undefined;
 let terminalService: TerminalService | undefined;
 let browserService: BrowserService | undefined;
 let observabilityService: ObservabilityService | undefined;
+let runtimeEventStore: RuntimeEventStore | undefined;
 let applicationShutdownPromise: Promise<void> | undefined;
 let applicationShutdownCompleted = false;
 let rendererReady = false;
@@ -120,6 +123,8 @@ function appendRendererRecoveryLog(event: string, details: Record<string, unknow
 }
 
 function sendAgentEvent(event: AgentEvent): void {
+  if (!runtimeEventStore) throw new Error("Runtime 事件存储尚未初始化。");
+  runtimeEventStore.record(event);
   rendererEventJournal.record(event);
   if (rendererReady && mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
     mainWindow.webContents.send("agent:event", event);
@@ -322,6 +327,7 @@ function registerIpc(
   browser: BrowserService,
   observability: ObservabilityService,
   appearance: AppearanceStore,
+  runtimeEvents: RuntimeEventStore,
 ): void {
   const optionalKnownWorkspace = (value: unknown, message = "工作区路径无效。"): string | undefined => {
     if (value === undefined) return undefined;
@@ -765,6 +771,13 @@ function registerIpc(
   ipcMain.handle("agent:retry-runtime", (_event, conversationId: unknown) => agent.retryAfterCrashLoop(
     conversationId === undefined ? undefined : requireString(conversationId, "会话 ID 无效。"),
   ));
+  ipcMain.handle("agent:query-runtime-events", (_event, query: unknown) => runtimeEvents.query(requireRuntimeEventQuery(query)));
+  ipcMain.handle("agent:replay-runtime-events", (_event, query: unknown) => runtimeEvents.replay(requireRuntimeEventQuery(query)));
+  ipcMain.handle("agent:save-runtime-event-checkpoint", (_event, name: unknown, offset: unknown) => {
+    const checkpointOffset = offset === undefined ? undefined : typeof offset === "number" ? offset : Number.NaN;
+    return runtimeEvents.saveCheckpoint(requireString(name, "Runtime checkpoint 名称无效。"), checkpointOffset);
+  });
+  ipcMain.handle("agent:list-runtime-event-checkpoints", () => runtimeEvents.listCheckpoints());
   ipcMain.handle("agent:reconnect", () => {
     rendererReady = true;
     const snapshot = rendererEventJournal.snapshot();
@@ -777,6 +790,7 @@ function registerIpc(
 
 if (isPrimaryInstance) void app.whenReady().then(async () => {
   const userData = app.getPath("userData");
+  runtimeEventStore = new RuntimeEventStore(path.join(userData, "runtime-events"));
   const piDesktopHome = process.env.PI_DESKTOP_HOME
     ? path.resolve(process.env.PI_DESKTOP_HOME)
     : path.join(os.homedir(), ".pi-desktop");
@@ -841,7 +855,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   // so conversations created before the workspace restriction keep loading.
   resources.addKnownWorkspace(chatSandbox);
   seedKnownWorkspacesFromSessions(resources, [sessionDir]);
-  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata, resources, mcpService, terminalService, browserService, observabilityService, appearanceStore);
+  registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata, resources, mcpService, terminalService, browserService, observabilityService, appearanceStore, runtimeEventStore);
   installContentSecurityPolicy();
   mainWindow = createWindow();
 

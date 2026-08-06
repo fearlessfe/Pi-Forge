@@ -30,6 +30,13 @@ export type AgentTraceEvent = {
 
 export type AgentRuntimeStatus = "running" | "crash-looping" | "unresponsive";
 
+export const runtimeEventTypes = [
+  "runtime.status", "run.started", "user.message.started", "message.delta", "thinking.delta",
+  "tool.started", "tool.updated", "tool.completed", "question.requested", "plan.review.draft",
+  "plan.review.requested", "plan.review.resolved", "response.usage", "context.updated", "queue.updated",
+  "changes.updated", "agent.event", "conversation.updated", "run.completed", "run.stopped", "run.error",
+] as const satisfies readonly AgentEvent["type"][];
+
 export type AgentEvent =
   | { type: "runtime.status"; status: AgentRuntimeStatus; conversationId?: string }
   | { type: "run.started"; runId: string; conversationId: string; provider: string; model: string; cwd: string }
@@ -52,3 +59,82 @@ export type AgentEvent =
   | { type: "run.completed"; conversationId?: string; runId: string }
   | { type: "run.stopped"; conversationId?: string; runId: string }
   | { type: "run.error"; conversationId?: string; runId: string; message: string };
+
+/** Durable, globally ordered desktop event record. Offsets start at 1 and never repeat. */
+export type RuntimeEventRecord = {
+  schemaVersion: 1;
+  offset: number;
+  eventId: string;
+  recordedAt: string;
+  conversationId?: string;
+  runId?: string;
+  turnId?: string;
+  toolCallId?: string;
+  event: AgentEvent;
+};
+
+export type RuntimeEventQuery = {
+  conversationId?: string;
+  runId?: string;
+  turnId?: string;
+  toolCallId?: string;
+  eventTypes?: AgentEvent["type"][];
+  afterOffset?: number;
+  limit?: number;
+};
+
+export type RuntimeEventPage = {
+  events: RuntimeEventRecord[];
+  nextOffset: number;
+  highWatermark: number;
+  hasMore: boolean;
+};
+
+export type RuntimeEventCheckpoint = {
+  schemaVersion: 1;
+  name: string;
+  offset: number;
+  updatedAt: string;
+};
+
+export type RuntimeReplayTool = {
+  callId: string;
+  name: string;
+  status: "running" | "completed" | "error";
+  args?: unknown;
+  output?: string;
+  details?: ToolActivityDetails;
+  startedOffset: number;
+  completedOffset?: number;
+};
+
+export type RuntimeReplayTurn = {
+  turnId: string;
+  runId: string;
+  userMessage?: string;
+  assistantText: string;
+  thinkingText: string;
+  tools: RuntimeReplayTool[];
+  startedOffset: number;
+  completedOffset?: number;
+};
+
+export type RuntimeReplayRun = {
+  runId: string;
+  conversationId?: string;
+  status: "running" | "completed" | "stopped" | "error";
+  provider?: string;
+  model?: string;
+  cwd?: string;
+  error?: string;
+  turns: RuntimeReplayTurn[];
+  startedOffset: number;
+  completedOffset?: number;
+};
+
+export type RuntimeReplaySnapshot = {
+  schemaVersion: 1;
+  afterOffset: number;
+  highWatermark: number;
+  runs: RuntimeReplayRun[];
+};
