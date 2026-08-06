@@ -1,0 +1,7 @@
+{
+  "kind": "runtime.request",
+  "protocolVersion": 0,
+  "id": "request-v0",
+  "method": "listConversations",
+  "args": []
+}

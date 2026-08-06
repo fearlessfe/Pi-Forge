@@ -18,8 +18,8 @@ function fixture(path: string): unknown {
   return JSON.parse(readFileSync(fileURLToPath(new URL(`../fixtures/${path}`, import.meta.url)), "utf8"));
 }
 
-describe("runtime contract v0 fixtures", () => {
-  it.each(["v0/runtime-ready.json", "v0/runtime-event.json"])("validates and round-trips %s", (path) => {
+describe("runtime contract v1 fixtures", () => {
+  it.each(["v1/runtime-ready.json", "v1/runtime-event.json"])("validates and round-trips %s", (path) => {
     const input = fixture(path);
     const parsed = validateRuntimeServerEnvelope(input);
     expect(parsed).toEqual({ success: true, value: input });
@@ -27,14 +27,14 @@ describe("runtime contract v0 fixtures", () => {
   });
 
   it("validates and round-trips request envelopes", () => {
-    const input = fixture("v0/runtime-request.json");
+    const input = fixture("v1/runtime-request.json");
     const parsed = validateRuntimeRequest(input);
     expect(parsed).toEqual({ success: true, value: input });
     expect(validateRuntimeRequest(JSON.parse(JSON.stringify(parsed.success ? parsed.value : null)))).toEqual(parsed);
   });
 
   it("rejects incompatible versions, unknown methods, and malformed payloads", () => {
-    expect(validateRuntimeRequest(fixture("incompatible/runtime-request-v1.json"))).toMatchObject({
+    expect(validateRuntimeRequest(fixture("incompatible/runtime-request-v0.json"))).toMatchObject({
       success: false,
       error: { code: "incompatible_version" },
     });
@@ -53,9 +53,9 @@ describe("runtime contract v0 fixtures", () => {
   });
 
   it("rejects malformed server envelopes instead of accepting partial discriminants", () => {
-    expect(validateRuntimeServerEnvelope({ kind: "runtime.ready", protocolVersion: 0, pid: "42", capabilities: [] }))
+    expect(validateRuntimeServerEnvelope({ kind: "runtime.ready", protocolVersion: runtimeProtocolVersion, pid: "42", capabilities: [] }))
       .toMatchObject({ success: false, error: { code: "malformed_payload" } });
-    expect(validateRuntimeServerEnvelope({ kind: "runtime.event", protocolVersion: 0, event: { type: "future.event" } }))
+    expect(validateRuntimeServerEnvelope({ kind: "runtime.event", protocolVersion: runtimeProtocolVersion, event: { type: "future.event" } }))
       .toMatchObject({ success: false, error: { code: "malformed_payload" } });
   });
 });

@@ -1,7 +1,0 @@
-{
-  "kind": "runtime.request",
-  "protocolVersion": 1,
-  "id": "request-v1",
-  "method": "send",
-  "args": ["hello"]
-}

@@ -1,0 +1,25 @@
+{
+  "name": "@pi-forge/basic-agent-template",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Compilable starter template for a Pi Forge Runtime v1 Agent.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "prebuild": "pnpm --filter @pi-forge/runtime-sdk build",
+    "build": "tsc -p tsconfig.json",
+    "pretest": "pnpm --filter @pi-forge/runtime-sdk build",
+    "test": "vitest run",
+    "pretypecheck": "pnpm --filter @pi-forge/runtime-sdk build",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
+  },
+  "dependencies": {
+    "@pi-forge/runtime-contracts": "workspace:^",
+    "@pi-forge/runtime-sdk": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

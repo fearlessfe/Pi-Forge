@@ -1,6 +1,6 @@
 {
   "kind": "runtime.event",
-  "protocolVersion": 0,
+  "protocolVersion": 1,
   "event": {
     "type": "run.started",
     "runId": "run-1",

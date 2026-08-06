@@ -1,6 +1,6 @@
 {
   "kind": "runtime.ready",
-  "protocolVersion": 0,
+  "protocolVersion": 1,
   "pid": 4242,
   "capabilities": [
     "runtime.rpc",

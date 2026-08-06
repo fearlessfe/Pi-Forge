@@ -145,15 +145,16 @@ Renderer 通过严格 schema 校验的 preload API 按作用域、事件类型�
 
 #### P1-3 稳定公共契约与定制 Agent SDK
 
-**状态：部分完成（公共契约 v0 第一阶段）。** 仓库已有真实 `packages/runtime-contracts` workspace package，Desktop client/worker 通过它共享版本化 Runtime envelope、method/capability/error 语义、Session/Event 类型和运行时 schema validator。协议 v0 使用精确版本兼容；必需 capability 缺失、未知方法、版本不兼容和 malformed envelope 都会 fail closed。该 package 仍为私有 `0.0.0` 内部预发布契约，不是稳定 v1。
+**状态：已完成。** `@pi-forge/runtime-contracts` 与 `@pi-forge/runtime-sdk` 均为可发布的公开 `1.0.0` package。协议 major 为 v1；Desktop client/worker 与 SDK client/host 共享版本化 envelope、method/capability/error、Runtime/Session/Event/Hand 类型和 fail-closed validator。
 
 已完成边界：
 
-- compatibility fixtures、schema validation、JSON round-trip 和 capability negotiation 测试；
-- client/worker method 清单穷尽性检查，以及 client 对畸形 worker 消息的断路；
+- v1 compatibility fixtures、schema validation、JSON round-trip、capability negotiation、heartbeat、timeout 和结构化错误测试；
+- 公开兼容政策明确 v1 内可兼容的可选 capability/field，以及必须升级 protocol major 的破坏性变化；
+- transport-neutral SDK 提供校验 client、Agent host、`defineAgent` manifest factory、请求分发和事件订阅；
+- `templates/basic-agent` 是纳入 workspace typecheck/test/build 的最小可运行 Agent 模板；
+- client/worker method 清单穷尽性检查，以及 Desktop 与 SDK client 对畸形消息的断路；
 - 凭据、MCP、浏览器和桌面服务 host RPC 仍保留在 Electron 私有层，没有进入公共 package。
-
-剩余工作：完整耐久事件流及其 offset/checkpoint/迁移语义、可发布 SDK、最小示例 Agent 和模板、v1 兼容政策；这些均不属于本阶段。
 
 完成定义：
 
@@ -165,6 +166,8 @@ Renderer 通过严格 schema 校验的 preload API 按作用域、事件类型�
 当前相关位置：
 
 - `packages/runtime-contracts`
+- `packages/runtime-sdk`
+- `templates/basic-agent`
 - `apps/desktop/src/contracts.ts`
 - `apps/desktop/electron/agent-runtime-protocol.ts`
 - `pnpm-workspace.yaml`
@@ -373,8 +376,8 @@ Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session st
 
 - `pnpm lint`：通过；
 - `pnpm typecheck`：通过；
-- Runtime contracts 独立测试：通过（1 个文件、9 项测试）；
-- Desktop test：通过（65 个文件、446 项测试）；最近一次完整覆盖率基线仍为 Desktop statements 89.67%、branches 83.07%、functions 91.96%、lines 93.97%，Runtime contracts statements 97.32%、branches 86.66%、functions 98.55%、lines 96.66%；
+- Runtime contracts v1：通过（2 个文件、10 项测试）；Runtime SDK：通过（1 个文件、11 项测试），覆盖率 statements 96.89%、branches 91.36%、functions/lines 100%；基础 Agent 模板：通过（1 个文件、1 项测试）；
+- Desktop test/coverage：通过（65 个文件、446 项测试）；覆盖率 statements 89.70%、branches 83.12%、functions 92.08%、lines 94.14%；Runtime contracts 覆盖率 statements 97.32%、branches 86.66%、functions 98.55%、lines 96.66%；
 - `pnpm build`：合并态通过，包含 `@pi-forge/runtime-contracts` declaration/ESM 构建和 Desktop 生产构建；
 - `pnpm verify:tokens`：通过（54 个 token 工具类）；
 - `pnpm verify:renderer:smoke` 与完整 `pnpm verify:renderer`：通过（四场景双主题、100-turn 性能场景、无 console/pageerror）；

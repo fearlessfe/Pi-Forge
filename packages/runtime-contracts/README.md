@@ -1,7 +1,7 @@
 # `@pi-forge/runtime-contracts`
 
-Internal prerelease **v0** wire contracts shared by Pi Forge runtime hosts and workers.
+Stable **v1** wire contracts shared by Pi Forge runtime clients, hosts, SDKs, and desktop workers.
 
-The package contains versioned Runtime RPC envelopes, capability negotiation, runtime validators, and the Session/Event data transferred over that boundary. It intentionally has no Electron, React, credential, browser, persistence, SDK, Agent-template, or scheduling implementation.
+The package contains Runtime RPC envelopes, capability negotiation, runtime validators, durable Event/Session types, and exhaustive Runtime method metadata. It intentionally has no Electron, React, credentials, browser implementation, or privileged host services.
 
-`0.0.0` and protocol version `0` are not stable-v1 promises. Until a v1 compatibility policy is published, consumers must negotiate the exact protocol version and required capabilities and reject unknown or malformed wire data.
+Protocol `1` is the stable major. Consumers must validate every envelope, negotiate required capabilities, ignore unknown optional capabilities, and reject incompatible majors or malformed data. See [`COMPATIBILITY.md`](./COMPATIBILITY.md) for the public compatibility policy.

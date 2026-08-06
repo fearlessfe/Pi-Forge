@@ -99,7 +99,7 @@ The test suite drives real Pi sessions with a local OpenAI-compatible fake model
 To avoid presenting the roadmap as shipped functionality, the current release has these explicit limitations:
 
 - the agent harness runs in an independent local Runtime child process, but is not yet an independently deployable service;
-- one application instance currently runs only one primary agent task at a time;
+- one application instance currently runs up to three isolated primary conversation tasks at a time;
 - the built-in subagent is read-only and in-process; each run has a persistent child session plus an independent token, request, and estimated-cost ledger, but cannot yet resume as a background task;
 - Runtime crashes preserve a recovery record and offer safe continuation; in-flight tool calls are not replayed automatically, avoiding duplicate side effects;
 - the sandbox is a local command boundary and cannot yet provision remote execution environments;
@@ -226,24 +226,27 @@ pi-forge/
 │       ├── src/            # React renderer, components, and shared contracts
 │       └── scripts/        # Development and runtime support scripts
 ├── packages/
-│   └── runtime-contracts/   # Internal prerelease v0 Runtime/Session/Event wire contract
+│   ├── runtime-contracts/  # Public stable-v1 Runtime/Session/Event/Hand contract
+│   └── runtime-sdk/        # Public transport-neutral Runtime client/host SDK
+├── templates/
+│   └── basic-agent/        # Compilable custom Agent starter
 ├── docs/                   # Design assets and verification scripts
 ├── package.json
 └── pnpm-workspace.yaml
 ```
 
-`@pi-forge/runtime-contracts` is the first real platform package. It provides protocol-versioned envelopes, capability negotiation, fail-closed runtime validators, and shared Session/Event types. It remains private at version `0.0.0`: this is an internal prerelease v0 contract, not a stable v1 compatibility promise. Electron host RPC for credentials, MCP, browser access, and desktop services is deliberately excluded.
+`@pi-forge/runtime-contracts` and `@pi-forge/runtime-sdk` are public stable-v1 platform packages. Contracts provides versioned envelopes, capability negotiation, fail-closed validators, and shared Runtime/Session/Event/Hand types; the SDK provides a transport-neutral validating client, Agent host, manifest factory, structured errors, heartbeat, timeouts, and event subscriptions. `templates/basic-agent` is compiled and tested in the workspace. Electron host RPC for credentials, MCP, browser access, and desktop services is deliberately excluded.
 
 The remaining platform packages are still planned:
 
 ```text
 packages/
-├── runtime-contracts/      # Implemented internal v0 wire contracts
+├── runtime-contracts/      # Implemented public stable-v1 contracts
+├── runtime-sdk/            # Implemented public Agent SDK
 ├── runtime/                # Agent lifecycle and harness
 ├── session/                # Durable events and context queries
 ├── hands/                  # Sandbox, MCP, and remote execution adapters
-├── policy/                 # Permissions, approvals, and organization policy
-└── sdk/                    # Custom agent development APIs
+└── policy/                 # Permissions, approvals, and organization policy
 ```
 
 ## Security model
@@ -274,11 +277,11 @@ The long-term goal is to separate the agent runtime, execution environments, and
 ### Phase 2: Extract the Pi Forge Runtime
 
 - [x] Move agent execution out of Electron into an independent worker
-- [ ] Define stable runtime, session, event, and hand contracts
+- [x] Define stable runtime, session, event, and hand contracts
 - [x] Persist complete runtime events as a queryable, replayable event stream
 - [x] Detect Runtime crashes, restart automatically, and safely continue interrupted tasks
 - [ ] Add idempotent replay of unfinished tool calls and fully transparent recovery
-- [ ] Provide an SDK and example templates for custom agents
+- [x] Provide an SDK and example templates for custom agents
 
 ### Phase 3: Multi-agent and remote execution
 

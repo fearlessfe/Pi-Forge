@@ -99,8 +99,8 @@ Pi Forge 将事件协议和执行轨迹视为运行时能力，而不是 UI 装�
 为了避免把路线图误认为现有能力，当前版本有以下明确限制：
 
 - Agent Harness 已从 Electron 主进程拆分为独立本地 Runtime 子进程，但尚未提取成可独立部署的服务；
-- 同一应用实例当前只运行一个主 Agent 任务；
-- 内置子 Agent 是只读、同进程、内存 Session；
+- 同一应用实例当前最多运行三个会话隔离的主 Agent 任务；
+- 内置子 Agent 是只读、同进程执行，但已有持久 Session 与独立 usage 记录，尚不能作为后台任务恢复；
 - Runtime 崩溃后会保留任务恢复记录并提供“安全继续”；为避免重复副作用，不会自动重放崩溃瞬间尚未完成的工具调用；
 - 沙箱是本机命令执行边界，还没有可 Provision 的远程执行环境；
 - 暂无云端同步、团队控制面、组织级策略和分布式调度；
@@ -226,24 +226,27 @@ pi-forge/
 │       ├── src/            # React Renderer、组件与共享契约
 │       └── scripts/        # 开发和运行时辅助脚本
 ├── packages/
-│   └── runtime-contracts/   # 内部预发布 v0 Runtime/Session/Event wire contract
+│   ├── runtime-contracts/  # 公开稳定 v1 Runtime/Session/Event/Hand 契约
+│   └── runtime-sdk/        # 公开、transport-neutral 的 Runtime client/host SDK
+├── templates/
+│   └── basic-agent/        # 可编译的定制 Agent 起步模板
 ├── docs/                   # 设计资料与验证脚本
 ├── package.json
 └── pnpm-workspace.yaml
 ```
 
-`@pi-forge/runtime-contracts` 是第一个真实的平台 package，提供带协议版本的 envelope、capability negotiation、fail-closed 运行时校验器和共享 Session/Event 类型。它仍是私有的 `0.0.0` 内部预发布 v0 契约，不代表稳定 v1 兼容承诺；凭据、MCP、浏览器访问和桌面服务相关的 Electron host RPC 被明确排除。
+`@pi-forge/runtime-contracts` 与 `@pi-forge/runtime-sdk` 是公开稳定 v1 平台 package。Contracts 提供版本化 envelope、capability negotiation、fail-closed validator 和共享 Runtime/Session/Event/Hand 类型；SDK 提供 transport-neutral 的校验 client、Agent host、manifest factory、结构化错误、heartbeat、timeout 与事件订阅。`templates/basic-agent` 会在 workspace 中实际编译和测试。凭据、MCP、浏览器访问和桌面服务相关的 Electron host RPC 仍被明确排除。
 
 其余平台 package 仍处于规划阶段：
 
 ```text
 packages/
-├── runtime-contracts/      # 已实现的内部 v0 wire contract
+├── runtime-contracts/      # 已实现的公开稳定 v1 契约
+├── runtime-sdk/            # 已实现的公开 Agent SDK
 ├── runtime/                # Agent 生命周期与 Harness
 ├── session/                # 持久化事件与 Context 查询
 ├── hands/                  # Sandbox、MCP 和远程执行适配器
-├── policy/                 # 权限、审批和组织策略
-└── sdk/                    # 定制 Agent 开发接口
+└── policy/                 # 权限、审批和组织策略
 ```
 
 ## 安全模型
@@ -274,11 +277,11 @@ packages/
 ### 阶段二：提取 Pi Forge Runtime
 
 - [x] 从 Electron 主进程提取独立 Agent Worker
-- [ ] 定义稳定的 Runtime、Session、Event 和 Hand 契约
+- [x] 定义稳定的 Runtime、Session、Event 和 Hand 契约
 - [x] 将完整运行事件持久化为可查询、可重放的事件流
 - [x] 支持 Runtime 崩溃检测、自动重启和中断任务安全续跑
 - [ ] 支持未完成工具调用的幂等重放与完全透明恢复
-- [ ] 提供用于定制 Agent 的 SDK 和示例模板
+- [x] 提供用于定制 Agent 的 SDK 和示例模板
 
 ### 阶段三：多 Agent 与远程执行
 

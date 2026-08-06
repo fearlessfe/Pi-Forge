@@ -2,8 +2,8 @@ import { Type, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 import { piAgentEventTypes, type AgentEvent } from "./events.js";
 
-/** Internal prerelease protocol. Version 0 requires exact-version compatibility. */
-export const runtimeProtocolVersion = 0 as const;
+/** Stable wire-protocol major. Additive v1 evolution is negotiated through capabilities. */
+export const runtimeProtocolVersion = 1 as const;
 
 export const runtimeCapabilities = [
   "runtime.rpc",
@@ -34,6 +34,7 @@ export type RuntimeErrorCode =
   | "incompatible_version"
   | "unsupported_capability"
   | "unknown_method"
+  | "unsupported_method"
   | "malformed_payload"
   | "internal_error";
 
@@ -151,7 +152,7 @@ export const runtimeRequestSchema = Type.Object({
 const runtimeErrorSchema = Type.Object({
   code: Type.Union([
     Type.Literal("incompatible_version"), Type.Literal("unsupported_capability"),
-    Type.Literal("unknown_method"), Type.Literal("malformed_payload"), Type.Literal("internal_error"),
+    Type.Literal("unknown_method"), Type.Literal("unsupported_method"), Type.Literal("malformed_payload"), Type.Literal("internal_error"),
   ]),
   message: Type.String({ minLength: 1, maxLength: 16_384 }),
   stack: Type.Optional(Type.String({ maxLength: 256_000 })),
