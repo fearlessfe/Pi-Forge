@@ -349,6 +349,13 @@ export function installMockBridge(options = {}) {
   };
 
   window.piDesktop = {
+    updates: {
+      state: resolve({ status: "unsupported", currentVersion: "0.1.0" }),
+      check: resolve({ status: "unsupported", currentVersion: "0.1.0" }),
+      download: resolve({ status: "unsupported", currentVersion: "0.1.0" }),
+      install: resolve({ status: "unsupported", currentVersion: "0.1.0" }),
+      onEvent: noop,
+    },
     appearance: {
       nativeMaterial: false,
       setTheme: (_preference, resolvedTheme) => Promise.resolve(resolvedTheme),

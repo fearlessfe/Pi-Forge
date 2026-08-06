@@ -79,6 +79,17 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 
 export type PermissionMode = "balanced" | "strict";
 
+export type UpdateStatus = "unsupported" | "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "error";
+
+export type UpdateState = {
+  status: UpdateStatus;
+  currentVersion: string;
+  availableVersion?: string;
+  percent?: number;
+  message?: string;
+  snapshotId?: string;
+};
+
 /** 已解析的界面主题；用于窗口/原生视图的实际配色。 */
 export type AppearanceTheme = "dark" | "light";
 
@@ -706,6 +717,13 @@ export type PluginRuntimeStatus = {
 };
 
 export type PiDesktopApi = {
+  updates: {
+    state(): Promise<UpdateState>;
+    check(): Promise<UpdateState>;
+    download(): Promise<UpdateState>;
+    install(): Promise<UpdateState>;
+    onEvent(listener: (state: UpdateState) => void): () => void;
+  };
   appearance: {
     nativeMaterial: boolean;
     setTheme(preference: AppearancePreference, resolvedTheme: AppearanceTheme): Promise<AppearanceTheme>;

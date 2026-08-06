@@ -1,7 +1,18 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentEvent, AuthEvent, BrowserEvent, ModelMetadataOverride, PiDesktopApi, PluginProgressEvent, QueuePromptInput, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, TerminalEvent } from "../src/contracts.js";
+import type { AgentEvent, AuthEvent, BrowserEvent, ModelMetadataOverride, PiDesktopApi, PluginProgressEvent, QueuePromptInput, SaveModelSettings, SaveObservabilitySettings, SendPromptInput, TerminalEvent, UpdateState } from "../src/contracts.js";
 
 const api: PiDesktopApi = {
+  updates: {
+    state: () => ipcRenderer.invoke("updates:state"),
+    check: () => ipcRenderer.invoke("updates:check"),
+    download: () => ipcRenderer.invoke("updates:download"),
+    install: () => ipcRenderer.invoke("updates:install"),
+    onEvent: (listener: (state: UpdateState) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: UpdateState) => listener(state);
+      ipcRenderer.on("updates:event", handler);
+      return () => ipcRenderer.removeListener("updates:event", handler);
+    },
+  },
   appearance: {
     nativeMaterial: process.platform === "darwin" && process.env.PI_DESKTOP_DISABLE_VIBRANCY !== "1",
     setTheme: (preference, resolvedTheme) => ipcRenderer.invoke("appearance:set-theme", preference, resolvedTheme),

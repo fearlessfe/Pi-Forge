@@ -1,7 +1,5 @@
 import { Buffer } from "node:buffer";
-import { countTokens as countAnthropicTokens } from "@anthropic-ai/tokenizer";
-import { countTokens as countO200kTokens } from "gpt-tokenizer";
-import { countTokens as countCl100kTokens } from "gpt-tokenizer/encoding/cl100k_base";
+import { createRequire } from "node:module";
 import type {
   ContextBudgetCategory,
   ContextBudgetEstimator,
@@ -41,6 +39,21 @@ export type AssembledDefaultContext = {
   activeToolCount: number;
 };
 
+const require = createRequire(import.meta.url);
+const tokenCounters = new Map<string, (text: string) => number>();
+
+function countWith(moduleId: string, text: string): number {
+  if (!text) return 0;
+  let counter = tokenCounters.get(moduleId);
+  if (!counter) {
+    const module = require(moduleId) as { countTokens?: unknown };
+    if (typeof module.countTokens !== "function") throw new Error(`Tokenizer ${moduleId} does not export countTokens.`);
+    counter = module.countTokens as (value: string) => number;
+    tokenCounters.set(moduleId, counter);
+  }
+  return counter(text);
+}
+
 /**
  * Deterministic, model-independent approximation used throughout the report.
  * UTF-8 bytes are used instead of JavaScript character count so CJK and emoji
@@ -74,7 +87,7 @@ export function createContextTokenEstimator(
   if (family === "anthropic") {
     return {
       metadata: { id: "anthropic-tokenizer-v1", kind: "model-tokenizer", provider, model, tokenizer: "@anthropic-ai/tokenizer", local: true },
-      count: (text) => text ? countAnthropicTokens(text) : 0,
+      count: (text) => countWith("@anthropic-ai/tokenizer", text),
     };
   }
   if (family === "openai") {
@@ -88,7 +101,7 @@ export function createContextTokenEstimator(
         tokenizer: usesO200k ? "o200k_base" : "cl100k_base",
         local: true,
       },
-      count: usesO200k ? countO200kTokens : countCl100kTokens,
+      count: (text) => countWith(usesO200k ? "gpt-tokenizer" : "gpt-tokenizer/encoding/cl100k_base", text),
     };
   }
   return {

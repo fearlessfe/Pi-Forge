@@ -45,7 +45,8 @@
 - 双主题、reduced-motion、forced-colors、缩放和 golden 验证脚本。
 - MIT 开源许可证及 README/package 分发元数据；
 - Renderer 崩溃熔断、无响应提示、受控重载和活动 Agent 事件恢复；
-- 原生平台 packaged-app 启动冒烟、精确 Release 产物校验和 SHA-256 校验清单。
+- 原生平台 packaged-app 启动冒烟、强制签名/公证、精确 Release 产物校验、SBOM、provenance 和 SHA-256 校验清单；
+- macOS/Windows 主进程受控自动更新、安装前活动任务拦截、状态快照与隔离回滚验证；
 - PR/push 的 token、renderer、关键 Electron IPC 快速门禁，以及 nightly/手动完整 UI、a11y、golden、Electron 门禁。
 
 关键证据：
@@ -76,12 +77,20 @@
 
 #### P0-2 安装包签名、公证与可信发布
 
-**状态：部分完成。** Release 会校验精确产物集合、拒绝自动更新 metadata，并生成 `SHA256SUMS`；平台签名、公证、SBOM 和 provenance 仍未完成。
+**状态：已完成。** Release job 运行在受保护的 `production-release` environment，签名密钥缺失时 fail closed。macOS 产物强制 Developer ID、hardened runtime、最小 entitlements 和 notarization，并通过 codesign、Gatekeeper 与 stapler 复验；Windows NSIS 强制 Authenticode SHA-256 与 RFC 3161 时间戳，并复验签名主体和状态。
+
+每个平台从 packaged `app.asar` 生成 CycloneDX 1.6 SBOM；每个安装包都有 GitHub artifact provenance 与 SBOM attestation。发布先创建 draft，重下载并核对精确产物、更新 metadata/blockmap、SBOM 和 `SHA256SUMS` 后才公开。macOS/Windows 自动更新由 Main 固定 GitHub feed，拒绝 Renderer 自定义地址、隐式下载、退出自动安装、预发布版本和降级；安装前阻止活动 Agent/Subagent、flush Trace，并原子创建保留两份的 SHA-256 状态快照。CI 会验证升级状态变更后可向隔离目录完整恢复快照。
 
 证据：
 
 - `.github/workflows/release.yml`
 - `apps/desktop/package.json`
+- `apps/desktop/electron/update-service.ts`
+- `apps/desktop/electron/update-snapshot-store.ts`
+- `apps/desktop/scripts/verify-macos-signature.mjs`
+- `apps/desktop/scripts/verify-windows-signature.ps1`
+- `apps/desktop/scripts/generate-release-sbom.mjs`
+- `docs/RELEASE_SECURITY.md`
 
 完成定义：
 
@@ -237,25 +246,25 @@ Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session st
 
 - smoke 模式是新增的显式入口，不改变现有完整命令；renderer smoke 只跳过易受共享 Runner 负载影响的 PERF-01 时延/长会话探针，Electron smoke 只跳过真实 node-pty 与原生 WebContentsView 场景；
 - golden 依赖三条完整车道在同一 macOS Runner 产出截图，且只比较、不自动更新人工确认的基线，因此不进入每个 PR；
-- Release 已接入各原生平台 packaged-app 启动；自动更新、升级与回滚测试仍未完成，归入发布可靠性后续工作。
+- Release 已接入各原生平台 packaged-app 启动；macOS/Windows 更新服务和升级前快照进入单元测试与 Release 隔离回滚验证。真实签名、公证与在线更新仍只能在受保护 Release environment 中验证。
 
 证据：`.github/workflows/ci.yml`、`.github/workflows/ui-verification.yml`、`.github/workflows/release.yml`、`docs/design/verify-*-lane.mjs`。
 
 #### P1-7 性能与 bundle 自动预算
 
-**状态：部分完成。** 已有 100-turn fixture、视口窗口化、DOM 和流式刷新预算常量，但没有真实 Performance trace 和 CI bundle gate。
+**状态：已完成。** 版本化预算文件同时约束生产 entry/async/总 JS-CSS 的 raw 与 gzip 大小、主 CSS、100-turn/50k Markdown/20 tool fixture 的 Chromium navigation、主线程长任务和 React commit，以及 packaged Electron 三次独立冷启动的 median/max ready 时间。
 
-剩余工作：
-
-- 固化 Chromium/React Profiler trace；
-- 建立启动时间和主 chunk 大小预算；
-- CI 超阈值失败或要求解释；
-- 保存同 fixture 的前后对比证据。
+PR/push 的独立性能 job 会构建生产 renderer、产出并校验 bundle report，以 profiling 模式运行同一真实 fixture 并保存 Chromium trace、React commit profile 和 CDP 指标，再打包 Linux unpacked app，执行 preload、IPC、Runtime handshake、node-pty 完整自检的三样本启动门禁。任一预算超限都会阻止 CI；无论成功失败都上传已有性能证据。
 
 证据：
 
 - `apps/desktop/src/conversation-performance-fixture.ts`
 - `apps/desktop/src/conversation-window.ts`
+- `apps/desktop/performance-budgets.json`
+- `apps/desktop/scripts/verify-bundle-performance.mjs`
+- `apps/desktop/scripts/verify-startup-performance.mjs`
+- `docs/design/verify-performance.mjs`
+- `.github/workflows/ci.yml`
 
 ### P2：平台化与长期方向
 
@@ -343,7 +352,7 @@ Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session st
 3. **“Markdown 工作区文件引用不可打开”**：已实现 Renderer 分类和 Main 工作区/realpath 校验。
 4. **“长历史只有最近 80 条和手动扩窗”**：已实现真实视口测量、动态高度和有界 DOM 窗口化。
 5. **“缺少统一 `conversation.updated`”**：契约、Runtime 和 Renderer 已接通。
-6. **“缺少 100-turn 性能 fixture”**：fixture 和预算逻辑已存在；缺的是浏览器 trace 与 CI gate。
+6. **“缺少 100-turn 性能 fixture 或自动门禁”**：fixture、Chromium trace、React profile、bundle 和 packaged 启动 CI gate 均已存在。
 
 需要后续同步的文档：
 

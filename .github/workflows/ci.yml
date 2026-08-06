@@ -123,6 +123,78 @@ jobs:
       - name: Run build
         run: pnpm build
 
+  performance:
+    name: Performance budgets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+      PI_PERFORMANCE_OUTPUT_DIR: ${{ github.workspace }}/artifacts/performance
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.10.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Cache Playwright Chromium
+        id: performance-playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/ms-playwright
+          key: performance-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Cache Electron runtime
+        uses: actions/cache@v4
+        with:
+          path: .cache/electron
+          key: performance-electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium system dependencies
+        run: pnpm exec playwright install-deps chromium
+
+      - name: Install Chromium
+        if: steps.performance-playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install chromium
+
+      - name: Build production renderer
+        run: pnpm build
+
+      - name: Verify bundle, Chromium trace, and React profile budgets
+        run: pnpm verify:performance
+
+      - name: Package unpacked Electron app
+        run: pnpm --dir apps/desktop exec electron-builder --linux --x64 --dir --publish never
+
+      - name: Verify packaged startup budget
+        run: pnpm verify:performance:startup -- apps/desktop/release/linux-unpacked
+
+      - name: Upload performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-evidence-${{ github.run_attempt }}
+          path: artifacts/performance
+          if-no-files-found: warn
+          retention-days: 14
+
   ui-smoke:
     name: UI and Electron smoke
     runs-on: ubuntu-24.04

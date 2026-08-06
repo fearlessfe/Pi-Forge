@@ -34,6 +34,7 @@ import type {
   SaveModelSettings,
   SystemPromptSettings,
   ThinkingLevel,
+  UpdateState,
   WorkspaceTrustStatus,
 } from "../contracts";
 import type { SettingsSection, Theme } from "../types";
@@ -153,7 +154,7 @@ const sections: Array<{
   { group: "AI", items: [{ id: "models", label: "大模型", icon: Sparkles }, { id: "model-metadata", label: "模型元信息", icon: Database }, { id: "context-budget", label: "Context Budget", icon: Gauge }, { id: "permissions", label: "权限", icon: LockKeyhole }] },
   { group: "扩展", items: [{ id: "skills", label: "Skills", icon: BookOpen }, { id: "mcp", label: "MCP", icon: Cable }] },
   { group: "可观测性", items: [{ id: "observability", label: "Trace", icon: Activity }] },
-  { group: "应用", items: [{ id: "general", label: "通用", icon: Settings2 }, { id: "appearance", label: "外观", icon: Palette }] },
+  { group: "应用", items: [{ id: "general", label: "通用", icon: Settings2 }, { id: "appearance", label: "外观", icon: Palette }, { id: "updates", label: "软件更新", icon: RefreshCw }] },
 ];
 
 function editableSettings(settings: ModelSettings): SaveModelSettings {
@@ -921,6 +922,51 @@ function AppearancePanel({ theme, onThemeChange }: Pick<SettingsViewProps, "them
   );
 }
 
+function UpdatePanel({ agentRunning }: Pick<SettingsViewProps, "agentRunning">) {
+  const { t } = useI18n();
+  const [state, setState] = useState<UpdateState>();
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void window.piDesktop?.updates.state().then(setState);
+    return window.piDesktop?.updates.onEvent(setState);
+  }, []);
+
+  async function run(action: "check" | "download" | "install") {
+    const updates = window.piDesktop?.updates;
+    if (!updates) return;
+    setBusy(true);
+    try {
+      setState(await updates[action]());
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const action = state?.status === "available" ? "download" : state?.status === "downloaded" ? "install" : "check";
+  const actionLabel = action === "download" ? t("下载更新") : action === "install" ? t("安装并重启") : t("检查更新");
+  const status = !state ? t("正在读取更新状态…")
+    : state.status === "unsupported" ? t("当前平台仅支持手动更新。")
+      : state.status === "checking" ? t("正在检查更新…")
+        : state.status === "available" ? t("发现新版本 {version}", { version: state.availableVersion ?? "" })
+          : state.status === "not-available" ? t("当前已是最新版本。")
+            : state.status === "downloading" ? t("正在下载 {percent}%", { percent: Math.round(state.percent ?? 0) })
+              : state.status === "downloaded" ? t("版本 {version} 已下载并通过校验。", { version: state.availableVersion ?? "" })
+                : state.status === "error" ? state.message ?? t("更新失败。")
+                  : t("可以检查新的正式版本。");
+
+  return <div className="w-full max-w-[760px]">
+    <header className="mb-[27px] flex min-h-[62px] items-start justify-between gap-5"><div className="min-w-0"><h2 className="mb-2 text-large-title font-semibold text-label">{t("软件更新")}</h2><p className="text-body text-label-2">{t("更新源由应用签名配置固定，界面不能替换下载地址。")}</p></div></header>
+    <section className="rounded-md border border-separator bg-bg-grouped p-card">
+      <strong className="block text-body text-label">{t("当前版本")} {state?.currentVersion ?? "—"}</strong>
+      <p className={`mt-base text-caption ${state?.status === "error" ? "text-red" : "text-label-2"}`}>{status}</p>
+      {state?.snapshotId && <small className="mt-base block font-mono text-caption text-label-3">{t("升级前快照")} {state.snapshotId}</small>}
+      {state?.status !== "unsupported" && <button className={`${primaryButtonClass} mt-card`} type="button" disabled={busy || state?.status === "checking" || state?.status === "downloading" || (action === "install" && agentRunning)} onClick={() => void run(action)}>{busy ? t("处理中…") : actionLabel}</button>}
+      {action === "install" && agentRunning && <small className="mt-base block text-caption text-orange">{t("仍有 Agent 任务运行，结束后才能安装更新。")}</small>}
+    </section>
+  </div>;
+}
+
 export function SettingsView(props: SettingsViewProps) {
   const { t } = useI18n();
   return (
@@ -936,6 +982,7 @@ export function SettingsView(props: SettingsViewProps) {
         {props.activeSection === "observability" && <ObservabilityPanel agentRunning={props.agentRunning} />}
         {props.activeSection === "general" && <GeneralPanel systemPrompt={props.systemPrompt} resourceSettings={props.resourceSettings} workspaceTrust={props.workspaceTrust} agentRunning={props.agentRunning} onSaveSystemPrompt={props.onSaveSystemPrompt} onSaveResourceSettings={props.onSaveResourceSettings} onSetWorkspaceTrusted={props.onSetWorkspaceTrusted} />}
         {props.activeSection === "appearance" && <AppearancePanel theme={props.theme} onThemeChange={props.onThemeChange} />}
+        {props.activeSection === "updates" && <UpdatePanel agentRunning={props.agentRunning} />}
       </main>
     </section>
   );

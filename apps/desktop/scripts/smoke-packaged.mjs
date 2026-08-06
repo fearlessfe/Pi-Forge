@@ -5,6 +5,7 @@ import path from "node:path";
 
 const appRoot = path.resolve(process.argv[2] ?? "release-smoke");
 const timeoutMs = Number(process.env.PI_DESKTOP_SMOKE_TIMEOUT_MS ?? 120_000);
+const reportFile = process.env.PI_DESKTOP_SMOKE_REPORT ? path.resolve(process.env.PI_DESKTOP_SMOKE_REPORT) : undefined;
 if (!Number.isFinite(timeoutMs) || timeoutMs < 1_000) throw new Error("PI_DESKTOP_SMOKE_TIMEOUT_MS must be at least 1000ms");
 
 function walk(directory) {
@@ -37,12 +38,14 @@ function findExecutable() {
 const executable = findExecutable();
 const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-forge-packaged-smoke-"));
 const resultFile = path.join(temporaryDirectory, "result.json");
+const stageFile = `${resultFile}.stages`;
 const userData = path.join(temporaryDirectory, "user-data");
 const piDesktopHome = path.join(temporaryDirectory, "pi-desktop-home");
 const command = process.platform === "linux" ? "xvfb-run" : executable;
 const args = process.platform === "linux" ? ["-a", executable] : [];
 console.log(`[packaged-smoke] launching ${executable}`);
 
+const startedAt = performance.now();
 const child = spawn(command, args, {
   cwd: path.dirname(executable),
   env: {
@@ -92,11 +95,17 @@ try {
   if (!result.ok || !result.checks?.preload || !result.checks?.ipc || !result.checks?.runtime || !result.checks?.terminal) {
     throw new Error(`Self-check failed: ${JSON.stringify(result)}`);
   }
+  const readyMs = performance.now() - startedAt;
+  if (reportFile) {
+    fs.mkdirSync(path.dirname(reportFile), { recursive: true });
+    fs.writeFileSync(reportFile, `${JSON.stringify({ version: 1, readyMs, executable, ...result }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  }
   if (!await waitForExit(10_000)) throw new Error("Packaged app reported readiness but did not shut down cleanly");
   if (child.exitCode !== 0) throw new Error(`Packaged app exited with code ${child.exitCode} after reporting readiness`);
-  console.log(`[packaged-smoke] passed version ${result.version}: preload, IPC, Runtime handshake, node-pty`);
+  console.log(`[packaged-smoke] passed version ${result.version} in ${readyMs.toFixed(1)}ms: preload, IPC, Runtime handshake, node-pty`);
 } catch (error) {
-  console.error(`[packaged-smoke] ${error instanceof Error ? error.message : String(error)}\n${output}`);
+  const stages = fs.existsSync(stageFile) ? fs.readFileSync(stageFile, "utf8") : "no startup stages recorded";
+  console.error(`[packaged-smoke] ${error instanceof Error ? error.message : String(error)}\n${output}\n[startup-stages]\n${stages}`);
   process.exitCode = 1;
 } finally {
   if (child.exitCode === null) child.kill("SIGTERM");

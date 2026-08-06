@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "bundle": {
+    "entryJsRawBytes": 900000,
+    "entryJsGzipBytes": 270000,
+    "maxAsyncJsRawBytes": 700000,
+    "maxAsyncJsGzipBytes": 155000,
+    "totalJsCssRawBytes": 4900000,
+    "totalJsCssGzipBytes": 1360000,
+    "mainCssRawBytes": 80000,
+    "mainCssGzipBytes": 16000
+  },
+  "renderer": {
+    "navigationMs": 4000,
+    "maxReactCommitMs": 800,
+    "totalReactCommitMs": 2500,
+    "maxMainThreadTaskMs": 750,
+    "maxMountedTurns": 49
+  },
+  "startup": {
+    "samples": 3,
+    "medianReadyMs": 8000,
+    "maxReadyMs": 12000
+  }
+}

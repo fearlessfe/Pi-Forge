@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from "electron";
+import electronUpdater from "electron-updater";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -27,6 +28,8 @@ import { ObservabilityStore } from "./observability-store.js";
 import { ObservabilityService } from "./observability-service.js";
 import { RuntimeEventStore } from "./runtime-event-store.js";
 import { shutdownApplication } from "./application-shutdown.js";
+import { UpdateService } from "./update-service.js";
+import { UpdateSnapshotStore } from "./update-snapshot-store.js";
 import {
   RendererCrashGuard,
   RendererEventJournal,
@@ -56,6 +59,7 @@ import {
   requireSystemPromptSettings,
 } from "./ipc-input-validation.js";
 
+const { autoUpdater } = electronUpdater;
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
 let appearanceStore: AppearanceStore | undefined;
@@ -235,6 +239,14 @@ function installPackagedSmoke(window: BrowserWindow): void {
       app.exit(1);
     });
   });
+}
+
+function registerUpdateIpc(updates: UpdateService): void {
+  ipcMain.handle("updates:state", () => updates.state());
+  ipcMain.handle("updates:check", () => updates.check());
+  ipcMain.handle("updates:download", () => updates.download());
+  ipcMain.handle("updates:install", () => updates.install());
+  updates.subscribe((state) => mainWindow?.webContents.send("updates:event", state));
 }
 
 function installContentSecurityPolicy(): void {
@@ -865,6 +877,21 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   resources.addKnownWorkspace(chatSandbox);
   seedKnownWorkspacesFromSessions(resources, [sessionDir]);
   await agentService.startBackgroundSubagents();
+  const updateSnapshots = new UpdateSnapshotStore(path.join(userData, "update-snapshots"), [
+    { name: "user-data", path: userData },
+    { name: "pi-home", path: piDesktopHome },
+  ]);
+  const updates = new UpdateService({
+    updater: autoUpdater,
+    snapshots: updateSnapshots,
+    currentVersion: app.getVersion(),
+    platform: process.platform,
+    isPackaged: app.isPackaged,
+    hasActiveWork: async () => agentService?.isRunning() === true
+      || (await agentService?.listSubagents() ?? []).some((run) => run.status === "queued" || run.status === "running"),
+    flush: async () => observabilityService?.flush(),
+  });
+  registerUpdateIpc(updates);
   registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata, resources, mcpService, terminalService, browserService, observabilityService, appearanceStore, runtimeEventStore);
   installContentSecurityPolicy();
   mainWindow = createWindow();

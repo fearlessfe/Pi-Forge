@@ -15,7 +15,7 @@
 - Focused test: `pnpm --dir apps/desktop exec vitest run src/path/to/file.test.ts`; passing a path through the root `pnpm test` script does not reliably limit Vitest to that file.
 - Build/package: `pnpm build`; `pnpm package:dir` creates an unpacked app, while `pnpm package` creates current-platform artifacts under `apps/desktop/release` and is substantially heavier.
 - There is no format script. Lint is Oxlint with warnings denied; do not invent a formatter command.
-- Design-specific checks are separate from CI: `pnpm verify:tokens`, `verify:renderer`, `verify:electron`, `verify:a11y`, and `verify:golden`. Run the relevant lane for broad UI/token changes; `pnpm verify:setup` installs workspace-local Chromium. Screenshots go to ignored `docs/design/shots`; `verify:golden` only compares, so update tracked baselines manually after review.
+- Design-specific checks include `pnpm verify:tokens`, `verify:renderer`, `verify:electron`, `verify:a11y`, `verify:golden`, and `verify:performance`. Run the relevant lane for broad UI/token/performance changes; `pnpm verify:setup` installs workspace-local Chromium. Screenshots go to ignored `docs/design/shots`; `verify:golden` only compares, so update tracked baselines manually after review. Performance budgets are versioned in `apps/desktop/performance-budgets.json`; CI uploads Chromium traces, React commit profiles, bundle reports, and packaged-startup samples on every run.
 
 ## Implementation and test conventions
 - TypeScript is strict and ESM/NodeNext Electron imports use emitted `.js` suffixes. Renderer imports follow the existing extensionless Vite convention.
@@ -28,5 +28,6 @@
 - The complete command sandbox is macOS/Linux-only. Other platforms must retain the pre-execution approval fallback rather than silently relaxing permissions. Under an already-sandboxed agent harness, the real nested-sandbox write test may fail with exit code 71; verify it on an unsandboxed supported host rather than weakening the assertion.
 
 ## CI and release
-- CI uses frozen install and runs lint/typecheck, coverage, and build on Node 24.10.0/pnpm 10.17.0.
-- Release tags must be SemVer prefixed with `v`; native Linux, Windows, Intel macOS, and Apple Silicon macOS runners build unsigned installers.
+- CI uses frozen install and runs lint/typecheck, coverage, build, production bundle budgets, Chromium/React profiling, and a three-sample packaged-startup budget on Node 24.10.0/pnpm 10.17.0.
+- Release tags must be SemVer prefixed with `v`; native Linux, Windows, Intel macOS, and Apple Silicon macOS runners build installers in the protected `production-release` environment. macOS/Windows jobs fail closed without signing and notarization secrets; do not weaken `forceCodeSigning`, signature verification, SBOM/provenance attestation, draft re-download verification, or update-metadata filtering to make a release pass.
+- Automatic update feed selection is Main-only. The renderer may check, download, and request install through the allowlisted API, but must never accept a feed URL, enable downgrade/prerelease updates, or bypass the active Agent/Subagent gate and pre-install snapshot.

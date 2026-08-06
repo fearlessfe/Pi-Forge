@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import type { IPty, IPtyForkOptions, IWindowsPtyForkOptions } from "node-pty";
 import type { TerminalEvent, TerminalSessionInfo } from "../src/contracts.js";
+import { unpackedAsarPath } from "./asar-path.js";
 
 type TerminalSink = (event: TerminalEvent) => void;
 
@@ -20,14 +21,13 @@ type ManagedTerminal = {
 const require = createRequire(import.meta.url);
 
 const nodePtyFactory: PseudoTerminalFactory = (shell, args, options) => {
-  const pty = require("node-pty") as typeof import("node-pty");
+  const entry = unpackedAsarPath(require.resolve("node-pty"));
+  const pty = require(entry) as typeof import("node-pty");
   return pty.spawn(shell, args, options);
 };
 
 function nodePtyRoot(): string {
-  const entry = require.resolve("node-pty")
-    .replaceAll("app.asar", "app.asar.unpacked")
-    .replaceAll("node_modules.asar", "node_modules.asar.unpacked");
+  const entry = unpackedAsarPath(require.resolve("node-pty"));
   return path.dirname(path.dirname(entry));
 }
 

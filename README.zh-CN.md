@@ -197,11 +197,12 @@ pnpm verify:renderer
 pnpm verify:electron
 pnpm verify:a11y
 pnpm verify:golden
+pnpm verify:performance
 ```
 
 `pnpm build` 只编译应用，`pnpm package` 会为当前操作系统生成安装包，产物位于 `apps/desktop/release`。如果只想快速检查未封装的应用目录，可以运行 `pnpm package:dir`。
 
-`pnpm verify:setup` 会安装 renderer 与可访问性车道使用的 workspace-local Playwright Chromium。golden 命令只把 renderer、a11y、Electron 车道生成的截图与仓库内基线比较，绝不会自动更新基线。push 和 PR 会在 Ubuntu 上执行 token、renderer smoke 与关键 preload/IPC smoke；完整 renderer、a11y、Electron、golden 套件则在 macOS 上 nightly 运行，也可手动触发，失败时会上传截图和日志。
+`pnpm verify:setup` 会安装 renderer、可访问性与性能车道使用的 workspace-local Playwright Chromium。golden 命令只把 renderer、a11y、Electron 车道生成的截图与仓库内基线比较，绝不会自动更新基线。`pnpm verify:performance` 会执行版本化的生产 bundle 与 Chromium/React 预算；packaged 启动多样本门禁会在 CI 生成 unpacked Electron 应用后运行。push 和 PR 会在 Ubuntu 上执行这些性能预算、token、renderer smoke 与关键 preload/IPC smoke；完整 renderer、a11y、Electron、golden 套件则在 macOS 上 nightly 运行，也可手动触发，失败时上传对应证据。
 
 ### 版本发布
 
@@ -212,9 +213,9 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-工作流会生成 Windows x64 NSIS 安装程序、分别面向 Intel（x64）和 Apple Silicon（arm64）的 macOS DMG/ZIP，以及 Ubuntu x64 AppImage/Debian 安装包。上传前，每个原生 Runner 都会启动未封装的 packaged app，验证 preload、IPC、Agent Runtime handshake 和 node-pty；发布任务还会拒绝意外的自动更新 metadata、核对完整跨平台产物集合，并附带 `SHA256SUMS`。`v0.2.0-beta.1` 这类 Tag 会创建预发布版本。也可以在 **Actions → Release → Run workflow** 中为已有 Tag 手动执行发布。
+工作流会生成已签名的 Windows x64 NSIS、已签名并公证的 Intel（x64）/Apple Silicon（arm64）macOS 产物和 universal 更新 ZIP，以及 Ubuntu x64 AppImage/Debian。各原生 Runner 会执行 packaged-app 冒烟、Authenticode/Developer ID/公证复验，并从 packaged app 生成 CycloneDX SBOM；每个安装包都会附加 GitHub provenance 与 SBOM attestation。发布在受保护的 `production-release` environment 中 fail closed：先创建 draft，重下载并核对精确产物集合与 `SHA256SUMS`，成功后才公开。`v0.2.0-beta.1` 这类 Tag 会创建预发布版本。
 
-默认生成的是未签名安装包。正式大范围分发前，应通过 GitHub Actions Secrets 配置各平台代码签名以及 macOS 公证凭据，否则 Windows SmartScreen 或 macOS Gatekeeper 可能向用户显示警告。
+签名后的 macOS/Windows 应用提供由 Main 控制的更新流程。Renderer 不能替换 feed URL；下载和安装必须显式触发，禁止降级和预发布更新，活动 Agent 任务会阻止安装，重启前会创建带完整性校验的状态快照。所需 Secrets、安全控制和恢复边界见[发布安全](docs/RELEASE_SECURITY.md)。
 
 桌面应用位于 `apps/desktop`：
 

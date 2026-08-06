@@ -11,7 +11,7 @@
   "homepage": "https://github.com/fearlessfe/Pi-Forge",
   "desktopName": "pi-forge.desktop",
   "type": "module",
-  "main": "dist-electron/electron/main.js",
+  "main": "dist-electron/electron/bootstrap.js",
   "engines": {
     "node": ">=24.10.0"
   },
@@ -25,6 +25,9 @@
     "package:dir": "pnpm build && electron-builder --dir",
     "smoke:packaged": "node scripts/smoke-packaged.mjs",
     "verify:release-assets": "node scripts/verify-release-assets.mjs",
+    "verify:update-snapshot": "node scripts/verify-update-snapshot.mjs",
+    "verify:performance:bundle": "node scripts/verify-bundle-performance.mjs",
+    "verify:performance:startup": "node scripts/verify-startup-performance.mjs",
     "pretest": "pnpm --filter @pi-forge/runtime-contracts build && node scripts/ensure-electron-runtime.mjs",
     "test": "vitest run",
     "pretest:coverage": "pnpm --filter @pi-forge/runtime-contracts build && node scripts/ensure-electron-runtime.mjs",
@@ -35,39 +38,42 @@
     "start": "electron dist-electron/electron/main.js"
   },
   "dependencies": {
-    "@pi-forge/runtime-contracts": "workspace:*",
     "@anthropic-ai/sandbox-runtime": "0.0.26",
     "@anthropic-ai/tokenizer": "^0.0.4",
     "@earendil-works/pi-ai": "0.81.1",
     "@earendil-works/pi-coding-agent": "0.81.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@radix-ui/react-collapsible": "1.1.18",
-    "@radix-ui/react-dropdown-menu": "2.1.22",
-    "@radix-ui/react-select": "2.3.5",
-    "@xterm/xterm": "^6.0.0",
+    "@pi-forge/runtime-contracts": "workspace:*",
+    "electron-updater": "6.6.2",
     "gpt-tokenizer": "^3.4.0",
-    "i18next": "^26.3.6",
-    "lucide-react": "1.26.0",
-    "mermaid": "^11.16.0",
     "node-pty": "^1.1.0",
-    "react": "19.2.8",
-    "react-dom": "19.2.8",
-    "react-i18next": "^17.0.11",
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
     "tar": "7.5.22",
     "typebox": "1.1.38"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
+    "@radix-ui/react-collapsible": "1.1.18",
+    "@radix-ui/react-dropdown-menu": "2.1.22",
+    "@radix-ui/react-select": "2.3.5",
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "^26.1.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.4",
     "@vitest/coverage-v8": "4.1.10",
+    "@xterm/xterm": "^6.0.0",
     "concurrently": "^10.0.3",
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
+    "i18next": "^26.3.6",
+    "lucide-react": "1.26.0",
+    "mermaid": "^11.16.0",
+    "plist": "3.1.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-i18next": "^17.0.11",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "8.1.5",
@@ -79,13 +85,24 @@
     "productName": "Pi Forge",
     "executableName": "pi-forge",
     "artifactName": "Pi-Forge-${version}-${os}-${arch}.${ext}",
+    "afterPack": "scripts/after-pack.cjs",
     "directories": {
       "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "fearlessfe",
+      "repo": "Pi-Forge",
+      "releaseType": "release"
     },
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/**/*.map",
+      "!node_modules/**/*.{ts,mts,cts,tsbuildinfo}",
+      "!node_modules/**/{test,tests,__tests__,benchmark,benchmarks,example,examples}/**/*",
+      "!node_modules/gpt-tokenizer/{data,dist,src}/**/*"
     ],
     "asarUnpack": [
       "node_modules/node-pty/**/*",
@@ -94,6 +111,12 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.png",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "mergeASARs": false,
+      "x64ArchFiles": "Contents/Resources/app.asar.unpacked/node_modules/{@earendil-works/pi-tui/native/**,node-pty/prebuilds/**,@mariozechner/clipboard-*/**}",
+      "notarize": true,
       "target": [
         "dmg",
         "zip"
@@ -101,6 +124,14 @@
     },
     "win": {
       "icon": "build/icon.png",
+      "verifyUpdateCodeSignature": true,
+      "signtoolOptions": {
+        "publisherName": "Pi Forge",
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "rfc3161TimeStampServer": "http://timestamp.digicert.com"
+      },
       "target": [
         "nsis"
       ]
@@ -116,7 +147,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "differentialPackage": true
     }
   }
 }

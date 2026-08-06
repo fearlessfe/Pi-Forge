@@ -4,7 +4,7 @@ import path from "node:path";
 
 const [mode, version, inputDirectory = "release"] = process.argv.slice(2);
 if (!mode || !version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
-  throw new Error("Usage: node scripts/verify-release-assets.mjs <linux-x64|win-x64|mac-x64|mac-arm64|all> <version> [directory]");
+  throw new Error("Usage: node scripts/verify-release-assets.mjs <linux-x64|win-x64|mac-x64|mac-arm64|mac-universal|all> <version> [directory]");
 }
 
 const expectedByMode = {
@@ -12,6 +12,7 @@ const expectedByMode = {
   "win-x64": ["exe"],
   "mac-x64": ["dmg", "zip"],
   "mac-arm64": ["dmg", "zip"],
+  "mac-universal": ["zip"],
 };
 const expectedName = (target, extension) => `Pi-Forge-${version}-${target}.${extension}`;
 const allExpected = Object.entries(expectedByMode).flatMap(([target, extensions]) => extensions.map((extension) => expectedName(target, extension)));
@@ -26,10 +27,23 @@ const packageExtensions = new Set([".AppImage", ".deb", ".dmg", ".exe", ".zip"])
 const packages = files.filter((file) => packageExtensions.has(path.extname(file)));
 const updateManifests = files.filter((file) => /^latest.*\.ya?ml$/i.test(file));
 const updateBlockmaps = files.filter((file) => /\.blockmap$/i.test(file));
+const sboms = files.filter((file) => file.endsWith(".sbom.cdx.json"));
+const expectedUpdateFiles = [
+  "latest.yml",
+  "latest-mac.yml",
+  `Pi-Forge-${version}-win-x64.exe.blockmap`,
+  `Pi-Forge-${version}-mac-universal.zip.blockmap`,
+];
+const expectedSboms = Object.keys(expectedByMode).map((target) => `Pi-Forge-${version}-${target}.sbom.cdx.json`);
 
-if (mode === "all" && (updateManifests.length > 0 || updateBlockmaps.length > 0)) {
-  const unsafeUpdateMetadata = [...updateManifests, ...updateBlockmaps];
-  throw new Error(`Auto-update is intentionally disabled until signed update infrastructure exists; refusing published metadata: ${unsafeUpdateMetadata.join(", ")}`);
+if (mode === "all") {
+  const actualUpdateFiles = [...updateManifests, ...updateBlockmaps];
+  const missingUpdateFiles = expectedUpdateFiles.filter((file) => !actualUpdateFiles.includes(file));
+  const unexpectedUpdateFiles = actualUpdateFiles.filter((file) => !expectedUpdateFiles.includes(file));
+  const missingSboms = expectedSboms.filter((file) => !sboms.includes(file));
+  if (missingUpdateFiles.length || unexpectedUpdateFiles.length || missingSboms.length || sboms.some((file) => !expectedSboms.includes(file))) {
+    throw new Error(`Release security assets mismatch. Missing update files: ${missingUpdateFiles.join(", ") || "none"}; unexpected update files: ${unexpectedUpdateFiles.join(", ") || "none"}; missing SBOMs: ${missingSboms.join(", ") || "none"}.`);
+  }
 }
 const missing = expected.filter((file) => !packages.includes(file));
 const unexpected = packages.filter((file) => !expected.includes(file));
@@ -42,7 +56,8 @@ for (const file of expected) {
 }
 
 if (mode === "all") {
-  const lines = expected.slice().sort().map((file) => {
+  const securedAssets = [...expected, ...expectedUpdateFiles, ...expectedSboms];
+  const lines = securedAssets.slice().sort().map((file) => {
     const digest = createHash("sha256").update(fs.readFileSync(path.join(directory, file))).digest("hex");
     return `${digest}  ${file}`;
   });
@@ -53,7 +68,7 @@ if (mode === "all") {
     const actual = createHash("sha256").update(fs.readFileSync(path.join(directory, file))).digest("hex");
     if (actual !== digest) throw new Error(`Checksum verification failed immediately after generation: ${file}`);
   }
-  console.log(`[release-assets] validated ${expected.length} exact artifacts and wrote ${checksumFile}`);
+  console.log(`[release-assets] validated ${securedAssets.length} exact packages, update metadata, blockmaps, and SBOMs; wrote ${checksumFile}`);
 } else {
   console.log(`[release-assets] validated ${expected.length} exact ${mode} artifact(s)`);
 }

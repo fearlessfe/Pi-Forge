@@ -197,11 +197,12 @@ pnpm verify:renderer
 pnpm verify:electron
 pnpm verify:a11y
 pnpm verify:golden
+pnpm verify:performance
 ```
 
 `pnpm build` compiles the application, while `pnpm package` creates an installer for the current operating system in `apps/desktop/release`. Use `pnpm package:dir` when you only need an unpacked application for a quick local check.
 
-`pnpm verify:setup` installs the workspace-local Playwright Chromium used by the renderer and accessibility lanes. The golden command only compares screenshots produced by the renderer, accessibility, and Electron lanes with the tracked baselines; it never updates those baselines automatically. Pushes and pull requests run token checks plus renderer and critical preload/IPC smoke coverage on Ubuntu. The complete renderer, accessibility, Electron, and golden suite runs nightly and on demand on macOS, with screenshots and logs uploaded when it fails.
+`pnpm verify:setup` installs the workspace-local Playwright Chromium used by the renderer, accessibility, and performance lanes. The golden command only compares screenshots produced by the renderer, accessibility, and Electron lanes with the tracked baselines; it never updates those baselines automatically. `pnpm verify:performance` enforces the versioned production bundle and Chromium/React budgets; packaged startup samples run in CI after an unpacked Electron build. Pushes and pull requests run these performance budgets plus token checks and renderer/critical preload-IPC smoke coverage on Ubuntu. The complete renderer, accessibility, Electron, and golden suite runs nightly and on demand on macOS, with evidence uploaded when a lane fails.
 
 ### Releases
 
@@ -212,9 +213,9 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow produces a Windows x64 NSIS installer, separate macOS DMG and ZIP packages for Intel (x64) and Apple Silicon (arm64), and Ubuntu x64 AppImage and Debian packages. Before upload, each native runner launches the unpacked packaged application and verifies preload, IPC, the Agent Runtime handshake, and node-pty. The publish job rejects unexpected update metadata, verifies the exact cross-platform artifact set, and includes a `SHA256SUMS` file. Tags such as `v0.2.0-beta.1` create a prerelease. The workflow can also be run manually for an existing tag from **Actions → Release → Run workflow**.
+The workflow produces a signed Windows x64 NSIS installer, signed and notarized macOS packages for Intel (x64), Apple Silicon (arm64), and a universal update ZIP, plus Ubuntu x64 AppImage and Debian packages. It runs packaged-app smoke tests, verifies Authenticode/Developer ID/notarization, emits packaged CycloneDX SBOMs, and attaches GitHub provenance and SBOM attestations to every installer. Publishing is fail-closed behind the protected `production-release` environment: a draft release is re-downloaded and checked against the exact artifact set and `SHA256SUMS` before it becomes public. Tags such as `v0.2.0-beta.1` create a prerelease.
 
-Release packages are unsigned by default. Before distributing them broadly, configure platform signing and macOS notarization credentials as GitHub Actions secrets; otherwise Windows SmartScreen and macOS Gatekeeper may warn users.
+Signed macOS and Windows builds provide a Main-controlled update flow. The renderer cannot replace the feed URL; downloads and installs are explicit, downgrade and prerelease updates are disabled, active Agent work blocks installation, and an integrity-checked state snapshot is created before restart. See [Release security](docs/RELEASE_SECURITY.md) for required secrets, controls, and recovery boundaries.
 
 The desktop application lives in `apps/desktop`:
 
@@ -285,7 +286,7 @@ The long-term goal is to separate the agent runtime, execution environments, and
 
 ### Phase 3: Multi-agent and remote execution
 
-- [ ] Concurrent task scheduling and resumable background subagents
+- [x] Concurrent task scheduling and resumable background subagents
 - [ ] Provisionable, replaceable local and remote sandboxes
 - [ ] Safe hand sharing and handoff between agents
 - [ ] Credential brokering, fine-grained authorization, and complete audit trails
