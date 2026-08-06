@@ -147,6 +147,12 @@ const api: PiDesktopApi = {
     replayRuntimeEvents: (query) => ipcRenderer.invoke("agent:replay-runtime-events", query ?? {}),
     saveRuntimeEventCheckpoint: (name, offset) => ipcRenderer.invoke("agent:save-runtime-event-checkpoint", name, offset),
     listRuntimeEventCheckpoints: () => ipcRenderer.invoke("agent:list-runtime-event-checkpoints"),
+    listSubagents: () => ipcRenderer.invoke("agent:list-subagents"),
+    pauseSubagent: (id) => ipcRenderer.invoke("agent:pause-subagent", id),
+    resumeSubagent: (id) => ipcRenderer.invoke("agent:resume-subagent", id),
+    retrySubagent: (id) => ipcRenderer.invoke("agent:retry-subagent", id),
+    stopSubagent: (id) => ipcRenderer.invoke("agent:stop-subagent", id),
+    prepareSubagentHandoff: (id, conversationId) => ipcRenderer.invoke("agent:prepare-subagent-handoff", id, conversationId),
     reconnect: () => ipcRenderer.invoke("agent:reconnect"),
     onEvent: (listener: (event: AgentEvent) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, payload: AgentEvent) => listener(payload);

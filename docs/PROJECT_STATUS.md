@@ -36,7 +36,7 @@
 - 用户级/可信项目级 stdio 与 Streamable HTTP MCP；
 - 插件预验证、完整性校验、内容扫描、禁用 lifecycle scripts 和 legacy 重验；
 - 扩展、技能、Prompt、主题和包资源管理；
-- 持久化 Subagent Session、运行状态与 usage 记录；
+- 持久化后台 Subagent 队列、Session、六态生命周期、usage、重启恢复和显式结果移交；
 - 本地 Trace、OTLP HTTP 导出、内容采集等级和凭据脱敏；
 - 集成终端、内置浏览器、持久/隐私浏览模式和有生命周期的页面标注截图；
 - Markdown 安全外链和受工作区约束的文件引用打开；
@@ -174,15 +174,19 @@ Renderer 通过严格 schema 校验的 preload API 按作用域、事件类型�
 
 #### P1-4 持久化、可恢复的后台 Subagent 调度
 
-**状态：部分完成。** 已有持久 Session、运行记录和 usage，但 Subagent 仍作为父任务工具调用执行；应用重启后不能自动继续。
+**状态：已完成。** 内置 Subagent 工具现在只向 Main 权威路由的专用 control Runtime 入队，并立即把 queued 记录返回给父 Agent；父任务完成、停止或 conversation worker 回收不会终止后台任务。
 
-剩余工作：
+持久 store v2 提供 `queued/running/paused/completed/error/stopped` 六态、FIFO、attempt、原子 `fsync` 写入、v1 迁移、未知未来版本 fail-closed，以及把重启时的 running 任务安全恢复到队列。单例 scheduler 支持暂停、继续、重试、停止和同一 child Session 的恢复续跑；所有 child 执行硬限制为 `read/grep/find/ls`，禁用扩展、MCP、浏览器和写工具。
 
-- 独立后台生命周期；
-- 持久任务队列、暂停、继续和重试；
-- 独立历史和状态 UI；
-- 重启恢复策略；
-- Agent handoff 与结果移交。
+Renderer 提供独立历史/状态面板和生命周期操作。完成结果只能在 Main 验证 parent conversation 与完成状态后显式填入父会话输入框，不会自动触发新的模型请求。Subagent 生命周期同时写入完整 Runtime 事件流。
+
+证据：
+
+- `apps/desktop/electron/subagent-run-store.ts`
+- `apps/desktop/electron/subagent-scheduler.ts`
+- `apps/desktop/electron/agent-runtime-pool.ts`
+- `apps/desktop/src/components/SubagentPanel.tsx`
+- `packages/runtime-contracts/src/session.ts`
 
 证据：
 
@@ -335,7 +339,7 @@ Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session st
 以下旧文档内容已经落后于当前源码，后续不应再当作未完成项：
 
 1. **“同一应用实例只运行一个主 Agent 任务”**：当前最多支持 3 个不同会话并行。
-2. **“内置 Subagent 是内存 Session”**：当前已有持久 Session 和 `SubagentRunStore`，但还不能后台恢复。
+2. **“内置 Subagent 仍绑定父工具调用”**：当前已由专用 control Runtime 持久后台调度，可独立暂停、继续、重试并在重启后恢复。
 3. **“Markdown 工作区文件引用不可打开”**：已实现 Renderer 分类和 Main 工作区/realpath 校验。
 4. **“长历史只有最近 80 条和手动扩窗”**：已实现真实视口测量、动态高度和有界 DOM 窗口化。
 5. **“缺少统一 `conversation.updated`”**：契约、Runtime 和 Renderer 已接通。
@@ -361,7 +365,7 @@ Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session st
 1. 定义稳定 Event/Runtime/Session/Hand 契约；
 2. 实现完整耐久事件流和查询 API；
 3. 提取可发布 Runtime/SDK 与示例模板；
-4. 将 Subagent 提升为持久后台调度单元；
+4. 扩展 Subagent 调度策略与可选并发上限；
 5. 再设计幂等工具协议、远程 Sandbox 和 Hand 移交。
 
 ### 如果近期聚焦桌面体验
@@ -372,17 +376,17 @@ Renderer 只能请求清理枚举化的 Cookie、HTTP cache 或 local/session st
 
 ## 7. 最近一次验证状态
 
-2026-08-06 Runtime 契约、浏览器隐私与 UI CI 三项集成验证：
+2026-08-06 Runtime 事件流、Runtime v1/SDK、后台 Subagent、浏览器隐私与 UI CI 集成验证：
 
 - `pnpm lint`：通过；
 - `pnpm typecheck`：通过；
 - Runtime contracts v1：通过（2 个文件、10 项测试）；Runtime SDK：通过（1 个文件、11 项测试），覆盖率 statements 96.89%、branches 91.36%、functions/lines 100%；基础 Agent 模板：通过（1 个文件、1 项测试）；
-- Desktop test/coverage：通过（65 个文件、446 项测试）；覆盖率 statements 89.70%、branches 83.12%、functions 92.08%、lines 94.14%；Runtime contracts 覆盖率 statements 97.32%、branches 86.66%、functions 98.55%、lines 96.66%；
+- Desktop test/coverage：通过（66 个文件、459 项测试）；覆盖率 statements 88.11%、branches 82.13%、functions 89.46%、lines 92.56%；Runtime contracts 覆盖率 statements 97.60%、branches 86.66%、functions 98.78%、lines 96.90%；
 - `pnpm build`：合并态通过，包含 `@pi-forge/runtime-contracts` declaration/ESM 构建和 Desktop 生产构建；
 - `pnpm verify:tokens`：通过（54 个 token 工具类）；
 - `pnpm verify:renderer:smoke` 与完整 `pnpm verify:renderer`：通过（四场景双主题、100-turn 性能场景、无 console/pageerror）；
 - `pnpm verify:electron:smoke`：通过（真实 preload、BrowserWindow 背景与主题 IPC 往返）；
-- `pnpm verify:electron`：通过 Main/Preload/IPC、终端、浏览器双主题，以及持久/隐私 partition、三类清理和隐私 View 销毁真实链路。当前远程 macOS 可达到的内容区为 1440×892，因此使用 `PI_DESKTOP_VERIFY_CONTENT_HEIGHT=892`；脚本默认黄金基线仍为 1440×897；
+- `pnpm verify:electron`：通过 Main/Preload/IPC、Runtime init、终端、浏览器双主题，以及持久/隐私 partition、三类清理和隐私 View 销毁真实链路。当前远程 macOS 可达到的内容区为 1440×893，因此使用 `PI_DESKTOP_VERIFY_CONTENT_HEIGHT=893`；脚本默认黄金基线仍为 1440×897；
 - `pnpm verify:a11y`：通过 reduced-motion、forced-colors 和 125%/150% 缩放断言。
 - `pnpm package:dir` 与 `pnpm package`：Apple Silicon macOS 本机通过；
 - packaged smoke：通过 preload、IPC、Runtime handshake 和 node-pty；

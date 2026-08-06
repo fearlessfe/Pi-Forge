@@ -41,12 +41,14 @@ describe("AgentTraceAggregator", () => {
       cwd: "/workspace",
       sessionId: "child-session",
       status: "completed",
+      attempt: 1,
+      queuedAt: "2026-01-01T00:00:00.000Z",
       startedAt: new Date(120).toISOString(),
       updatedAt: new Date(130).toISOString(),
       completedAt: new Date(130).toISOString(),
       usage,
     };
-    trace.record({ type: "tool.completed", runId, callId: "call-1", name: "read", output: "contents", isError: false, details: { subagent } });
+    trace.record({ type: "tool.completed", runId, callId: "call-1", name: "read", output: "contents", isError: false, details: { backgroundSubagent: subagent } });
     trace.record(raw(runId, "compaction_start", 140));
     trace.record(raw(runId, "compaction_end", 150));
     trace.record(raw(runId, "turn_end", 160));
@@ -214,7 +216,7 @@ describe("AgentTraceAggregator", () => {
       startedAt: new Date(1).toISOString(),
       updatedAt: new Date(2).toISOString(),
     } as unknown as SubagentRunInfo;
-    trace.record({ type: "tool.completed", runId, callId: "call-1", name: "subagent", output: "", isError: true, details: { subagent } });
+    trace.record({ type: "tool.completed", runId, callId: "call-1", name: "subagent", output: "", isError: true, details: { backgroundSubagent: subagent } });
     trace.record({ type: "run.completed", runId });
 
     const tool = spans.find((span) => span.name === "execute_tool subagent")!;

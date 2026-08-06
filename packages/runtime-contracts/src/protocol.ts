@@ -11,6 +11,7 @@ export const runtimeCapabilities = [
   "runtime.heartbeat",
   "session.lifecycle",
   "session.events",
+  "subagent.background",
 ] as const;
 
 export type KnownRuntimeCapability = typeof runtimeCapabilities[number];

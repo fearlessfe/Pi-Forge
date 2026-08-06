@@ -361,7 +361,7 @@ describe("ConversationHistory", () => {
     const question = first.activities.find((activity) => activity.type === "question");
     expect(question?.type === "question" && question.options).toEqual([{ label: "yes" }]);
     const subagentActivity = first.activities.find((activity) => activity.type === "tool" && activity.name === "subagent");
-    expect(subagentActivity?.type === "tool" && subagentActivity.details?.subagent).toMatchObject({ id: "child-1" });
+    expect(subagentActivity?.type === "tool" && subagentActivity.details?.backgroundSubagent).toMatchObject({ id: "child-1" });
     expect(first.fileChanges).toHaveLength(1);
     expect(restored).toHaveLength(1);
     expect(runIds).toEqual(["run-9"]);

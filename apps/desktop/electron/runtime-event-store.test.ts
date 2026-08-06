@@ -69,6 +69,27 @@ describe("RuntimeEventStore", () => {
       .toEqual(["exporter.otlp", "renderer:last-seen"]);
   });
 
+  it("records background Subagent lifecycle with parent conversation/run/tool scope", () => {
+    const store = new RuntimeEventStore(directory(), () => 1_700_000_000_000);
+    store.record(events()[0]);
+    store.record({
+      type: "tool.updated",
+      conversationId: "conversation-1",
+      runId: "run-1",
+      callId: "call-subagent",
+      name: "pi_desktop_subagent",
+      output: "queued",
+      details: { backgroundSubagent: {
+          id: "child-1", parentRunId: "run-1", parentConversationId: "conversation-1", toolCallId: "call-subagent",
+          role: "reviewer", task: "Review", cwd: "/workspace", sessionId: "child-session", status: "queued",
+          attempt: 0, queuedAt: "2026-08-06T00:00:00.000Z", startedAt: "2026-08-06T00:00:00.000Z", updatedAt: "2026-08-06T00:00:00.000Z",
+        } },
+    });
+
+    expect(store.query({ conversationId: "conversation-1", runId: "run-1", toolCallId: "call-subagent" }).events)
+      .toEqual([expect.objectContaining({ event: expect.objectContaining({ type: "tool.updated" }) })]);
+  });
+
   it("replays durable records into deterministic run, turn, and tool state", () => {
     const store = new RuntimeEventStore(directory(), () => 1_700_000_000_000);
     for (const event of events()) store.record(event);

@@ -8,6 +8,16 @@ type Variables = Record<string, string | number>;
 export type Translate = (message: string, variables?: Variables) => string;
 
 export const enUS: Record<string, string> = {
+  "后台子 Agent": "Background subagents",
+  "子 Agent 历史与状态": "Subagent history and status",
+  "还没有后台子 Agent 任务。": "No background subagent tasks yet.",
+  "尝试 {count} 次": "{count} attempt(s)",
+  "排队中": "Queued",
+  "已暂停": "Paused",
+  "已完成": "Completed",
+  "暂停": "Pause",
+  "停止": "Stop",
+  "移交到输入框": "Handoff to composer",
   "返回对话": "Back to chats",
   "设置": "Settings",
   "扩展": "Extensions",

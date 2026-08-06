@@ -235,10 +235,13 @@ export class ConversationHistory {
           activity.output = this.messageText(result.content);
           activity.status = result.isError ? "error" : "success";
           const details = result.details && typeof result.details === "object" ? result.details as ToolActivityDetails : undefined;
-          const subagent = activity.name === this.deps.subagentToolName
-            ? this.deps.subagentRuns().findByToolCall(result.toolCallId, conversationId) ?? details?.subagent
+          const persistedSubagent = activity.name === this.deps.subagentToolName
+            ? this.deps.subagentRuns().findByToolCall(result.toolCallId, conversationId)
             : undefined;
-          activity.details = subagent ? { ...details, subagent } : details;
+          const legacySubagent = details?.subagent;
+          activity.details = persistedSubagent
+            ? { ...details, backgroundSubagent: persistedSubagent }
+            : legacySubagent ? { ...details, subagent: legacySubagent } : details;
         } else if (activity?.type === "question") {
           const answer = result.details && typeof result.details === "object" && typeof (result.details as Record<string, unknown>).answer === "string"
             ? (result.details as Record<string, unknown>).answer as string

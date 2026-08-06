@@ -178,7 +178,7 @@ describe("conversation history compatibility", () => {
 
     expect(turn.activities[0]).toMatchObject({
       type: "tool",
-      details: { subagent: { sessionId: "child-session", usage: { requestCount: 2, cost: 0.01 } } },
+      details: { backgroundSubagent: { sessionId: "child-session", usage: { requestCount: 2, cost: 0.01 } } },
     });
   });
 });

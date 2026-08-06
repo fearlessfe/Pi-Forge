@@ -8,6 +8,7 @@ import type {
   ConversationHistoryItem,
   ConversationHistoryPage,
   ConversationListQuery,
+  EnqueueSubagentInput,
   PermissionRuntime,
   PlanReviewArtifact,
   PluginRuntimeStatus,
@@ -17,6 +18,7 @@ import type {
   SaveConversationExecutionProfile,
   SaveModelSettings,
   TaskFileChange,
+  BackgroundSubagentRunInfo as SubagentRunInfo,
 } from "../src/contracts.js";
 import { AgentRuntimeClient, type RuntimeClientOptions } from "./agent-runtime-client.js";
 import type { PromptExtras } from "./agent-service.js";
@@ -25,7 +27,7 @@ import { ConversationProfileStore } from "./conversation-profile-store.js";
 import type { ResourceStore } from "./resource-store.js";
 import { RuntimeRecoveryStore } from "./runtime-recovery-store.js";
 
-type PoolOptions = Omit<RuntimeClientOptions, "emit" | "recoveryStore" | "initialProfile" | "getActiveProfile"> & {
+type PoolOptions = Omit<RuntimeClientOptions, "emit" | "recoveryStore" | "initialProfile" | "getActiveProfile" | "enqueueSubagent" | "backgroundSubagentScheduler"> & {
   emit(event: AgentEvent): void;
   profiles: ConversationProfileStore;
   resources: Pick<ResourceStore, "getProjectSettings" | "isKnownWorkspace">;
@@ -53,6 +55,10 @@ export class AgentRuntimePool {
 
   constructor(private readonly options: PoolOptions) {
     this.recovery = new RuntimeRecoveryStore(options.userDataPath);
+  }
+
+  async startBackgroundSubagents(): Promise<void> {
+    await this.controlClient().listSubagents();
   }
 
   isRunning(conversationId?: string): boolean {
@@ -167,6 +173,16 @@ export class AgentRuntimePool {
   answerQuestion(conversationId: string, callId: string, answer: string): Promise<void> { return this.requireConversation(conversationId).answerQuestion(callId, answer); }
   listPlanReviews(conversationId?: string): Promise<PlanReviewArtifact[]> { return this.clientForRead(conversationId).listPlanReviews(conversationId); }
   resolvePlanReview(conversationId: string, input: ResolvePlanReviewInput): Promise<PlanReviewArtifact> { return this.requireConversation(conversationId).resolvePlanReview(input); }
+  enqueueSubagent(input: EnqueueSubagentInput): Promise<SubagentRunInfo> {
+    this.assertKnownWorkspace(input.cwd);
+    return this.controlClient().enqueueSubagent(input);
+  }
+  listSubagents(): Promise<SubagentRunInfo[]> { return this.controlClient().listSubagents(); }
+  pauseSubagent(id: string): Promise<SubagentRunInfo> { return this.controlClient().pauseSubagent(id); }
+  resumeSubagent(id: string): Promise<SubagentRunInfo> { return this.controlClient().resumeSubagent(id); }
+  retrySubagent(id: string): Promise<SubagentRunInfo> { return this.controlClient().retrySubagent(id); }
+  stopSubagent(id: string): Promise<SubagentRunInfo> { return this.controlClient().stopSubagent(id); }
+  prepareSubagentHandoff(id: string, conversationId: string): Promise<string> { return this.controlClient().prepareSubagentHandoff(id, conversationId); }
 
   async reset(conversationId?: string): Promise<void> {
     if (conversationId) {
@@ -255,6 +271,8 @@ export class AgentRuntimePool {
       ...this.options,
       recoveryStore: this.recovery,
       initialProfile,
+      backgroundSubagentScheduler: conversationId === controlConversationId,
+      enqueueSubagent: (input) => this.enqueueSubagent(input),
       expectedConversationId: conversationId === controlConversationId ? undefined : conversationId,
       getActiveProfile: () => entry.activeProfile,
       emit: (event) => this.options.emit(this.routeEvent(conversationId, event)),

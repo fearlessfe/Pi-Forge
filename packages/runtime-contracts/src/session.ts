@@ -102,7 +102,39 @@ export type SubagentRunInfo = {
   error?: string;
 };
 
-export type ToolActivityDetails = { subagent?: SubagentRunInfo; [key: string]: unknown };
+export type SubagentModelSettings = {
+  provider: string;
+  baseUrl: string;
+  modelId: string;
+  thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+};
+
+export type EnqueueSubagentInput = {
+  parentRunId?: string;
+  parentConversationId?: string;
+  toolCallId: string;
+  role: string;
+  task: string;
+  cwd: string;
+  modelSettings?: SubagentModelSettings;
+};
+
+/** Capability-gated background scheduler record; it does not widen the stable v1 legacy type. */
+export type BackgroundSubagentRunInfo = Omit<SubagentRunInfo, "status"> & {
+  modelSettings?: SubagentModelSettings;
+  status: "queued" | "running" | "paused" | "completed" | "error" | "stopped";
+  attempt: number;
+  queuedAt: string;
+  result?: string;
+};
+
+export type ToolActivityDetails = {
+  /** Legacy synchronous Subagent record retained for Runtime v1 compatibility. */
+  subagent?: SubagentRunInfo;
+  /** Present only when the optional `subagent.background` capability is negotiated. */
+  backgroundSubagent?: BackgroundSubagentRunInfo;
+  [key: string]: unknown;
+};
 
 export type ConversationActivity =
   | { id: string; type: "message"; text: string }

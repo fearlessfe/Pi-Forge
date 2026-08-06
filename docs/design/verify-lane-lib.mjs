@@ -482,6 +482,12 @@ export function installMockBridge(options = {}) {
       retryRecovery: resolve({ runId: "mock-run" }),
       discardRecovery: resolve(undefined),
       retryRuntime: resolve(undefined),
+      listSubagents: resolve([]),
+      pauseSubagent: resolve(undefined),
+      resumeSubagent: resolve(undefined),
+      retrySubagent: resolve(undefined),
+      stopSubagent: resolve(undefined),
+      prepareSubagentHandoff: resolve(""),
       onEvent: (listener) => {
         agentEventListeners.add(listener);
         return () => agentEventListeners.delete(listener);

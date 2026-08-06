@@ -82,7 +82,7 @@ Project files, sessions, and tool execution remain in environments controlled by
 | Sessions | Persists local multi-turn sessions with resume, fork, rename, tag, archive, and export support |
 | Context | Supports Pi session context construction, compaction, context usage display, and model usage records |
 | Agent events | Captures the Pi `AgentSessionEvent` union, durably journals complete desktop events, and supports scoped offset queries, checkpoints, migration, and state replay |
-| Tools | Supports reading, searching, shell commands, editing, writing, user questions, and read-only subagents |
+| Tools | Supports reading, searching, shell commands, editing, writing, user questions, and durable read-only background subagents |
 | Task control | Supports aborting, steering, follow-up queues, and waiting for user answers |
 | Runtime | Runs the agent harness in an independent child process with protocol RPC, automatic restart, and safe continuation of interrupted tasks |
 | Change review | Captures file mutations, generates diffs, and safely reverts files that have not changed again |
@@ -100,7 +100,7 @@ To avoid presenting the roadmap as shipped functionality, the current release ha
 
 - the agent harness runs in an independent local Runtime child process, but is not yet an independently deployable service;
 - one application instance currently runs up to three isolated primary conversation tasks at a time;
-- the built-in subagent is read-only and in-process; each run has a persistent child session plus an independent token, request, and estimated-cost ledger, but cannot yet resume as a background task;
+- built-in subagents run as durable background tasks in the dedicated control Runtime, with a persistent FIFO queue, pause/resume/retry/stop, restart recovery, independent history, and explicit result handoff; their execution remains intentionally read-only and local to one authorized workspace;
 - Runtime crashes preserve a recovery record and offer safe continuation; in-flight tool calls are not replayed automatically, avoiding duplicate side effects;
 - the sandbox is a local command boundary and cannot yet provision remote execution environments;
 - there is no cloud sync, team control plane, organization policy, or distributed scheduler yet;

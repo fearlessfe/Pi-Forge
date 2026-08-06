@@ -52,6 +52,7 @@ import type { ChatActivity, ChatTurn, Project } from "../types";
 import { parseModelValue } from "./model-selector-value";
 import { BrandMark } from "./BrandMark";
 import { PlanReviewCard, PlanReviewDraftCard, PlanReviewPanel } from "./PlanReviewPanel";
+import { SubagentPanel } from "./SubagentPanel";
 
 type NewChatViewProps = {
   conversationId?: string | null;
@@ -802,7 +803,7 @@ function InitialComposer(props: NewChatViewProps) {
 function ToolActivity({ activity }: { activity: Extract<ChatActivity, { type: "tool" }> }) {
   const { t } = useI18n();
   const isSubagent = activity.name === "spawn_subagent" || activity.name === "pi_desktop_subagent";
-  const subagent = activity.details?.subagent;
+  const subagent = activity.details?.backgroundSubagent ?? activity.details?.subagent;
   const Icon = isSubagent ? Users : TerminalSquare;
   const title = t(toolLabel(activity.name));
   const statusTone = toolStatusClass[activity.status];
@@ -820,7 +821,7 @@ function ToolActivity({ activity }: { activity: Extract<ChatActivity, { type: "t
           <div className="min-w-0">
             <span className={toolSectionLabelClass}>{t("运行记录")}</span>
             <section className="grid gap-[7px] rounded-sm border border-separator bg-bg p-[9px]">
-              <p className="m-0 flex items-center justify-between gap-[10px] text-caption text-label-2"><strong>{subagent.role}</strong><small className="font-mono text-caption text-label-3">{t(subagent.status === "running" ? "运行中" : subagent.status === "completed" ? "完成" : subagent.status === "stopped" ? "已停止" : "失败")}</small></p>
+              <p className="m-0 flex items-center justify-between gap-[10px] text-caption text-label-2"><strong>{subagent.role}</strong><small className="font-mono text-caption text-label-3">{t(subagent.status === "queued" ? "排队中" : subagent.status === "running" ? "运行中" : subagent.status === "paused" ? "已暂停" : subagent.status === "completed" ? "完成" : subagent.status === "stopped" ? "已停止" : "失败")}</small></p>
               <code className="font-mono text-caption text-label-3" title={subagent.sessionId}>{t("会话")} {subagent.sessionId.slice(0, 8)}</code>
               {subagent.usage && <ResponseUsageLine usage={subagent.usage} />}
               {subagent.error && <em className="font-mono not-italic text-caption text-red">{subagent.error}</em>}
@@ -1554,9 +1555,9 @@ export function NewChatView(props: NewChatViewProps) {
     if (selectedChangeId && !selectedChange) setSelectedChangeId(null);
   }, [selectedChange, selectedChangeId]);
 
-  if (!props.turns.length) return <InitialComposer {...props} />;
   return <div className={`relative grid h-full w-full min-h-0 min-w-0 overflow-hidden ${selectedChange ? "grid-cols-[minmax(420px,1fr)_minmax(360px,44%)] max-[1100px]:grid-cols-[minmax(0,1fr)]" : "grid-cols-[minmax(0,1fr)]"}`}>
-    <ActiveConversation key={props.turns[0]?.id} {...props} openChangeId={selectedChangeId ?? undefined} onOpenChange={(change) => setSelectedChangeId(change.id)} />
+    <SubagentPanel conversationId={props.conversationId} onHandoff={props.onPromptChange} />
+    {!props.turns.length ? <InitialComposer {...props} /> : <ActiveConversation key={props.turns[0]?.id} {...props} openChangeId={selectedChangeId ?? undefined} onOpenChange={(change) => setSelectedChangeId(change.id)} />}
     {selectedChange && props.conversationId && <FileChangeInspector conversationId={props.conversationId} change={selectedChange} onClose={() => setSelectedChangeId(null)} />}
   </div>;
 }

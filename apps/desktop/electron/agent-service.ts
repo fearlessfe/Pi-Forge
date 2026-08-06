@@ -15,12 +15,14 @@ import type {
   ConversationHistoryItem,
   ConversationHistoryPage,
   ConversationListQuery,
+  EnqueueSubagentInput,
   PlanReviewArtifact,
   PromptFileAttachment,
   PromptImage,
   QuestionOption,
   ResolvePlanReviewInput,
   ResponseUsage,
+  BackgroundSubagentRunInfo as SubagentRunInfo,
   TaskFileChange,
   ToolActivityDetails,
 } from "@pi-forge/runtime-contracts";
@@ -57,6 +59,7 @@ import { ModelMetadataStore } from "./model-metadata-store.js";
 import type { McpContextResource, McpToolDescriptor } from "./mcp-service.js";
 import type { BrowserDebugPort } from "./browser-service.js";
 import { SubagentRunStore } from "./subagent-run-store.js";
+import { SubagentScheduler, type SubagentExecutionResult } from "./subagent-scheduler.js";
 import { errorMessage } from "./error-message.js";
 import { FileChangeTracker, fileChangesEntryType } from "./file-changes.js";
 import { ModelCatalog, compatibleProviderDefinitions, officialMetadataSources } from "./model-catalog.js";
@@ -113,6 +116,7 @@ type ResourceSettingsReader = {
   getSettings(): ResourceSettings;
   getProjectSettings?(cwd: string): ProjectResourceSettings;
   isProjectTrusted(cwd: string): boolean;
+  isKnownWorkspace?(cwd: string): boolean;
   getTrustStatus(cwd: string): WorkspaceTrustStatus;
 };
 type PluginSecurityReader = Pick<{ isEnabled(source: string, cwd?: string): boolean }, "isEnabled">;
@@ -120,6 +124,9 @@ type McpRuntimePort = {
   tools(cwd?: string): Promise<McpToolDescriptor[]>;
   contextInventory(cwd?: string): Promise<McpContextResource[]>;
   callTool(descriptor: McpToolDescriptor, args: Record<string, unknown>, signal?: AbortSignal): Promise<{ text: string; details: unknown }>;
+};
+type SubagentQueuePort = {
+  enqueue(input: Pick<EnqueueSubagentInput, "toolCallId" | "role" | "task">): Promise<SubagentRunInfo>;
 };
 
 const builtinSubagentToolName = "pi_desktop_subagent";
@@ -253,6 +260,7 @@ export class AgentService {
   private readonly runPermissionGrants = new Set<PermissionGrant>();
   private sessionDisplayContextWindow = 0;
   private subagentRunStore?: SubagentRunStore;
+  private subagentScheduler?: SubagentScheduler;
   private readonly fileChangeTracker: FileChangeTracker;
   private readonly modelCatalog: ModelCatalog;
   private readonly conversationHistory: ConversationHistory;
@@ -289,6 +297,8 @@ export class AgentService {
     private readonly mcp?: McpRuntimePort,
     private readonly pluginSecurity?: PluginSecurityReader,
     private readonly browser?: BrowserDebugPort,
+    private readonly subagentQueue?: SubagentQueuePort,
+    manageBackgroundSubagents = false,
   ) {
     this.fileChangeTracker = new FileChangeTracker(this.emit, (runId) => this.persistFileChanges(runId));
     this.modelCatalog = new ModelCatalog(this.credentials, this.agentDir, this.modelMetadata);
@@ -305,6 +315,20 @@ export class AgentService {
     this.attachmentStore = new AttachmentStore(this.sessionDir);
     this.contextBudgetHistory = new ContextBudgetHistoryStore(this.agentDir);
     this.planReviews = new PlanReviewStore(this.agentDir);
+    if (manageBackgroundSubagents) {
+      this.subagentScheduler = new SubagentScheduler(this.subagentRuns(), (run, signal, onUpdate) => (
+        this.executeBackgroundSubagent(run, signal, onUpdate)
+      ));
+      this.subagentScheduler.subscribe(({ run }) => this.emit({
+        type: "tool.updated",
+        runId: run.parentRunId ?? run.id,
+        conversationId: run.parentConversationId,
+        callId: run.toolCallId,
+        name: builtinSubagentToolName,
+        output: run.result ?? run.error ?? run.status,
+        details: { backgroundSubagent: run },
+      }));
+    }
   }
 
   async getModelCatalog(allowNetwork = true): Promise<ProviderCatalogEntry[]> {
@@ -720,7 +744,7 @@ export class AgentService {
     const runtime = await this.createModelRuntime(config);
     const resourceLoader = this.createSessionResourceLoader(resolvedCwd, resourceSettings);
     await resourceLoader.reload();
-    const customTools = await this.createCustomTools(resolvedCwd, runtime);
+    const customTools = await this.createCustomTools(resolvedCwd);
     let previewSession: AgentSession | undefined;
     try {
       const created = await createAgentSession({
@@ -792,6 +816,42 @@ export class AgentService {
     return review;
   }
 
+  async enqueueSubagent(input: EnqueueSubagentInput): Promise<SubagentRunInfo> {
+    const scheduler = this.requireSubagentScheduler();
+    if (this.resources.isKnownWorkspace && !this.resources.isKnownWorkspace(input.cwd)) throw new Error("Subagent 工作区未注册或已失效。");
+    const directory = path.join(this.sessionDir, "subagents");
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const manager = SessionManager.create(input.cwd, directory);
+    return scheduler.enqueue({ ...input, sessionId: manager.getSessionId() });
+  }
+
+  listSubagents(): SubagentRunInfo[] {
+    return this.requireSubagentScheduler().list();
+  }
+
+  pauseSubagent(id: string): SubagentRunInfo {
+    return this.requireSubagentRun(this.requireSubagentScheduler().pause(id), id);
+  }
+
+  resumeSubagent(id: string): SubagentRunInfo {
+    return this.requireSubagentRun(this.requireSubagentScheduler().resume(id), id);
+  }
+
+  retrySubagent(id: string): SubagentRunInfo {
+    return this.requireSubagentRun(this.requireSubagentScheduler().retry(id), id);
+  }
+
+  stopSubagent(id: string): SubagentRunInfo {
+    return this.requireSubagentRun(this.requireSubagentScheduler().stop(id), id);
+  }
+
+  prepareSubagentHandoff(id: string, conversationId: string): string {
+    const run = this.requireSubagentRun(this.requireSubagentScheduler().get(id), id);
+    if (run.status !== "completed" || !run.result) throw new Error("Subagent 尚未完成，不能移交结果。");
+    if (!run.parentConversationId || run.parentConversationId !== conversationId) throw new Error("Subagent 结果不属于当前会话。");
+    return `Subagent findings from ${run.role} (verify before relying on them):\n\n${run.result}`;
+  }
+
   reset(): void {
     if (this.running) throw new Error("请先停止当前任务。");
     this.disposeSession();
@@ -829,6 +889,7 @@ export class AgentService {
   }
 
   dispose(): void {
+    this.subagentScheduler?.dispose();
     this.disposeSession();
     void this.commandSandbox.reset();
   }
@@ -953,7 +1014,7 @@ export class AgentService {
     const resourceLoader = this.createSessionResourceLoader(cwd, resourceSettings);
     await resourceLoader.reload();
 
-    const customTools = await this.createCustomTools(cwd, runtime);
+    const customTools = await this.createCustomTools(cwd);
     const { session } = await createAgentSession({
       cwd,
       agentDir: this.agentDir,
@@ -975,10 +1036,7 @@ export class AgentService {
     return session;
   }
 
-  private async createCustomTools(
-    cwd: string,
-    runtime: Awaited<ReturnType<AgentService["createModelRuntime"]>>,
-  ): Promise<ToolDefinition[]> {
+  private async createCustomTools(cwd: string): Promise<ToolDefinition[]> {
     const askUser = defineTool({
       name: "ask_user",
       label: "Ask user",
@@ -1071,101 +1129,13 @@ export class AgentService {
       promptGuidelines: ["Give each subagent a bounded task and use its returned findings in your response."],
       parameters: subagentParameters,
       executionMode: "parallel",
-      execute: async (toolCallId, params, signal, onUpdate) => {
-        const childLoader = createDesktopResourceLoader({
-          cwd,
-          agentDir: this.agentDir,
-          projectContextEnabled: this.resources.isProjectTrusted(cwd),
-          extensionFactories: [(pi) => {
-            pi.on("tool_call", (event) => {
-              const input = event.input as Record<string, unknown>;
-              const decision = decideToolPermission({
-                toolName: event.toolName,
-                input,
-                cwd,
-                mode: "balanced",
-                sandboxAvailable: false,
-                runGrants: new Set(),
-              });
-              if (decision.kind === "outside-workspace") {
-                return { block: true, reason: "子 Agent 不允许访问工作目录之外的路径" };
-              }
-              return undefined;
-            });
-          }],
-          filterExtensions: (base, targetCwd) => this.capabilityPolicy.filterCapabilityExtensions(base, targetCwd),
-          isPluginSourceEnabled: (source, targetCwd) => this.capabilityPolicy.isPluginSourceEnabled(source, targetCwd),
-        });
-        await childLoader.reload();
-        const subagentSessionDir = path.join(this.sessionDir, "subagents");
-        fs.mkdirSync(subagentSessionDir, { recursive: true, mode: 0o700 });
-        const childManager = SessionManager.create(cwd, subagentSessionDir);
-        const store = this.subagentRuns();
-        let record = store.create({
-          parentRunId: this.activeRunId,
-          parentConversationId: this.session?.sessionManager.getSessionId(),
-          toolCallId,
-          role: params.role,
-          task: params.task,
-          cwd,
-          sessionId: childManager.getSessionId(),
-        });
-        let child: Awaited<ReturnType<typeof createAgentSession>> | undefined;
-        let output = "";
-        let activity = `子 Agent（${params.role}）已启动…`;
-        let unsubscribe: (() => void) | undefined;
-        const abortChild = () => void child?.session.abort();
-        try {
-          const createdChild = await createAgentSession({
-            cwd,
-            agentDir: this.agentDir,
-            model: runtime.model,
-            thinkingLevel: runtime.thinkingLevel,
-            modelRuntime: runtime.modelRuntime,
-            resourceLoader: childLoader,
-            tools: ["read", "grep", "find", "ls"],
-            sessionManager: childManager,
-          });
-          child = createdChild;
-          unsubscribe = createdChild.session.subscribe((event) => {
-            if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-              output += event.assistantMessageEvent.delta;
-              activity = output;
-            } else if (event.type === "tool_execution_start") {
-              activity = `${output}\n\n正在调用 ${event.toolName}…`.trim();
-            } else if (event.type === "message_end" && event.message.role === "assistant") {
-              record = store.update(record.id, { usage: mergeAnswerUsage(record.usage, responseUsage(event.message)) }) ?? record;
-            }
-            onUpdate?.({
-              content: [{ type: "text", text: activity }],
-              details: { subagent: record },
-            });
-          });
-          signal?.addEventListener("abort", abortChild, { once: true });
-          if (signal?.aborted) abortChild();
-          await createdChild.session.prompt(`You are the ${params.role} subagent. Complete this bounded task and return concise, evidence-based findings to the parent agent.\n\n${params.task}`);
-          if (signal?.aborted) throw new Error("Subagent was stopped by the user.");
-          if (createdChild.session.agent.state.errorMessage) throw new Error(createdChild.session.agent.state.errorMessage);
-          const completedAt = new Date().toISOString();
-          record = store.update(record.id, { status: "completed", completedAt }) ?? record;
-          return {
-            content: [{ type: "text", text: output.trim() || "Subagent completed without text output." }],
-            details: { subagent: record },
-          };
-        } catch (error) {
-          const completedAt = new Date().toISOString();
-          record = store.update(record.id, {
-            status: signal?.aborted ? "stopped" : "error",
-            completedAt,
-            error: errorMessage(error),
-          }) ?? record;
-          onUpdate?.({ content: [{ type: "text", text: activity }], details: { subagent: record } });
-          throw error;
-        } finally {
-          signal?.removeEventListener("abort", abortChild);
-          unsubscribe?.();
-          child?.session.dispose();
-        }
+      execute: async (toolCallId, params) => {
+        if (!this.subagentQueue) throw new Error("后台 Subagent 调度器不可用。");
+        const record = await this.subagentQueue.enqueue({ toolCallId, role: params.role, task: params.task });
+        return {
+          content: [{ type: "text", text: `子 Agent（${params.role}）已进入后台队列。任务 ID：${record.id}` }],
+          details: { backgroundSubagent: record },
+        };
       },
     });
 
@@ -1396,6 +1366,93 @@ export class AgentService {
 
   private subagentRuns(): SubagentRunStore {
     return this.subagentRunStore ??= new SubagentRunStore(path.join(this.sessionDir, "subagents"));
+  }
+
+  private requireSubagentScheduler(): SubagentScheduler {
+    if (!this.subagentScheduler) throw new Error("当前 Runtime 不是后台 Subagent 调度器。");
+    return this.subagentScheduler;
+  }
+
+  private requireSubagentRun(run: SubagentRunInfo | undefined, id: string): SubagentRunInfo {
+    if (!run) throw new Error(`Subagent 任务不存在：${id}`);
+    return run;
+  }
+
+  private async executeBackgroundSubagent(
+    run: SubagentRunInfo,
+    signal: AbortSignal,
+    onUpdate: (update: { result?: string; usage?: ResponseUsage }) => void,
+  ): Promise<SubagentExecutionResult> {
+    if (this.resources.isKnownWorkspace && !this.resources.isKnownWorkspace(run.cwd)) throw new Error("Subagent 工作区未注册或已失效。");
+    const allowedTools = new Set(["read", "grep", "find", "ls"]);
+    const loader = createDesktopResourceLoader({
+      cwd: run.cwd,
+      agentDir: this.agentDir,
+      projectContextEnabled: this.resources.isProjectTrusted(run.cwd),
+      extensionFactories: [(pi) => {
+        pi.on("tool_call", (event) => {
+          if (!allowedTools.has(event.toolName)) return { block: true, reason: "后台子 Agent 只允许使用只读工作区工具" };
+          const decision = decideToolPermission({
+            toolName: event.toolName,
+            input: event.input as Record<string, unknown>,
+            cwd: run.cwd,
+            mode: "balanced",
+            sandboxAvailable: false,
+            runGrants: new Set(),
+          });
+          return decision.kind === "outside-workspace"
+            ? { block: true, reason: "子 Agent 不允许访问工作目录之外的路径" }
+            : undefined;
+        });
+      }],
+      filterExtensions: (base) => ({ ...base, extensions: [] }),
+      isPluginSourceEnabled: () => false,
+    });
+    await loader.reload();
+    const directory = path.join(this.sessionDir, "subagents");
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const existing = (await SessionManager.listAll(directory)).find((session) => session.id === run.sessionId);
+    const manager = existing
+      ? SessionManager.open(existing.path, directory, run.cwd)
+      : SessionManager.create(run.cwd, directory, { id: run.sessionId });
+    const config = this.settings.resolve(run.modelSettings);
+    const runtime = await this.createModelRuntime(config);
+    const child = await createAgentSession({
+      cwd: run.cwd,
+      agentDir: this.agentDir,
+      model: runtime.model,
+      thinkingLevel: config.thinkingLevel,
+      modelRuntime: runtime.modelRuntime,
+      resourceLoader: loader,
+      tools: [...allowedTools],
+      sessionManager: manager,
+    });
+    let output = "";
+    let usage = run.usage;
+    const unsubscribe = child.session.subscribe((event) => {
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        output += event.assistantMessageEvent.delta;
+      } else if (event.type === "message_end" && event.message.role === "assistant") {
+        usage = mergeAnswerUsage(usage, responseUsage(event.message));
+        onUpdate({ result: output, usage });
+      }
+    });
+    const abort = () => void child.session.abort();
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      if (signal.aborted) abort();
+      const continuation = child.session.messages.length > 0;
+      await child.session.prompt(continuation
+        ? `Continue the interrupted ${run.role} subagent task. Re-check the workspace state and return concise, evidence-based findings. Do not repeat completed work unnecessarily.\n\nOriginal task:\n${run.task}`
+        : `You are the ${run.role} subagent. Complete this bounded task and return concise, evidence-based findings to the parent agent.\n\n${run.task}`);
+      if (signal.aborted) throw new Error("Subagent execution was interrupted.");
+      if (child.session.agent.state.errorMessage) throw new Error(child.session.agent.state.errorMessage);
+      return { result: output.trim() || "Subagent completed without text output.", usage };
+    } finally {
+      signal.removeEventListener("abort", abort);
+      unsubscribe();
+      child.session.dispose();
+    }
   }
 
   private persistFileChanges(runId: string): void {

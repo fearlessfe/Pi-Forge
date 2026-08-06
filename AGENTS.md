@@ -6,6 +6,7 @@
 - Keep process boundaries intact: `apps/desktop/src` is the isolated renderer; `electron/main.ts` owns privileged IPC/services; `electron/preload.cts` exposes the allowlisted `window.piDesktop` API; `agent-runtime-client.ts` → `agent-runtime-protocol.ts` → `agent-runtime-worker.ts` → `agent-service.ts` is the child-process RPC path for agent execution.
 - `apps/desktop/src/contracts.ts` is shared across renderer and Electron builds. When changing a cross-boundary feature, update the contract, preload exposure, main-process validation/handler, runtime protocol/client/worker, service, and callers together. Never expose plaintext credentials or direct Node/filesystem access to the renderer.
 - Main-process-only capabilities such as credentials, MCP, and browser access reach the runtime through host RPC. Security behavior is structural: workspace guards, approval policy, sandbox fallback, project trust, credential redaction, and safe-storage handling must not be bypassed for convenience.
+- Background Subagents are owned only by the dedicated control Runtime. Conversation workers may request enqueue through Main-owned host RPC, but Main must derive the parent run/conversation/workspace from the active frozen profile; child sessions remain limited to `read`, `grep`, `find`, and `ls`.
 
 ## Commands
 - Requirements match CI: Node `24.10.0`, pnpm `10.17.0`; install with `pnpm install --frozen-lockfile` when reproducing CI (`pnpm install` is fine while intentionally updating the lockfile).

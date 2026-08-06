@@ -290,6 +290,37 @@ describe("AgentRuntimeClient", () => {
     });
   });
 
+  it("derives Subagent scope from the active Main-owned profile and rejects forged fields", async () => {
+    const enqueueSubagent = vi.fn(async (input) => ({ id: "child", ...input } as never));
+    createClient([], {
+      expectedConversationId: "conversation-1",
+      getActiveProfile: () => ({
+        cwd: "/trusted/project",
+        modelSettings: { provider: "openai", baseUrl: "https://example.com", modelId: "gpt-test", thinkingLevel: "high", apiKey: "must-not-persist" },
+        resourceSelectionMode: "inherit",
+        selectedSkills: [],
+        selectedMcpServers: [],
+      }),
+      enqueueSubagent,
+    });
+    const child = lastChild();
+    emitReady(child);
+    child.emit("message", { kind: "runtime.event", event: { type: "run.started", runId: "parent-run", conversationId: "conversation-1", provider: "openai", model: "gpt-test", cwd: "/trusted/project" } });
+
+    child.emit("message", { kind: "host.request", id: "enqueue", method: "subagent.enqueue", args: [{ toolCallId: "call-1", role: "reviewer", task: "Inspect" }] });
+    await vi.waitFor(() => expect(enqueueSubagent).toHaveBeenCalledOnce());
+    expect(enqueueSubagent).toHaveBeenCalledWith(expect.objectContaining({
+      parentRunId: "parent-run",
+      parentConversationId: "conversation-1",
+      cwd: "/trusted/project",
+      modelSettings: expect.not.objectContaining({ apiKey: expect.anything() }),
+    }));
+
+    child.emit("message", { kind: "host.request", id: "forged", method: "subagent.enqueue", args: [{ toolCallId: "call-2", role: "reviewer", task: "Inspect", cwd: "/outside" }] });
+    await vi.waitFor(() => expect(child.sent).toContainEqual(expect.objectContaining({ kind: "host.response", id: "forged", error: expect.objectContaining({ message: expect.stringContaining("无效") }) })));
+    expect(enqueueSubagent).toHaveBeenCalledOnce();
+  });
+
   it("resolves requests with worker responses and rejects on error results", async () => {
     const client = createClient();
     const child = lastChild();

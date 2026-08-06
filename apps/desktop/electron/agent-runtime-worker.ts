@@ -6,6 +6,7 @@ import {
   validateRuntimeClientEnvelope,
   validateRuntimeHandshakeOffer,
   type ResolvePlanReviewInput,
+  type EnqueueSubagentInput,
   type RuntimeProtocolError,
 } from "@pi-forge/runtime-contracts";
 import type { BrowserAnnotationCapture, SaveModelSettings } from "../src/contracts.js";
@@ -20,6 +21,7 @@ import { WorkspaceCommandSandbox } from "./workspace-command-sandbox.js";
 import type { McpContextResource, McpToolDescriptor } from "./mcp-service.js";
 import {
   agentRuntimeProtocolVersion,
+  isBackgroundSubagentRuntimeRequest,
   isHostResponse,
   type AgentRuntimeInit,
   type HostRequest,
@@ -207,8 +209,17 @@ function initialize(input: AgentRuntimeInit): void {
     mcp,
     pluginSecurity,
     browser,
+    { enqueue: (value) => host.request("subagent.enqueue", value) },
+    input.backgroundSubagentScheduler === true,
   );
-  send({ kind: "runtime.ready", protocolVersion: agentRuntimeProtocolVersion, pid: process.pid, capabilities: negotiated.value });
+  send({
+    kind: "runtime.ready",
+    protocolVersion: agentRuntimeProtocolVersion,
+    pid: process.pid,
+    capabilities: input.backgroundSubagentScheduler
+      ? negotiated.value
+      : negotiated.value.filter((capability) => capability !== "subagent.background"),
+  });
 }
 
 async function invoke(request: RuntimeRequest): Promise<unknown> {
@@ -253,6 +264,13 @@ async function invoke(request: RuntimeRequest): Promise<unknown> {
       conversationResources?.update(profile);
       return undefined;
     }
+    case "enqueueSubagent": return agent.enqueueSubagent(args[0] as EnqueueSubagentInput);
+    case "listSubagents": return agent.listSubagents();
+    case "pauseSubagent": return agent.pauseSubagent(args[0] as string);
+    case "resumeSubagent": return agent.resumeSubagent(args[0] as string);
+    case "retrySubagent": return agent.retrySubagent(args[0] as string);
+    case "stopSubagent": return agent.stopSubagent(args[0] as string);
+    case "prepareSubagentHandoff": return agent.prepareSubagentHandoff(args[0] as string, args[1] as string);
     default: {
       const exhaustive: never = request.method;
       return exhaustive;
@@ -297,7 +315,7 @@ function isRuntimeInit(value: unknown): value is { kind: "runtime.init"; value: 
   return input?.kind === "runtime.init"
     && onlyKeys(input, ["kind", "value"])
     && init !== undefined
-    && onlyKeys(init, ["protocolVersion", "capabilities", "requiredCapabilities", "userDataPath", "agentDir", "fallbackCwd", "sessionDir", "modelSettings", "resourceProfile"])
+    && onlyKeys(init, ["protocolVersion", "capabilities", "requiredCapabilities", "userDataPath", "agentDir", "fallbackCwd", "sessionDir", "modelSettings", "resourceProfile", "backgroundSubagentScheduler"])
     && typeof init.userDataPath === "string"
     && typeof init.agentDir === "string"
     && typeof init.fallbackCwd === "string"
@@ -309,6 +327,7 @@ function isRuntimeInit(value: unknown): value is { kind: "runtime.init"; value: 
     && typeof model.modelId === "string"
     && ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(model.thinkingLevel))
     && (model.apiKey === undefined || typeof model.apiKey === "string")
+    && (init.backgroundSubagentScheduler === undefined || typeof init.backgroundSubagentScheduler === "boolean")
     && (profile === undefined || (
       onlyKeys(profile, ["resourceSelectionMode", "selectedSkills", "selectedMcpServers"])
       && (profile.resourceSelectionMode === "inherit" || profile.resourceSelectionMode === "custom")
@@ -337,7 +356,12 @@ process.on("message", (input: unknown) => {
     return;
   }
   const parsed = validateRuntimeClientEnvelope(input);
+  const privateRequest = !parsed.success && isBackgroundSubagentRuntimeRequest(input) ? input : undefined;
   if (!parsed.success) {
+    if (privateRequest) {
+      void handleRequest(privateRequest);
+      return;
+    }
     if (raw?.kind === "runtime.request" && typeof raw.id === "string" && raw.id.length > 0) {
       send({ kind: "runtime.response", protocolVersion: runtimeProtocolVersion, id: raw.id, error: parsed.error });
       return;

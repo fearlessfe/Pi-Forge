@@ -57,6 +57,8 @@ describe("runtime contract v1 fixtures", () => {
       .toMatchObject({ success: false, error: { code: "malformed_payload" } });
     expect(validateRuntimeServerEnvelope({ kind: "runtime.event", protocolVersion: runtimeProtocolVersion, event: { type: "future.event" } }))
       .toMatchObject({ success: false, error: { code: "malformed_payload" } });
+    expect(validateRuntimeServerEnvelope({ kind: "runtime.event", protocolVersion: runtimeProtocolVersion, event: { type: "subagent.updated", subagent: {} } }))
+      .toMatchObject({ success: false, error: { code: "malformed_payload" } });
   });
 });
 

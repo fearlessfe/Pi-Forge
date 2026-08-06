@@ -17,6 +17,7 @@ import type {
   RuntimeReplaySnapshot,
   RuntimeRecoveryInfo,
   SendPromptInput,
+  BackgroundSubagentRunInfo,
   TaskFileChange,
 } from "@pi-forge/runtime-contracts";
 
@@ -33,6 +34,7 @@ export type {
   ConversationHistoryTurn,
   ConversationListQuery,
   ConversationUpdatedEvent,
+  EnqueueSubagentInput,
   PiAgentEventType,
   PlanReviewAnnotation,
   PlanReviewArtifact,
@@ -55,11 +57,14 @@ export type {
   RuntimeReplayTurn,
   RuntimeRecoveryInfo,
   SendPromptInput,
-  SubagentRunInfo,
+  BackgroundSubagentRunInfo,
   TaskFileChange,
   ToolActivityDetails,
   TurnAttachment,
 } from "@pi-forge/runtime-contracts";
+
+/** Desktop-only name for the capability-gated durable scheduler record. */
+export type SubagentRunInfo = BackgroundSubagentRunInfo;
 
 export const compatibleProviderIds = [
   "openai-compatible",
@@ -830,6 +835,12 @@ export type PiDesktopApi = {
     replayRuntimeEvents(query?: RuntimeEventQuery): Promise<RuntimeReplaySnapshot>;
     saveRuntimeEventCheckpoint(name: string, offset?: number): Promise<RuntimeEventCheckpoint>;
     listRuntimeEventCheckpoints(): Promise<RuntimeEventCheckpoint[]>;
+    listSubagents(): Promise<SubagentRunInfo[]>;
+    pauseSubagent(id: string): Promise<SubagentRunInfo>;
+    resumeSubagent(id: string): Promise<SubagentRunInfo>;
+    retrySubagent(id: string): Promise<SubagentRunInfo>;
+    stopSubagent(id: string): Promise<SubagentRunInfo>;
+    prepareSubagentHandoff(id: string, conversationId: string): Promise<string>;
     reconnect(): Promise<RendererRecoverySnapshot>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
   };

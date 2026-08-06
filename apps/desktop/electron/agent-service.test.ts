@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { InMemoryCredentialStore, type AssistantMessage, type ToolResultMessage, type Usage, type UserMessage } from "@earendil-works/pi-ai";
-import type { AgentEvent, SaveModelSettings } from "../src/contracts.js";
+import type { AgentEvent, SaveModelSettings, SubagentRunInfo } from "../src/contracts.js";
 import { planReviewBlocks } from "../src/plan-review.js";
 
 vi.mock("electron", () => ({
@@ -953,7 +953,7 @@ describe("AgentService with a real Pi session", () => {
     }
   });
 
-  it("runs a delegated subagent and streams its progress back through the parent tool", async () => {
+  it("enqueues a delegated subagent and lets the parent continue without waiting", async () => {
     const requests: ChatRequest[] = [];
     const server = http.createServer((req, res) => {
       let body = "";
@@ -977,14 +977,6 @@ describe("AgentService with a real Pi session", () => {
             }),
             chunk({}, "tool_calls"),
           ]);
-        } else if (requests.length === 2) {
-          writeSse(res, [
-            chunk({ role: "assistant" }),
-            chunk({ tool_calls: [{ index: 0, id: "call-child-read", type: "function", function: { name: "read", arguments: JSON.stringify({ path: "README.md" }) } }] }),
-            chunk({}, "tool_calls"),
-          ]);
-        } else if (requests.length === 3) {
-          writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "child-report" }), chunk({}, "stop")]);
         } else {
           writeSse(res, [chunk({ role: "assistant" }), chunk({ content: "parent-answer" }), chunk({}, "stop")]);
         }
@@ -1002,7 +994,18 @@ describe("AgentService with a real Pi session", () => {
       apiKey: "subagent-key",
     };
     const events: AgentEvent[] = [];
-    const service = new AgentService({ resolve: () => ({ ...configuration }) }, agentDir, cwd, (event) => events.push(event));
+    const queued: SubagentRunInfo = {
+      id: "background-run", parentRunId: "parent-run", parentConversationId: "parent-conversation",
+      toolCallId: "call-subagent", role: "reviewer", task: "Inspect the focused change", cwd,
+      sessionId: "child-session", status: "queued", attempt: 0,
+      queuedAt: "2026-08-06T00:00:00.000Z", startedAt: "2026-08-06T00:00:00.000Z", updatedAt: "2026-08-06T00:00:00.000Z",
+    };
+    const enqueue = vi.fn(async () => queued);
+    const service = new AgentService(
+      { resolve: () => ({ ...configuration }) }, agentDir, cwd, (event) => events.push(event),
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      { enqueue },
+    );
 
     try {
       const runId = await service.send("delegate this review", cwd);
@@ -1010,32 +1013,27 @@ describe("AgentService with a real Pi session", () => {
 
       expect(eventsOfType(events, "message.delta").filter((event) => event.runId === runId).map((event) => event.text).join("")).toBe("parent-answer");
       expect(events.some((event) => event.type === "tool.started" && event.name === "pi_desktop_subagent")).toBe(true);
-      expect(events.some((event) => event.type === "tool.updated" && event.name === "pi_desktop_subagent" && event.output.includes("child-report"))).toBe(true);
       const completed = eventsOfType(events, "tool.completed").find((event) => event.name === "pi_desktop_subagent");
       expect(completed).toMatchObject({
-        output: expect.stringContaining("child-report"),
-        details: { subagent: { role: "reviewer", status: "completed", usage: { requestCount: 2 } } },
+        output: expect.stringContaining("已进入后台队列"),
+        details: { backgroundSubagent: { id: "background-run", role: "reviewer", status: "queued" } },
       });
-      expect(requests).toHaveLength(4);
-      expect(JSON.stringify(requests[1].messages)).toContain("You are the reviewer subagent");
-      expect(requests[3].messages).toEqual(expect.arrayContaining([
-        expect.objectContaining({ role: "tool", content: expect.stringContaining("child-report") }),
+      expect(enqueue).toHaveBeenCalledWith({ toolCallId: "call-subagent", role: "reviewer", task: "Inspect the focused change" });
+      expect(requests).toHaveLength(2);
+      expect(requests[1].messages).toEqual(expect.arrayContaining([
+        expect.objectContaining({ role: "tool", content: expect.stringContaining("background-run") }),
       ]));
-
-      const subagentDirectory = path.join(agentDir, "sessions", "subagents");
-      const childSessions = await SessionManager.listAll(subagentDirectory);
-      expect(childSessions).toEqual([expect.objectContaining({ id: completed?.details?.subagent?.sessionId })]);
       const conversations = await service.listConversations();
       expect(conversations).toHaveLength(1);
-      expect(conversations[0].id).not.toBe(completed?.details?.subagent?.sessionId);
       const restored = await service.loadConversation(conversations[0].id);
       expect(restored.turns[0].activities).toEqual(expect.arrayContaining([
         expect.objectContaining({
           id: "call-subagent",
           details: expect.objectContaining({
-            subagent: expect.objectContaining({
-              sessionId: completed?.details?.subagent?.sessionId,
-              usage: expect.objectContaining({ requestCount: 2 }),
+            backgroundSubagent: expect.objectContaining({
+              id: "background-run",
+              sessionId: "child-session",
+              status: "queued",
             }),
           }),
         }),
@@ -1108,7 +1106,7 @@ describe("AgentService with a real Pi session", () => {
     }
   });
 
-  it("persists a stopped subagent record when the parent run is aborted", async () => {
+  it("does not stop a queued background subagent when the parent run is aborted", async () => {
     let requestCount = 0;
     let childStarted!: () => void;
     const started = new Promise<void>((resolve) => { childStarted = resolve; });
@@ -1139,16 +1137,25 @@ describe("AgentService with a real Pi session", () => {
       apiKey: "subagent-abort-key",
     };
     const events: AgentEvent[] = [];
-    const service = new AgentService({ resolve: () => ({ ...configuration }) }, agentDir, cwd, (event) => events.push(event));
+    const queued: SubagentRunInfo = {
+      id: "independent-child", parentRunId: "parent-run", parentConversationId: "parent-conversation",
+      toolCallId: "call-stopped-child", role: "researcher", task: "Wait for evidence", cwd,
+      sessionId: "independent-session", status: "queued", attempt: 0,
+      queuedAt: "2026-08-06T00:00:00.000Z", startedAt: "2026-08-06T00:00:00.000Z", updatedAt: "2026-08-06T00:00:00.000Z",
+    };
+    const enqueue = vi.fn(async () => queued);
+    const service = new AgentService(
+      { resolve: () => ({ ...configuration }) }, agentDir, cwd, (event) => events.push(event),
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      { enqueue },
+    );
 
     try {
       const runId = await service.send("delegate and wait", cwd);
       await started;
       await service.abort();
-      await vi.waitFor(() => {
-        const index = JSON.parse(fs.readFileSync(path.join(agentDir, "sessions", "subagents", "index.json"), "utf8")) as { runs: Array<{ status: string }> };
-        expect(index.runs[0]?.status).toBe("stopped");
-      });
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect(queued.status).toBe("queued");
       expect(events.some((event) => event.type === "run.stopped" && event.runId === runId)).toBe(true);
     } finally {
       service.dispose();

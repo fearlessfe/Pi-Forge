@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { AgentEvent, AgentTraceEvent, ResponseUsage, SubagentRunInfo, TraceCaptureContent } from "../src/contracts.js";
+import type { SubagentRunInfo as LegacySubagentRunInfo } from "@pi-forge/runtime-contracts";
 import type { TraceAttributeValue, TraceRecordContext, TraceSpanRecord, TraceSpanSink } from "./trace-model.js";
 
 type MutableSpan = Omit<TraceSpanRecord, "endTimeUnixMs" | "status"> & {
@@ -123,7 +124,7 @@ function usageAttributes(usage: ResponseUsage): Record<string, TraceAttributeVal
   };
 }
 
-function subagentAttributes(subagent: SubagentRunInfo): Record<string, TraceAttributeValue> {
+function subagentAttributes(subagent: SubagentRunInfo | LegacySubagentRunInfo): Record<string, TraceAttributeValue> {
   return {
     "agent.subagent.id": subagent.id,
     "agent.subagent.session.id": subagent.sessionId,
@@ -180,7 +181,8 @@ export class AgentTraceAggregator {
         const span = run.tools.get(event.callId);
         if (!span) break;
         Object.assign(span.attributes, contentAttributes("gen_ai.tool.call.result", event.output, run.captureContent));
-        if (event.details?.subagent) Object.assign(span.attributes, subagentAttributes(event.details.subagent));
+        const subagent = event.details?.backgroundSubagent ?? event.details?.subagent;
+        if (subagent) Object.assign(span.attributes, subagentAttributes(subagent));
         this.finish(span, now, event.isError ? { code: "error", message: "Tool execution failed" } : { code: "ok" });
         run.tools.delete(event.callId);
         break;

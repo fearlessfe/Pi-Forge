@@ -15,7 +15,7 @@ function normalizeSubagentRun(value: unknown): SubagentRunInfo | undefined {
     || typeof run.task !== "string"
     || typeof run.cwd !== "string"
     || typeof run.sessionId !== "string"
-    || (run.status !== "running" && run.status !== "completed" && run.status !== "error" && run.status !== "stopped")
+    || !["queued", "running", "paused", "completed", "error", "stopped"].includes(run.status as string)
     || typeof run.startedAt !== "string"
     || typeof run.updatedAt !== "string"
   ) return undefined;
@@ -28,10 +28,16 @@ function normalizeSubagentRun(value: unknown): SubagentRunInfo | undefined {
     task: run.task,
     cwd: run.cwd,
     sessionId: run.sessionId,
-    status: run.status,
+    modelSettings: run.modelSettings && typeof run.modelSettings === "object"
+      ? run.modelSettings as SubagentRunInfo["modelSettings"]
+      : undefined,
+    status: run.status as SubagentRunInfo["status"],
+    attempt: typeof run.attempt === "number" && Number.isInteger(run.attempt) && run.attempt >= 0 ? run.attempt : run.status === "running" ? 1 : 0,
+    queuedAt: typeof run.queuedAt === "string" ? run.queuedAt : run.startedAt,
     startedAt: run.startedAt,
     updatedAt: run.updatedAt,
     completedAt: typeof run.completedAt === "string" ? run.completedAt : undefined,
+    result: typeof run.result === "string" ? run.result : undefined,
     usage: normalizeResponseUsage(run.usage),
     error: typeof run.error === "string" ? run.error : undefined,
   };
@@ -40,8 +46,8 @@ function normalizeSubagentRun(value: unknown): SubagentRunInfo | undefined {
 function normalizeToolDetails(value: unknown): ToolActivityDetails | undefined {
   if (!value || typeof value !== "object") return undefined;
   const details = value as Record<string, unknown>;
-  const subagent = normalizeSubagentRun(details.subagent);
-  return subagent ? { ...details, subagent } : undefined;
+  const subagent = normalizeSubagentRun(details.backgroundSubagent ?? details.subagent);
+  return subagent ? { ...details, backgroundSubagent: subagent } : undefined;
 }
 
 function normalizeActivity(value: unknown, index: number): ConversationActivity | undefined {

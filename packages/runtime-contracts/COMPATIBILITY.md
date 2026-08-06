@@ -11,6 +11,8 @@
 
 Unknown optional capabilities are ignored. Required capabilities are fail-closed: a connection is rejected when either peer does not advertise support.
 
+The optional `subagent.background` capability exposes `BackgroundSubagentRunInfo` without widening the legacy `SubagentRunInfo` status union. Desktop scheduler control methods remain on the Electron-private transport; they are intentionally not added to the public `RuntimeMethod` union. Background lifecycle snapshots travel in the optional `ToolActivityDetails.backgroundSubagent` field on existing tool events, so v1 event consumers do not receive a new discriminant.
+
 ## Changes that require protocol v2
 
 - removing or renaming an envelope kind, Runtime method, required field, event type, or error code;

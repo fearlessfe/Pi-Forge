@@ -778,6 +778,15 @@ function registerIpc(
     return runtimeEvents.saveCheckpoint(requireString(name, "Runtime checkpoint 名称无效。"), checkpointOffset);
   });
   ipcMain.handle("agent:list-runtime-event-checkpoints", () => runtimeEvents.listCheckpoints());
+  ipcMain.handle("agent:list-subagents", () => agent.listSubagents());
+  ipcMain.handle("agent:pause-subagent", (_event, id: unknown) => agent.pauseSubagent(requireString(id, "Subagent ID 无效。")));
+  ipcMain.handle("agent:resume-subagent", (_event, id: unknown) => agent.resumeSubagent(requireString(id, "Subagent ID 无效。")));
+  ipcMain.handle("agent:retry-subagent", (_event, id: unknown) => agent.retrySubagent(requireString(id, "Subagent ID 无效。")));
+  ipcMain.handle("agent:stop-subagent", (_event, id: unknown) => agent.stopSubagent(requireString(id, "Subagent ID 无效。")));
+  ipcMain.handle("agent:prepare-subagent-handoff", (_event, id: unknown, conversationId: unknown) => agent.prepareSubagentHandoff(
+    requireString(id, "Subagent ID 无效。"),
+    requireString(conversationId, "会话 ID 无效。"),
+  ));
   ipcMain.handle("agent:reconnect", () => {
     rendererReady = true;
     const snapshot = rendererEventJournal.snapshot();
@@ -855,6 +864,7 @@ if (isPrimaryInstance) void app.whenReady().then(async () => {
   // so conversations created before the workspace restriction keep loading.
   resources.addKnownWorkspace(chatSandbox);
   seedKnownWorkspacesFromSessions(resources, [sessionDir]);
+  await agentService.startBackgroundSubagents();
   registerIpc(settings, credentials, agentService, authService, pluginService, capabilities, permissions, systemPrompt, modelMetadata, resources, mcpService, terminalService, browserService, observabilityService, appearanceStore, runtimeEventStore);
   installContentSecurityPolicy();
   mainWindow = createWindow();

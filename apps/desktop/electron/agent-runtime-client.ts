@@ -10,11 +10,13 @@ import {
   type ConversationHistoryItem,
   type ConversationHistoryPage,
   type ConversationListQuery,
+  type EnqueueSubagentInput,
   type PlanReviewArtifact,
   type QueuedMessages,
   type ResolvePlanReviewInput,
   type SendPromptInput,
   type TaskFileChange,
+  type BackgroundSubagentRunInfo as SubagentRunInfo,
 } from "@pi-forge/runtime-contracts";
 import type {
   ContextBudgetReport,
@@ -86,6 +88,8 @@ export type RuntimeClientOptions = {
   expectedConversationId?: string;
   /** Main-owned frozen run scope used to revalidate every privileged MCP call. */
   getActiveProfile?(): RuntimeExecutionProfile | undefined;
+  enqueueSubagent?(input: EnqueueSubagentInput): Promise<SubagentRunInfo>;
+  backgroundSubagentScheduler?: boolean;
 };
 
 function runtimeError(error: { message: string; stack?: string }): Error {
@@ -209,6 +213,13 @@ export class AgentRuntimeClient {
     this.conversationStateLoaded = false;
   }
   testConfiguration(input: SaveModelSettings): Promise<string> { return this.request("testConfiguration", input); }
+  enqueueSubagent(input: EnqueueSubagentInput): Promise<SubagentRunInfo> { return this.request("enqueueSubagent", input); }
+  listSubagents(): Promise<SubagentRunInfo[]> { return this.request("listSubagents"); }
+  pauseSubagent(id: string): Promise<SubagentRunInfo> { return this.request("pauseSubagent", id); }
+  resumeSubagent(id: string): Promise<SubagentRunInfo> { return this.request("resumeSubagent", id); }
+  retrySubagent(id: string): Promise<SubagentRunInfo> { return this.request("retrySubagent", id); }
+  stopSubagent(id: string): Promise<SubagentRunInfo> { return this.request("stopSubagent", id); }
+  prepareSubagentHandoff(id: string, conversationId: string): Promise<string> { return this.request("prepareSubagentHandoff", id, conversationId); }
 
   async updateConfiguration(profile?: RuntimeExecutionProfile): Promise<void> {
     await this.request("updateConfiguration", profile ?? {
@@ -307,6 +318,7 @@ export class AgentRuntimeClient {
       sessionDir: this.options.sessionDir,
       modelSettings: this.options.settings.resolve(),
       resourceProfile: this.options.initialProfile,
+      backgroundSubagentScheduler: this.options.backgroundSubagentScheduler,
     };
     const startupTimeoutMs = this.options.startupTimeoutMs ?? defaultStartupTimeoutMs;
     if (startupTimeoutMs > 0) {
@@ -488,6 +500,38 @@ export class AgentRuntimeClient {
           controller.signal,
           `agent:${this.options.expectedConversationId ?? "runtime"}`,
         ); break;
+        case "subagent.enqueue": {
+          if (!this.options.enqueueSubagent) throw new Error("后台 Subagent 调度器不可用。");
+          const value = request.args[0];
+          const profile = this.options.getActiveProfile?.();
+          const conversationId = this.options.expectedConversationId;
+          const parentRunId = this.activeRunId;
+          if (!profile || !conversationId || !parentRunId) throw new Error("Subagent 入队请求不属于活动会话任务。");
+          if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Subagent 入队请求无效。");
+          const input = value as Record<string, unknown>;
+          const keys = Object.keys(input);
+          if (keys.some((key) => !["toolCallId", "role", "task"].includes(key))
+            || typeof input.toolCallId !== "string" || !input.toolCallId
+            || typeof input.role !== "string" || !input.role.trim() || input.role.length > 200
+            || typeof input.task !== "string" || !input.task.trim() || input.task.length > 100_000) {
+            throw new Error("Subagent 入队请求无效。");
+          }
+          result = await this.options.enqueueSubagent({
+            parentRunId,
+            parentConversationId: conversationId,
+            toolCallId: input.toolCallId,
+            role: input.role.trim(),
+            task: input.task.trim(),
+            cwd: profile.cwd,
+            modelSettings: {
+              provider: profile.modelSettings.provider,
+              baseUrl: profile.modelSettings.baseUrl,
+              modelId: profile.modelSettings.modelId,
+              thinkingLevel: profile.modelSettings.thinkingLevel,
+            },
+          });
+          break;
+        }
       }
       response = { kind: "host.response", id: request.id, result };
     } catch (error) {
